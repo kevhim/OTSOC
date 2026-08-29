@@ -30,7 +30,7 @@ func (h *ReadHandler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	rows, err := h.db.Query(context.Background(), `
-		SELECT event_id, tenant_id, site_id, occurred_at, severity, source, category
+		SELECT event_id, tenant_id, site_id, occurred_at, severity, source, category, seq_no
 		FROM events
 		ORDER BY occurred_at DESC
 		LIMIT 50
@@ -45,7 +45,7 @@ func (h *ReadHandler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 	var result []map[string]interface{}
 	for rows.Next() {
 		var ev events.CanonicalEvent
-		err := rows.Scan(&ev.EventID, &ev.TenantID, &ev.SiteID, &ev.OccurredAt, &ev.Severity, &ev.Source, &ev.Category)
+		err := rows.Scan(&ev.EventID, &ev.TenantID, &ev.SiteID, &ev.OccurredAt, &ev.Severity, &ev.Source, &ev.Category, &ev.SeqNo)
 		if err == nil {
 			result = append(result, map[string]interface{}{
 				"event_id":    ev.EventID,
@@ -55,6 +55,7 @@ func (h *ReadHandler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 				"severity":    ev.Severity,
 				"source":      ev.Source,
 				"category":    ev.Category,
+				"seq_no":      ev.SeqNo,
 			})
 		}
 	}
