@@ -31,6 +31,22 @@ func TestMigrations(t *testing.T) {
 		t.Fatalf("Failed to ping database: %v", err)
 	}
 
+	schema := "test_" + time.Now().Format("20060102150405")
+	if _, err := pool.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatalf("Failed to create transient schema: %v", err)
+	}
+	defer func() {
+		// Drop transient schema on exit
+		if _, err := pool.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE"); err != nil {
+			t.Logf("Warning: failed to drop transient schema %s: %v", schema, err)
+		}
+	}()
+
+	// Set search path so migrations only affect the transient schema
+	if _, err := pool.Exec(ctx, "SET search_path TO "+schema); err != nil {
+		t.Fatalf("Failed to set search path: %v", err)
+	}
+
 	// Run migrations (if not already applied)
 	files, err := os.ReadDir("migrations")
 	if err != nil {
@@ -59,5 +75,17 @@ func TestMigrations(t *testing.T) {
 			}
 			t.Logf("Successfully applied/verified migration: %s", f.Name())
 		}
+	}
+
+	// Verify tables and constraints exist
+	var exists bool
+	err = pool.QueryRow(ctx, "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'events')", schema).Scan(&exists)
+	if err != nil || !exists {
+		t.Fatalf("events table not found in schema %s", schema)
+	}
+
+	err = pool.QueryRow(ctx, "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'alerts')", schema).Scan(&exists)
+	if err != nil || !exists {
+		t.Fatalf("alerts table not found in schema %s", schema)
 	}
 }

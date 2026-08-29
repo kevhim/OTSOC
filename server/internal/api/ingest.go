@@ -37,9 +37,6 @@ func (h *IngestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Normalize
 	ev.ReceivedAt = time.Now().UTC()
-	if ev.Severity == "" {
-		ev.Severity = "INFO"
-	}
 
 	if err := ev.Validate(); err != nil {
 		http.Error(w, "Bad Request: Validation failed - "+err.Error(), http.StatusBadRequest)

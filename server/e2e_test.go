@@ -49,28 +49,36 @@ func TestE2EFlow(t *testing.T) {
 		t.Fatalf("Expected status 202 Accepted, got %d", resp.StatusCode)
 	}
 
-	// 2. Wait for worker to process
-	time.Sleep(2 * time.Second)
-
-	// 3. Verify event is available in GET /v1/events
-	resp, err = http.Get("http://localhost:8081/v1/events?tenant_id=e2e-tenant")
-	if err != nil {
-		t.Fatalf("Failed to fetch events: %v", err)
-	}
-	defer resp.Body.Close()
-
+	// 2 & 3. Bounded polling to wait for worker to process and event to appear
 	var fetchedEvents []events.CanonicalEvent
-	if err := json.NewDecoder(resp.Body).Decode(&fetchedEvents); err != nil {
-		t.Fatalf("Failed to decode events: %v", err)
-	}
-
 	found := false
 	duplicateCount := 0
-	for _, fe := range fetchedEvents {
-		if fe.EventID == eventID {
-			found = true
-			duplicateCount++
+
+	for i := 0; i < 40; i++ {
+		resp, err = http.Get("http://localhost:8081/v1/events?tenant_id=e2e-tenant")
+		if err != nil {
+			t.Fatalf("Failed to fetch events: %v", err)
 		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&fetchedEvents); err != nil {
+			resp.Body.Close()
+			t.Fatalf("Failed to decode events: %v", err)
+		}
+		resp.Body.Close()
+
+		found = false
+		duplicateCount = 0
+		for _, fe := range fetchedEvents {
+			if fe.EventID == eventID {
+				found = true
+				duplicateCount++
+			}
+		}
+
+		if found {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
 
 	if duplicateCount > 1 {
@@ -80,7 +88,7 @@ func TestE2EFlow(t *testing.T) {
 	// -------------------------------------------------------------------------
 	// FAULT TOLERANCE VERIFICATION
 	// The following checks are verified through design and manual chaos testing:
-	// 
+	//
 	// - worker interruption before ACK:
 	//   Valkey keeps messages in the consumer group's PEL (Pending Entries List).
 	//   The consumer calls `recoverPending` on startup to claim and process unACKed messages.
@@ -108,10 +116,27 @@ func TestE2EFlow(t *testing.T) {
 	reqInv, _ := http.NewRequest(http.MethodPost, "http://localhost:8081/v1/ingest", bytes.NewBuffer(invalidPayload))
 	reqInv.Header.Set("Content-Type", "application/json")
 	respInv, err := http.DefaultClient.Do(reqInv)
-	if err == nil {
-		respInv.Body.Close()
-		// Depending on API validation, it might reject bad UUIDs upfront or accept and fail in worker.
-		// If the API allows string, it might return 202, but worker drops it as poison pill.
+	if err != nil {
+		t.Fatalf("Failed to send invalid event: %v", err)
+	}
+	respInv.Body.Close()
+	if respInv.StatusCode != http.StatusBadRequest {
+		t.Errorf("Expected status 400 Bad Request for invalid UUID, got %d", respInv.StatusCode)
+	}
+
+	// 3c. Test Missing Severity
+	missingSev := ev
+	missingSev.Severity = ""
+	missingSevPayload, _ := json.Marshal(missingSev)
+	reqMissSev, _ := http.NewRequest(http.MethodPost, "http://localhost:8081/v1/ingest", bytes.NewBuffer(missingSevPayload))
+	reqMissSev.Header.Set("Content-Type", "application/json")
+	respMissSev, err := http.DefaultClient.Do(reqMissSev)
+	if err != nil {
+		t.Fatalf("Failed to send missing severity event: %v", err)
+	}
+	respMissSev.Body.Close()
+	if respMissSev.StatusCode != http.StatusBadRequest {
+		t.Errorf("Expected status 400 Bad Request for missing severity, got %d", respMissSev.StatusCode)
 	}
 
 	// 4. Test duplicate event idempotency (ON CONFLICT DO NOTHING)
@@ -126,8 +151,9 @@ func TestE2EFlow(t *testing.T) {
 		t.Fatalf("Expected duplicate ingest to return 202 Accepted, got %d", resp.StatusCode)
 	}
 
-	// Wait for processing
-	time.Sleep(2 * time.Second)
+	// Allow some time for processing but we don't need to poll since we just check idempotency
+	// based on the same duplicate count check later if we wanted. But we already checked the status code.
+	time.Sleep(500 * time.Millisecond)
 
 	// 5. Test Alert Generation (severity CRITICAL)
 	alertEventID := uuid.New().String()
@@ -145,28 +171,36 @@ func TestE2EFlow(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	// Wait for processing
-	time.Sleep(2 * time.Second)
-
-	// Verify alert is available in GET /v1/alerts
-	resp, err = http.Get("http://localhost:8081/v1/alerts?tenant_id=e2e-tenant")
-	if err != nil {
-		t.Fatalf("Failed to fetch alerts: %v", err)
-	}
-	defer resp.Body.Close()
-
+	// Bounded polling for alert
 	var fetchedAlerts []events.Alert
-	if err := json.NewDecoder(resp.Body).Decode(&fetchedAlerts); err != nil {
-		t.Fatalf("Failed to decode alerts: %v", err)
-	}
-
 	alertFound := false
-	for _, fa := range fetchedAlerts {
-		if fa.EventID == alertEventID {
-			alertFound = true
+
+	for i := 0; i < 40; i++ {
+		resp, err = http.Get("http://localhost:8081/v1/alerts?tenant_id=e2e-tenant")
+		if err != nil {
+			t.Fatalf("Failed to fetch alerts: %v", err)
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&fetchedAlerts); err != nil {
+			resp.Body.Close()
+			t.Fatalf("Failed to decode alerts: %v", err)
+		}
+		resp.Body.Close()
+
+		alertFound = false
+		for _, fa := range fetchedAlerts {
+			if fa.EventID == alertEventID {
+				alertFound = true
+				break
+			}
+		}
+
+		if alertFound {
 			break
 		}
+		time.Sleep(250 * time.Millisecond)
 	}
+
 	if !alertFound {
 		t.Errorf("Alert for event %s not found in API response", alertEventID)
 	}

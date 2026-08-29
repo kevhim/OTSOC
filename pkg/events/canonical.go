@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const CurrentSchemaVersion = "1.0.0"
+
 // CanonicalEvent represents the normalized telemetry event model
 // defined in ADR 0006. It acts as the system-wide contract for all
 // data passing through the RedCyberFox pipeline.
@@ -65,7 +67,7 @@ func (e *CanonicalEvent) Validate() error {
 	if _, err := uuid.Parse(e.EventID); err != nil {
 		return fmt.Errorf("invalid event_id: %w", err)
 	}
-	
+
 	tenantSiteRegex := regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
 	if e.TenantID == "" || !tenantSiteRegex.MatchString(e.TenantID) {
 		return fmt.Errorf("invalid tenant_id")
@@ -73,27 +75,27 @@ func (e *CanonicalEvent) Validate() error {
 	if e.SiteID == "" || !tenantSiteRegex.MatchString(e.SiteID) {
 		return fmt.Errorf("invalid site_id")
 	}
-	
+
 	if e.SeqNo < 0 {
 		return fmt.Errorf("seq_no cannot be negative")
 	}
-	
+
 	switch e.Severity {
 	case "DEBUG", "INFO", "WARNING", "CRITICAL", "FATAL":
 		// valid
 	default:
 		return fmt.Errorf("invalid severity: %s", e.Severity)
 	}
-	
+
 	if e.Confidence != nil {
 		if *e.Confidence < 0 || *e.Confidence > 100 {
 			return fmt.Errorf("confidence must be between 0 and 100")
 		}
 	}
-	
+
 	// Ensure SchemaVersion matches supported versions exactly
-	if e.SchemaVersion != "1.0.0" && e.SchemaVersion != "v1.0.0" {
-		return fmt.Errorf("unsupported schema_version: %s", e.SchemaVersion)
+	if e.SchemaVersion != CurrentSchemaVersion {
+		return fmt.Errorf("unsupported schema_version: %s (expected %s)", e.SchemaVersion, CurrentSchemaVersion)
 	}
 
 	return nil

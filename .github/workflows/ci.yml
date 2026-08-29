@@ -15,7 +15,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.22'
+          go-version: '1.25.x'
 
       - name: Check Gofmt
         run: test -z "$(gofmt -l .)"
@@ -31,10 +31,11 @@ jobs:
         with:
           node-version: '18.x'
         
-      - name: npm install and build
+      - name: npm install, lint and build
         run: |
           cd dashboard
           npm ci
+          npm run lint
           npm run build
 
       - name: Verify Docker Compose config

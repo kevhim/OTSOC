@@ -12,7 +12,6 @@ import (
 	"redcyberfox/pkg/events"
 )
 
-
 func main() {
 	countFlag := flag.Int("count", 0, "Number of events to generate (0 for continuous)")
 	intervalFlag := flag.Duration("interval", 10*time.Second, "Interval between events (default 10s)")
@@ -44,7 +43,7 @@ func main() {
 
 		ev := generateEvent(currentSeverity, seqNo)
 		sendEvent(*targetURL, ev)
-		
+
 		seqNo++
 		eventsSent++
 

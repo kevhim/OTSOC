@@ -30,9 +30,9 @@ func TestIngestHandler(t *testing.T) {
 	handler := NewIngestHandler(mockProducer)
 
 	tests := []struct {
-		name           string
-		payload        interface{}
-		expectedStatus int
+		name            string
+		payload         interface{}
+		expectedStatus  int
 		shouldFailQueue bool
 	}{
 		{
@@ -85,7 +85,7 @@ func TestIngestHandler(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockProducer.ShouldFail = tt.shouldFailQueue
-			
+
 			var body bytes.Buffer
 			json.NewEncoder(&body).Encode(tt.payload)
 

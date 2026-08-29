@@ -3,23 +3,23 @@ package config
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
 
 type Config struct {
-	ValkeyAddr string
+	ValkeyAddr  string
 	DatabaseURL string
+	APIAddr     string
 }
 
 func LoadConfig() Config {
 	cfg := Config{
 		ValkeyAddr:  os.Getenv("VALKEY_ADDR"),
 		DatabaseURL: os.Getenv("DATABASE_URL"),
+		APIAddr:     os.Getenv("API_ADDR"),
 	}
 
 	if cfg.ValkeyAddr == "" {
@@ -27,6 +27,9 @@ func LoadConfig() Config {
 	}
 	if cfg.DatabaseURL == "" {
 		cfg.DatabaseURL = "postgres://root:development_password@localhost:5432/redcyberfox"
+	}
+	if cfg.APIAddr == "" {
+		cfg.APIAddr = ":8081"
 	}
 
 	return cfg

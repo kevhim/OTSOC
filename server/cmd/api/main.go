@@ -9,9 +9,9 @@ import (
 	"syscall"
 	"time"
 
-	"redcyberfox/internal/api"
-	"redcyberfox/internal/config"
-	"redcyberfox/internal/queue"
+	"redcyberfox/server/internal/api"
+	"redcyberfox/server/internal/config"
+	"redcyberfox/server/internal/queue"
 )
 
 func main() {
@@ -46,7 +46,7 @@ func main() {
 	mux.Handle("/v1/ingest", ingestHandler)
 	mux.HandleFunc("/v1/events", readHandler.ServeEvents)
 	mux.HandleFunc("/v1/alerts", readHandler.ServeAlerts)
-	
+
 	// Add simple health check
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -54,7 +54,7 @@ func main() {
 	})
 
 	server := &http.Server{
-		Addr:    ":8081",
+		Addr:    cfg.APIAddr,
 		Handler: mux,
 	}
 
@@ -73,7 +73,7 @@ func main() {
 	log.Println("Shutting down server gracefully...")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	
+
 	// Finish in-flight requests
 	if err := server.Shutdown(ctx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)

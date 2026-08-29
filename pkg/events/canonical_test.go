@@ -36,7 +36,7 @@ func TestSerializeDeserialize(t *testing.T) {
 	if deserialized.EventID != original.EventID {
 		t.Errorf("Expected EventID %s, got %s", original.EventID, deserialized.EventID)
 	}
-	
+
 	if deserialized.Severity != original.Severity {
 		t.Errorf("Expected Severity %s, got %s", original.Severity, deserialized.Severity)
 	}

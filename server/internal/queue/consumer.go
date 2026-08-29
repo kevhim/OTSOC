@@ -8,17 +8,17 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	
-	"redcyberfox/internal/db"
+
 	"redcyberfox/pkg/events"
+	"redcyberfox/server/internal/db"
 )
 
 type Consumer struct {
-	client    *redis.Client
-	repo      *db.Repository
-	stream    string
-	group     string
-	consumer  string
+	client   *redis.Client
+	repo     *db.Repository
+	stream   string
+	group    string
+	consumer string
 }
 
 func NewConsumer(client *redis.Client, repo *db.Repository, stream, group, consumer string) *Consumer {
@@ -40,10 +40,8 @@ func (c *Consumer) Start(ctx context.Context) error {
 		return err
 	}
 
-	// 1. Recover pending messages (unACKed)
-	if err := c.recoverPending(ctx); err != nil {
-		log.Printf("Error recovering pending messages: %v", err)
-	}
+	// 1. Start continuous recovery loop
+	go c.recoveryLoop(ctx)
 
 	// 2. Main processing loop
 	log.Printf("Starting worker processing on stream %s", c.stream)
@@ -82,6 +80,27 @@ func (c *Consumer) Start(ctx context.Context) error {
 	}
 }
 
+func (c *Consumer) recoveryLoop(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	// Run once on startup
+	if err := c.recoverPending(ctx); err != nil {
+		log.Printf("Error recovering pending messages: %v", err)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := c.recoverPending(ctx); err != nil {
+				log.Printf("Error recovering pending messages: %v", err)
+			}
+		}
+	}
+}
+
 // recoverPending claims and processes unACKed messages from crashed workers
 func (c *Consumer) recoverPending(ctx context.Context) error {
 	log.Println("Checking for pending (unACKed) messages...")
@@ -101,32 +120,22 @@ func (c *Consumer) recoverPending(ctx context.Context) error {
 	for _, p := range pending {
 		// Reclaim if idle for more than 1 minute
 		if p.Idle > time.Minute {
-			log.Printf("Reclaiming idle message %s", p.ID)
-			c.client.XClaim(ctx, &redis.XClaimArgs{
+			log.Printf("Reclaiming idle message %s (retry %d)", p.ID, p.RetryCount)
+			msgs, err := c.client.XClaim(ctx, &redis.XClaimArgs{
 				Stream:   c.stream,
 				Group:    c.group,
 				Consumer: c.consumer,
 				MinIdle:  time.Minute,
 				Messages: []string{p.ID},
-			})
-			// We fetch the message explicitly to process it
-			msgs, err := c.client.XRange(ctx, c.stream, p.ID, p.ID).Result()
-			if err == nil && len(msgs) > 0 {
-				msg := msgs[0]
-				if p.RetryCount > 5 {
-					log.Printf("Retry exhausted for %s. Sending to DLQ.", p.ID)
-					payload := ""
-					if pRaw, ok := msg.Values["payload"].(string); ok {
-						payload = pRaw
-					}
-					if err := c.sendToDLQ(ctx, p.ID, payload, "retry limit exceeded", "retry_exhausted", p.RetryCount, p.Idle); err == nil {
-						c.client.XAck(ctx, c.stream, c.group, p.ID)
-					} else {
-						log.Printf("Failed to push %s to DLQ: %v", p.ID, err)
-					}
-				} else {
-					c.processMessage(ctx, msg, p.RetryCount, p.Idle)
-				}
+			}).Result()
+
+			if err != nil {
+				log.Printf("Failed to claim message %s: %v", p.ID, err)
+				continue
+			}
+
+			if len(msgs) > 0 {
+				c.processMessage(ctx, msgs[0], p.RetryCount, p.Idle)
 			}
 		}
 	}
@@ -171,7 +180,7 @@ func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage, retry
 		}
 		return
 	}
-	
+
 	if err := ev.Validate(); err != nil {
 		log.Printf("Failed to validate event %s, ACKing as poison: %v", msg.ID, err)
 		if err := c.sendToDLQ(ctx, msg.ID, dataRaw, err.Error(), "validation", retryCount, idle); err == nil {

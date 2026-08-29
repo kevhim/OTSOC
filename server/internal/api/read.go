@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -9,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"redcyberfox/pkg/events"
+)
 
 type ReadHandler struct {
 	db *pgxpool.Pool
@@ -67,13 +67,13 @@ func (h *ReadHandler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	
+
 	if err := rows.Err(); err != nil {
 		log.Printf("Error iterating event rows: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	
+
 	if result == nil {
 		result = []map[string]interface{}{}
 	}
