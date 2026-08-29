@@ -28,3 +28,20 @@ When working on this repository, you MUST:
 - **Run relevant tests before committing.**
 - **Report branch, commits, tests and working-tree state at task completion.**
 - **Do not use destructive Git commands to solve implementation problems.**
+
+## Context System
+
+Before substantial work:
+- Read `docs/context/CONTEXT_INDEX.md`.
+- Read `docs/context/PROJECT_CONTEXT.md`.
+- Read the task-specific context file.
+- Read the relevant ADRs.
+- Inspect the source code.
+- Treat source/tests as the implementation truth.
+
+After substantial work:
+- Update relevant context files.
+- Update `docs/context/CURRENT_STATE.md`.
+- Update roadmap context when phase status changes.
+
+Never use context files to override actual source/test evidence.
