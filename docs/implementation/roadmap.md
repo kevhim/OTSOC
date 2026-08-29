@@ -1,8 +1,8 @@
 # Implementation Roadmap
 
-Implementation goal: reach a genuinely working RedCyberFox Alpha using only free/open-source software and existing development hardware.
+This roadmap tracks the incremental delivery of the RedCyberFox OT SOC platform.
 
-## Phase 0 — Bootstrap: IN PROGRESS
+## Phase 0 — Bootstrap: COMPLETE
 
 - Git repository, project structure, coding standards, Docker Compose, local Linux environment, issue tracking, basic CI.
 
