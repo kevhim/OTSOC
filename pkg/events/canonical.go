@@ -60,6 +60,9 @@ func Deserialize(data []byte) (*CanonicalEvent, error) {
 	return &e, err
 }
 
+// CurrentSchemaVersion defines the canonical version expected by this implementation
+const CurrentSchemaVersion = "1.0.0"
+
 // Validate ensures the canonical event strictly adheres to the schema.
 func (e *CanonicalEvent) Validate() error {
 	if _, err := uuid.Parse(e.EventID); err != nil {
@@ -102,8 +105,8 @@ func (e *CanonicalEvent) Validate() error {
 	}
 	
 	// Ensure SchemaVersion matches supported versions exactly
-	if e.SchemaVersion != "1.0.0" && e.SchemaVersion != "v1.0.0" {
-		return fmt.Errorf("unsupported schema_version: %s", e.SchemaVersion)
+	if e.SchemaVersion != CurrentSchemaVersion {
+		return fmt.Errorf("unsupported schema_version: %s (expected %s)", e.SchemaVersion, CurrentSchemaVersion)
 	}
 
 	return nil

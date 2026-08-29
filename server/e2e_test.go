@@ -110,10 +110,12 @@ func TestE2EFlow(t *testing.T) {
 	reqInv, _ := http.NewRequest(http.MethodPost, "http://localhost:8081/v1/ingest", bytes.NewBuffer(invalidPayload))
 	reqInv.Header.Set("Content-Type", "application/json")
 	respInv, err := http.DefaultClient.Do(reqInv)
-	if err == nil {
-		respInv.Body.Close()
-		// Depending on API validation, it might reject bad UUIDs upfront or accept and fail in worker.
-		// If the API allows string, it might return 202, but worker drops it as poison pill.
+	if err != nil {
+		t.Fatalf("Failed to ingest invalid event: %v", err)
+	}
+	respInv.Body.Close()
+	if respInv.StatusCode != http.StatusBadRequest {
+		t.Errorf("Expected status 400 Bad Request for invalid event, got %d", respInv.StatusCode)
 	}
 
 	// 4. Test duplicate event idempotency (ON CONFLICT DO NOTHING)

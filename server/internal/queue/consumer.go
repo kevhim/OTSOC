@@ -46,10 +46,21 @@ func (c *Consumer) Start(ctx context.Context) error {
 		return err
 	}
 
-	// 1. Recover pending messages (unACKed)
-	if err := c.recoverPending(ctx); err != nil {
-		log.Printf("Error recovering pending messages: %v", err)
-	}
+	// 1. Recover pending messages continuously in background
+	go func() {
+		ticker := time.NewTicker(RecoveryInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := c.recoverPending(ctx); err != nil {
+					log.Printf("Error recovering pending messages: %v", err)
+				}
+			}
+		}
+	}()
 
 	// 2. Main processing loop
 	log.Printf("Starting worker processing on stream %s", c.stream)
@@ -108,31 +119,24 @@ func (c *Consumer) recoverPending(ctx context.Context) error {
 		// Reclaim if idle for more than configured MinIdleTime
 		if p.Idle > MinIdleTime {
 			log.Printf("Reclaiming idle message %s", p.ID)
-			c.client.XClaim(ctx, &redis.XClaimArgs{
+			errClaim := c.client.XClaim(ctx, &redis.XClaimArgs{
 				Stream:   c.stream,
 				Group:    c.group,
 				Consumer: c.consumer,
 				MinIdle:  MinIdleTime,
 				Messages: []string{p.ID},
-			})
+			}).Err()
+			
+			if errClaim != nil {
+				log.Printf("Failed to XClaim message %s: %v", p.ID, errClaim)
+				continue
+			}
+
 			// We fetch the message explicitly to process it
 			msgs, err := c.client.XRange(ctx, c.stream, p.ID, p.ID).Result()
 			if err == nil && len(msgs) > 0 {
 				msg := msgs[0]
-				if p.RetryCount > 5 {
-					log.Printf("Retry exhausted for %s. Sending to DLQ.", p.ID)
-					payload := ""
-					if pRaw, ok := msg.Values["payload"].(string); ok {
-						payload = pRaw
-					}
-					if err := c.sendToDLQ(ctx, p.ID, payload, "retry limit exceeded", "retry_exhausted", p.RetryCount, p.Idle); err == nil {
-						c.client.XAck(ctx, c.stream, c.group, p.ID)
-					} else {
-						log.Printf("Failed to push %s to DLQ: %v", p.ID, err)
-					}
-				} else {
-					c.processMessage(ctx, msg, p.RetryCount, p.Idle)
-				}
+				c.processMessage(ctx, msg, p.RetryCount, p.Idle)
 			}
 		}
 	}

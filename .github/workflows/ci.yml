@@ -37,6 +37,11 @@ jobs:
         with:
           go-version: '1.25.x'
 
+      - name: Lint GitHub Actions workflows
+        run: |
+          bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
       - name: Check Gofmt
         run: test -z "$(gofmt -l .)"
 

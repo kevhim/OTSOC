@@ -49,7 +49,7 @@ func TestCanonicalEventValidation(t *testing.T) {
 			mutate: func(e *CanonicalEvent) {
 				e.SchemaVersion = "v1.0.0"
 			},
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name: "missing severity",

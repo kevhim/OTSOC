@@ -102,4 +102,39 @@ func TestMigrations(t *testing.T) {
 	if err != nil || !exists {
 		t.Fatalf("Alerts table not found after migrations: %v", err)
 	}
+
+	// Verify alerts constraint (uq_alerts_tenant_event)
+	var constraintExists bool
+	err = conn.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT FROM information_schema.table_constraints
+			WHERE table_schema = $1 AND table_name = 'alerts' AND constraint_name = 'uq_alerts_tenant_event'
+		)
+	`, schema).Scan(&constraintExists)
+	if err != nil || !constraintExists {
+		t.Fatalf("Constraint uq_alerts_tenant_event not found after migrations: %v", err)
+	}
+
+	// Verify events constraint (pk_events)
+	err = conn.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT FROM information_schema.table_constraints
+			WHERE table_schema = $1 AND table_name = 'events' AND constraint_name = 'pk_events'
+		)
+	`, schema).Scan(&constraintExists)
+	if err != nil || !constraintExists {
+		t.Fatalf("Constraint pk_events not found after migrations: %v", err)
+	}
+
+	// Verify events index (idx_events_tenant_site_time)
+	var indexExists bool
+	err = conn.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT FROM pg_indexes
+			WHERE schemaname = $1 AND tablename = 'events' AND indexname = 'idx_events_tenant_site_time'
+		)
+	`, schema).Scan(&indexExists)
+	if err != nil || !indexExists {
+		t.Fatalf("Index idx_events_tenant_site_time not found after migrations: %v", err)
+	}
 }

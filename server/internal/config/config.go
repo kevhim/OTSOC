@@ -10,16 +10,21 @@ import (
 )
 
 type Config struct {
-	ValkeyAddr string
+	APIAddr     string
+	ValkeyAddr  string
 	DatabaseURL string
 }
 
 func LoadConfig() Config {
 	cfg := Config{
+		APIAddr:     os.Getenv("API_ADDR"),
 		ValkeyAddr:  os.Getenv("VALKEY_ADDR"),
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 	}
 
+	if cfg.APIAddr == "" {
+		cfg.APIAddr = ":8081"
+	}
 	if cfg.ValkeyAddr == "" {
 		cfg.ValkeyAddr = "localhost:6379"
 	}
