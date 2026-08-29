@@ -66,3 +66,6 @@ logs/
 # Sensitive OT
 *.pcap
 *.pcapng
+
+.tools/
+go.zip
