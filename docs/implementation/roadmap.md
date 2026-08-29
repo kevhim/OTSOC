@@ -6,14 +6,15 @@ This roadmap tracks the incremental delivery of the RedCyberFox OT SOC platform.
 
 - Git repository, project structure, coding standards, Docker Compose, local Linux environment, issue tracking, basic CI.
 
-## Phase 1 — Vertical Slice: READY
+## Phase 1 — Vertical Slice: COMPLETE
 
 - One simple agent event -> HTTPS API -> queue -> worker -> PostgreSQL -> dashboard alert.
 - Free stack: Go, PostgreSQL, Valkey, React
 - Exit / proof: One test endpoint produces a visible alert end-to-end.
 
+## Phase 2 — Endpoint Alpha: READY
+
 ## Future Phases
-- **Phase 2:** Endpoint Alpha
 - **Phase 3:** Detection Core
 - **Phase 4:** Rural Hardening
 - **Phase 5:** OT Lab
