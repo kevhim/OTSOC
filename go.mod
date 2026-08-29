@@ -1,4 +1,4 @@
-module redcyberfox/server
+module redcyberfox
 
 go 1.25.0
 

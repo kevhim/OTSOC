@@ -8,14 +8,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"redcyberfox/server/pkg/events"
+	"redcyberfox/pkg/events"
 )
 
 func TestE2EFlow(t *testing.T) {
 	// Simple check to see if API is up
-	resp, err := http.Get("http://localhost:8081/v1/events")
+	resp, err := http.Get("http://localhost:8081/v1/events?tenant_id=e2e-tenant")
 	if err != nil {
-		t.Skipf("API server not reachable, skipping E2E test: %v", err)
+		t.Fatalf("API server not reachable, skipping E2E test: %v", err)
 	}
 	resp.Body.Close()
 
@@ -32,7 +32,7 @@ func TestE2EFlow(t *testing.T) {
 		Source:        "e2e-test",
 		Category:      "test",
 		Severity:      "INFO",
-		SchemaVersion: "1.0",
+		SchemaVersion: "1.0.0",
 	}
 
 	payload, _ := json.Marshal(ev)
@@ -53,7 +53,7 @@ func TestE2EFlow(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// 3. Verify event is available in GET /v1/events
-	resp, err = http.Get("http://localhost:8081/v1/events")
+	resp, err = http.Get("http://localhost:8081/v1/events?tenant_id=e2e-tenant")
 	if err != nil {
 		t.Fatalf("Failed to fetch events: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestE2EFlow(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Verify alert is available in GET /v1/alerts
-	resp, err = http.Get("http://localhost:8081/v1/alerts")
+	resp, err = http.Get("http://localhost:8081/v1/alerts?tenant_id=e2e-tenant")
 	if err != nil {
 		t.Fatalf("Failed to fetch alerts: %v", err)
 	}

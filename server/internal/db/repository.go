@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"redcyberfox/server/pkg/events"
+	"redcyberfox/pkg/events"
 )
 
 type Repository struct {
@@ -67,6 +67,7 @@ func (r *Repository) PersistEvent(ctx context.Context, ev *events.CanonicalEvent
 		_, err := tx.Exec(ctx, `
 			INSERT INTO alerts (alert_id, event_id, tenant_id, severity, description, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (tenant_id, event_id) DO NOTHING
 		`,
 			alertID, ev.EventID, ev.TenantID, ev.Severity,
 			fmt.Sprintf("Phase-1 Alert triggered by %s event from %s", ev.Severity, ev.Source),

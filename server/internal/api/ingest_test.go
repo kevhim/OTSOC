@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"redcyberfox/server/pkg/events"
+	"redcyberfox/pkg/events"
 )
 
 type MockProducer struct {
@@ -38,11 +38,12 @@ func TestIngestHandler(t *testing.T) {
 		{
 			name: "valid event",
 			payload: events.CanonicalEvent{
-				EventID:       "123",
+				EventID:       "123e4567-e89b-12d3-a456-426614174000",
 				TenantID:      "t1",
 				SiteID:        "s1",
 				OccurredAt:    time.Now(),
-				SchemaVersion: "1.0",
+				SchemaVersion: "1.0.0",
+				Severity:      "INFO",
 			},
 			expectedStatus: http.StatusAccepted,
 		},
@@ -55,13 +56,26 @@ func TestIngestHandler(t *testing.T) {
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
-			name: "queue failure",
+			name: "invalid uuid",
 			payload: events.CanonicalEvent{
 				EventID:       "123",
 				TenantID:      "t1",
 				SiteID:        "s1",
 				OccurredAt:    time.Now(),
-				SchemaVersion: "1.0",
+				SchemaVersion: "1.0.0",
+				Severity:      "INFO",
+			},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name: "queue failure",
+			payload: events.CanonicalEvent{
+				EventID:       "123e4567-e89b-12d3-a456-426614174000",
+				TenantID:      "t1",
+				SiteID:        "s1",
+				OccurredAt:    time.Now(),
+				SchemaVersion: "1.0.0",
+				Severity:      "INFO",
 			},
 			expectedStatus:  http.StatusInternalServerError,
 			shouldFailQueue: true,

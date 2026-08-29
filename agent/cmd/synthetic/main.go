@@ -9,20 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"redcyberfox/pkg/events"
 )
 
-// We duplicate the CanonicalEvent here so the agent doesn't need to depend on the server module
-type CanonicalEvent struct {
-	EventID       string    `json:"event_id"`
-	TenantID      string    `json:"tenant_id"`
-	SiteID        string    `json:"site_id"`
-	OccurredAt    time.Time `json:"occurred_at"`
-	SeqNo         int64     `json:"seq_no"`
-	Source        string    `json:"source"`
-	Category      string    `json:"category"`
-	Severity      string    `json:"severity"`
-	SchemaVersion string    `json:"schema_version"`
-}
 
 func main() {
 	countFlag := flag.Int("count", 0, "Number of events to generate (0 for continuous)")
@@ -68,8 +57,8 @@ func main() {
 	}
 }
 
-func generateEvent(severity string, seqNo int64) CanonicalEvent {
-	return CanonicalEvent{
+func generateEvent(severity string, seqNo int64) events.CanonicalEvent {
+	return events.CanonicalEvent{
 		EventID:       uuid.New().String(),
 		TenantID:      "tenant-alpha",
 		SiteID:        "site-main",
@@ -82,7 +71,7 @@ func generateEvent(severity string, seqNo int64) CanonicalEvent {
 	}
 }
 
-func sendEvent(url string, ev CanonicalEvent) {
+func sendEvent(url string, ev events.CanonicalEvent) {
 	data, _ := json.Marshal(ev)
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
 	if err != nil {

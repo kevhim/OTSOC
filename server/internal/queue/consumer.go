@@ -3,13 +3,14 @@ package queue
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 	
-	"redcyberfox/server/internal/db"
-	"redcyberfox/server/pkg/events"
+	"redcyberfox/internal/db"
+	"redcyberfox/pkg/events"
 )
 
 type Consumer struct {
@@ -75,7 +76,7 @@ func (c *Consumer) Start(ctx context.Context) error {
 
 		for _, stream := range streams {
 			for _, msg := range stream.Messages {
-				c.processMessage(ctx, msg)
+				c.processMessage(ctx, msg, 0, 0)
 			}
 		}
 	}
@@ -108,36 +109,74 @@ func (c *Consumer) recoverPending(ctx context.Context) error {
 				MinIdle:  time.Minute,
 				Messages: []string{p.ID},
 			})
-			
-			// If it's claimed a ridiculous amount of times, it's a poison pill
-			if p.RetryCount > 5 {
-				log.Printf("Poison pill detected: %s. ACKing to drop.", p.ID)
-				c.client.XAck(ctx, c.stream, c.group, p.ID)
-				continue
-			}
-
 			// We fetch the message explicitly to process it
 			msgs, err := c.client.XRange(ctx, c.stream, p.ID, p.ID).Result()
 			if err == nil && len(msgs) > 0 {
-				c.processMessage(ctx, msgs[0])
+				msg := msgs[0]
+				if p.RetryCount > 5 {
+					log.Printf("Retry exhausted for %s. Sending to DLQ.", p.ID)
+					payload := ""
+					if pRaw, ok := msg.Values["payload"].(string); ok {
+						payload = pRaw
+					}
+					if err := c.sendToDLQ(ctx, p.ID, payload, "retry limit exceeded", "retry_exhausted", p.RetryCount, p.Idle); err == nil {
+						c.client.XAck(ctx, c.stream, c.group, p.ID)
+					} else {
+						log.Printf("Failed to push %s to DLQ: %v", p.ID, err)
+					}
+				} else {
+					c.processMessage(ctx, msg, p.RetryCount, p.Idle)
+				}
 			}
 		}
 	}
 	return nil
 }
 
-func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage) {
+func (c *Consumer) sendToDLQ(ctx context.Context, msgID string, payload string, reason string, fType string, retryCount int64, idle time.Duration) error {
+	now := time.Now().UTC()
+	firstFailure := now.Add(-idle)
+
+	err := c.client.XAdd(ctx, &redis.XAddArgs{
+		Stream: "ot_events_dlq",
+		Values: map[string]interface{}{
+			"original_stream":         c.stream,
+			"original_message_id":     msgID,
+			"original_payload":        payload,
+			"failure_reason":          reason,
+			"failure_type":            fType,
+			"first_failure_timestamp": firstFailure.Format(time.RFC3339),
+			"last_failure_timestamp":  now.Format(time.RFC3339),
+			"retry_count":             retryCount,
+		},
+	}).Err()
+	return err
+}
+
+func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage, retryCount int64, idle time.Duration) {
 	dataRaw, ok := msg.Values["payload"].(string)
 	if !ok {
 		log.Printf("Invalid payload type for message %s, ACKing as poison", msg.ID)
-		c.client.XAck(ctx, c.stream, c.group, msg.ID)
+		if err := c.sendToDLQ(ctx, msg.ID, fmt.Sprintf("%v", msg.Values["payload"]), "payload not a string", "unmarshal", retryCount, idle); err == nil {
+			c.client.XAck(ctx, c.stream, c.group, msg.ID)
+		}
 		return
 	}
 
 	ev, err := events.Deserialize([]byte(dataRaw))
 	if err != nil {
 		log.Printf("Failed to deserialize event %s, ACKing as poison: %v", msg.ID, err)
-		c.client.XAck(ctx, c.stream, c.group, msg.ID)
+		if err := c.sendToDLQ(ctx, msg.ID, dataRaw, err.Error(), "unmarshal", retryCount, idle); err == nil {
+			c.client.XAck(ctx, c.stream, c.group, msg.ID)
+		}
+		return
+	}
+	
+	if err := ev.Validate(); err != nil {
+		log.Printf("Failed to validate event %s, ACKing as poison: %v", msg.ID, err)
+		if err := c.sendToDLQ(ctx, msg.ID, dataRaw, err.Error(), "validation", retryCount, idle); err == nil {
+			c.client.XAck(ctx, c.stream, c.group, msg.ID)
+		}
 		return
 	}
 

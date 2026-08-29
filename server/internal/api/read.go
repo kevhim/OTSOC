@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"regexp"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"redcyberfox/server/pkg/events"
-)
+	"redcyberfox/pkg/events"
 
 type ReadHandler struct {
 	db *pgxpool.Pool
@@ -29,12 +29,20 @@ func (h *ReadHandler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
 
-	rows, err := h.db.Query(context.Background(), `
+	tenantID := r.URL.Query().Get("tenant_id")
+	tenantRegex := regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
+	if tenantID == "" || !tenantRegex.MatchString(tenantID) {
+		http.Error(w, "Bad Request: Missing or invalid tenant_id (development-only mechanism)", http.StatusBadRequest)
+		return
+	}
+
+	rows, err := h.db.Query(r.Context(), `
 		SELECT event_id, tenant_id, site_id, occurred_at, severity, source, category, seq_no
 		FROM events
+		WHERE tenant_id = $1
 		ORDER BY occurred_at DESC
 		LIMIT 50
-	`)
+	`, tenantID)
 	if err != nil {
 		log.Printf("Query events failed: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -60,6 +68,12 @@ func (h *ReadHandler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	
+	if err := rows.Err(); err != nil {
+		log.Printf("Error iterating event rows: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	
 	if result == nil {
 		result = []map[string]interface{}{}
 	}
@@ -76,12 +90,20 @@ func (h *ReadHandler) ServeAlerts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
 
-	rows, err := h.db.Query(context.Background(), `
+	tenantID := r.URL.Query().Get("tenant_id")
+	tenantRegex := regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
+	if tenantID == "" || !tenantRegex.MatchString(tenantID) {
+		http.Error(w, "Bad Request: Missing or invalid tenant_id (development-only mechanism)", http.StatusBadRequest)
+		return
+	}
+
+	rows, err := h.db.Query(r.Context(), `
 		SELECT alert_id, event_id, tenant_id, severity, description, created_at
 		FROM alerts
+		WHERE tenant_id = $1
 		ORDER BY created_at DESC
 		LIMIT 50
-	`)
+	`, tenantID)
 	if err != nil {
 		log.Printf("Query alerts failed: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -96,6 +118,12 @@ func (h *ReadHandler) ServeAlerts(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			result = append(result, al)
 		}
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Printf("Error iterating alert rows: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
 	}
 
 	if result == nil {

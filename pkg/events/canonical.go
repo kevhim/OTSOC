@@ -2,7 +2,11 @@ package events
 
 import (
 	"encoding/json"
+	"fmt"
+	"regexp"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // CanonicalEvent represents the normalized telemetry event model
@@ -20,7 +24,7 @@ type CanonicalEvent struct {
 	Source          string                 `json:"source"`
 	Category        string                 `json:"category"`
 	Severity        string                 `json:"severity"`
-	Confidence      float64                `json:"confidence,omitempty"`
+	Confidence      *float64               `json:"confidence,omitempty"`
 	Protocol        string                 `json:"protocol,omitempty"`
 	Src             string                 `json:"src,omitempty"`
 	Dst             string                 `json:"dst,omitempty"`
@@ -54,4 +58,43 @@ func Deserialize(data []byte) (*CanonicalEvent, error) {
 	var e CanonicalEvent
 	err := json.Unmarshal(data, &e)
 	return &e, err
+}
+
+// Validate ensures the canonical event strictly adheres to the schema.
+func (e *CanonicalEvent) Validate() error {
+	if _, err := uuid.Parse(e.EventID); err != nil {
+		return fmt.Errorf("invalid event_id: %w", err)
+	}
+	
+	tenantSiteRegex := regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
+	if e.TenantID == "" || !tenantSiteRegex.MatchString(e.TenantID) {
+		return fmt.Errorf("invalid tenant_id")
+	}
+	if e.SiteID == "" || !tenantSiteRegex.MatchString(e.SiteID) {
+		return fmt.Errorf("invalid site_id")
+	}
+	
+	if e.SeqNo < 0 {
+		return fmt.Errorf("seq_no cannot be negative")
+	}
+	
+	switch e.Severity {
+	case "DEBUG", "INFO", "WARNING", "CRITICAL", "FATAL":
+		// valid
+	default:
+		return fmt.Errorf("invalid severity: %s", e.Severity)
+	}
+	
+	if e.Confidence != nil {
+		if *e.Confidence < 0 || *e.Confidence > 100 {
+			return fmt.Errorf("confidence must be between 0 and 100")
+		}
+	}
+	
+	// Ensure SchemaVersion matches supported versions exactly
+	if e.SchemaVersion != "1.0.0" && e.SchemaVersion != "v1.0.0" {
+		return fmt.Errorf("unsupported schema_version: %s", e.SchemaVersion)
+	}
+
+	return nil
 }

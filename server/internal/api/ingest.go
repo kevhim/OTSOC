@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"redcyberfox/server/pkg/events"
+	"redcyberfox/pkg/events"
 )
 
 type Publisher interface {
@@ -35,16 +35,15 @@ func (h *IngestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Minimal Validation based on canonical schema
-	if ev.EventID == "" || ev.TenantID == "" || ev.SiteID == "" || ev.OccurredAt.IsZero() || ev.SchemaVersion == "" {
-		http.Error(w, "Bad Request: Missing required canonical fields (event_id, tenant_id, site_id, occurred_at, schema_version)", http.StatusBadRequest)
-		return
-	}
-
 	// Normalize
 	ev.ReceivedAt = time.Now().UTC()
 	if ev.Severity == "" {
 		ev.Severity = "INFO"
+	}
+
+	if err := ev.Validate(); err != nil {
+		http.Error(w, "Bad Request: Validation failed - "+err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	// Queue to Valkey

@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/redis/go-redis/v9"
-	"redcyberfox/server/pkg/events"
+	"redcyberfox/pkg/events"
 )
 
 type Producer struct {

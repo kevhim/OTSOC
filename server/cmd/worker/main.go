@@ -8,37 +8,30 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
-
-	"redcyberfox/server/internal/db"
-	"redcyberfox/server/internal/queue"
+	"redcyberfox/internal/config"
+	"redcyberfox/internal/db"
+	"redcyberfox/internal/queue"
 )
 
 func main() {
 	log.Println("Starting RedCyberFox Worker (Phase 1 Vertical Slice)")
 
+	cfg := config.LoadConfig()
+
 	// 1. Initialize Valkey
-	valkeyAddr := os.Getenv("VALKEY_ADDR")
-	if valkeyAddr == "" {
-		valkeyAddr = "localhost:6379"
-	}
-	rdb := redis.NewClient(&redis.Options{
-		Addr: valkeyAddr,
-	})
-	if err := rdb.Ping(context.Background()).Err(); err != nil {
-		log.Fatalf("Failed to connect to Valkey: %v", err)
+	ctxInit, cancelInit := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelInit()
+
+	rdb, err := config.InitValkey(ctxInit, cfg.ValkeyAddr)
+	if err != nil {
+		log.Fatalf("Valkey Init Error: %v", err)
 	}
 	defer rdb.Close()
 
 	// 2. Initialize PostgreSQL
-	pgURL := os.Getenv("DATABASE_URL")
-	if pgURL == "" {
-		pgURL = "postgres://root:development_password@localhost:5432/redcyberfox"
-	}
-	dbpool, err := pgxpool.New(context.Background(), pgURL)
+	dbpool, err := config.InitDatabase(ctxInit, cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("Unable to connect to database: %v", err)
+		log.Fatalf("Database Init Error: %v", err)
 	}
 	defer dbpool.Close()
 

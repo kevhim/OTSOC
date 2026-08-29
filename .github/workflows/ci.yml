@@ -1,8 +1,8 @@
-name: Bootstrap CI
+name: RedCyberFox CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, "fix/*", "feature/*" ]
   pull_request:
     branches: [ main ]
 
@@ -12,8 +12,30 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Check for trailing whitespace
-        run: git diff-tree --check $(git hash-object -t tree /dev/null) HEAD
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+
+      - name: Check Gofmt
+        run: test -z "$(gofmt -l .)"
+
+      - name: Go Vet
+        run: go vet ./...
+
+      - name: Go Test
+        run: go test -v ./...
+
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18.x'
+        
+      - name: npm install and build
+        run: |
+          cd dashboard
+          npm ci
+          npm run build
 
       - name: Verify Docker Compose config
         run: docker compose -f deployments/dev/docker-compose.yml config
