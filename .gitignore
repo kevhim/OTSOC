@@ -1,0 +1,65 @@
+# Environments
+.env
+.env.*
+!.env.example
+
+# Secrets
+*.key
+*.pem
+*.cert
+*.crt
+*.pfx
+
+# Databases
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+
+# Build Output
+bin/
+build/
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Node / JS
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Go
+*.test
+*.out
+vendor/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary / Testing
+tmp/
+temp/
+coverage/
+logs/
+*.log
+
+# Sensitive OT
+*.pcap
+*.pcapng

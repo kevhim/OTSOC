@@ -1,0 +1,19 @@
+name: Bootstrap CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Check for trailing whitespace
+        run: git diff-tree --check $(git hash-object -t tree /dev/null) HEAD
+
+      - name: Verify Docker Compose config
+        run: docker compose -f deployments/dev/docker-compose.yml config
