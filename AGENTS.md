@@ -13,3 +13,18 @@ When working on this repository, you MUST:
 - Consider low-spec constraints.
 - Run tests and report failures.
 - NEVER implement unsafe OT actions unless explicitly requested for an isolated lab.
+
+## Git Workflow
+
+- **Never perform implementation directly on `main`.** Work on feature/fix/security branches.
+- **Always inspect git status before making changes.**
+- **Never discard user changes.** Preserve existing developer work. Ask for approval before any operation that could discard or rewrite work.
+- **Never force-push.**
+- **Never rewrite published history.**
+- **Never use `git reset --hard` unless explicitly approved.**
+- **Never use `git clean -fd` unless explicitly approved.**
+- **Never commit secrets.**
+- **Keep commits logically scoped.** Use Conventional Commits.
+- **Run relevant tests before committing.**
+- **Report branch, commits, tests and working-tree state at task completion.**
+- **Do not use destructive Git commands to solve implementation problems.**

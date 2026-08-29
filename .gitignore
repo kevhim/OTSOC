@@ -9,6 +9,9 @@
 *.cert
 *.crt
 *.pfx
+*.p12
+secrets/
+credentials/
 
 # Databases
 *.sqlite
