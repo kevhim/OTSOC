@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"log"
 	"net/http"
 	"time"
@@ -24,26 +25,46 @@ type CanonicalEvent struct {
 }
 
 func main() {
-	log.Println("Starting RedCyberFox Synthetic Agent")
-	
-	targetURL := "http://localhost:8081/v1/ingest"
+	countFlag := flag.Int("count", 0, "Number of events to generate (0 for continuous)")
+	intervalFlag := flag.Duration("interval", 10*time.Second, "Interval between events (default 10s)")
+	seqFlag := flag.Int64("seq", 1, "Starting sequence number")
+	severityFlag := flag.String("severity", "MIXED", "Severity of events (INFO, CRITICAL, MIXED)")
+	targetURL := flag.String("url", "http://localhost:8081/v1/ingest", "Target ingest URL")
+	flag.Parse()
 
-	var seqNo int64 = 1
+	log.Println("Starting RedCyberFox Synthetic Agent")
+	log.Printf("Config: Count=%d, Interval=%v, Seq=%d, Severity=%s", *countFlag, *intervalFlag, *seqFlag, *severityFlag)
+
+	var seqNo = *seqFlag
+	var eventsSent = 0
 
 	for {
-		// Create normal event
-		ev := generateEvent("INFO", seqNo)
-		sendEvent(targetURL, ev)
-		seqNo++
-
-		// Periodically create a CRITICAL event to trigger a Phase-1 Alert
-		if seqNo%5 == 0 {
-			critEv := generateEvent("CRITICAL", seqNo)
-			sendEvent(targetURL, critEv)
-			seqNo++
+		if *countFlag > 0 && eventsSent >= *countFlag {
+			log.Println("Reached requested event count. Exiting.")
+			break
 		}
 
-		time.Sleep(5 * time.Second)
+		currentSeverity := *severityFlag
+		if currentSeverity == "MIXED" {
+			if seqNo%5 == 0 {
+				currentSeverity = "CRITICAL"
+			} else {
+				currentSeverity = "INFO"
+			}
+		}
+
+		ev := generateEvent(currentSeverity, seqNo)
+		sendEvent(*targetURL, ev)
+		
+		seqNo++
+		eventsSent++
+
+		if *countFlag > 0 && eventsSent >= *countFlag {
+			log.Println("Reached requested event count. Exiting.")
+			break
+		}
+
+		time.Sleep(*intervalFlag)
 	}
 }
 
