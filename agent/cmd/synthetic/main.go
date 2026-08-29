@@ -61,11 +61,11 @@ func generateEvent(severity string, seqNo int64) events.CanonicalEvent {
 	return events.CanonicalEvent{
 		EventID:       uuid.New().String(),
 		TenantID:      "tenant-alpha",
-		SiteID:        "site-main",
+		SiteID:        "site-primary",
 		OccurredAt:    time.Now().UTC(),
 		SeqNo:         seqNo,
 		Source:        "synthetic-agent",
-		Category:      "network_flow",
+		Category:      "system",
 		Severity:      severity,
 		SchemaVersion: "1.0.0",
 	}

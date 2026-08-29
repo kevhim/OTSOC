@@ -9,8 +9,14 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	
-	"redcyberfox/internal/db"
+	"redcyberfox/server/internal/db"
 	"redcyberfox/pkg/events"
+)
+
+const (
+	RecoveryInterval  = 1 * time.Minute
+	MinIdleTime       = 1 * time.Minute
+	RecoveryBatchSize = 100
 )
 
 type Consumer struct {
@@ -91,7 +97,7 @@ func (c *Consumer) recoverPending(ctx context.Context) error {
 		Group:  c.group,
 		Start:  "-",
 		End:    "+",
-		Count:  100,
+		Count:  RecoveryBatchSize, // Bounded batch to prevent blocking forever if backlog is huge
 	}).Result()
 
 	if err != nil {
@@ -99,14 +105,14 @@ func (c *Consumer) recoverPending(ctx context.Context) error {
 	}
 
 	for _, p := range pending {
-		// Reclaim if idle for more than 1 minute
-		if p.Idle > time.Minute {
+		// Reclaim if idle for more than configured MinIdleTime
+		if p.Idle > MinIdleTime {
 			log.Printf("Reclaiming idle message %s", p.ID)
 			c.client.XClaim(ctx, &redis.XClaimArgs{
 				Stream:   c.stream,
 				Group:    c.group,
 				Consumer: c.consumer,
-				MinIdle:  time.Minute,
+				MinIdle:  MinIdleTime,
 				Messages: []string{p.ID},
 			})
 			// We fetch the message explicitly to process it

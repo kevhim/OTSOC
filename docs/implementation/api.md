@@ -12,7 +12,7 @@ Ingests a single canonical event.
 Returns recent events.
 
 **Query Parameters:**
-- `tenant_id` (required): The tenant ID to scope the read to.
+- `tenant_id` (required): The tenant ID to scope the read to (**DEVELOPMENT ONLY**, not for production authorization).
 
 **Response:** `200 OK` with JSON array of events.
 
@@ -20,6 +20,6 @@ Returns recent events.
 Returns recent alerts.
 
 **Query Parameters:**
-- `tenant_id` (required): The tenant ID to scope the read to.
+- `tenant_id` (required): The tenant ID to scope the read to (**DEVELOPMENT ONLY**, not for production authorization).
 
 **Response:** `200 OK` with JSON array of alerts.

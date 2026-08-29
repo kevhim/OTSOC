@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -9,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"redcyberfox/pkg/events"
+)
 
 type ReadHandler struct {
 	db *pgxpool.Pool

@@ -8,9 +8,9 @@ import (
 	"syscall"
 	"time"
 
-	"redcyberfox/internal/config"
-	"redcyberfox/internal/db"
-	"redcyberfox/internal/queue"
+	"redcyberfox/server/internal/config"
+	"redcyberfox/server/internal/db"
+	"redcyberfox/server/internal/queue"
 )
 
 func main() {

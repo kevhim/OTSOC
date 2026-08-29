@@ -28,6 +28,6 @@
     "schema_version": { "type": "string" }
   },
   "required": [
-    "event_id", "tenant_id", "site_id", "occurred_at", "schema_version"
+    "event_id", "tenant_id", "site_id", "occurred_at", "seq_no", "source", "category", "severity", "schema_version"
   ]
 }

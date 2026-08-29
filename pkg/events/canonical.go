@@ -66,6 +66,16 @@ func (e *CanonicalEvent) Validate() error {
 		return fmt.Errorf("invalid event_id: %w", err)
 	}
 	
+	if e.OccurredAt.IsZero() {
+		return fmt.Errorf("occurred_at is required")
+	}
+	if e.Source == "" {
+		return fmt.Errorf("source is required")
+	}
+	if e.Category == "" {
+		return fmt.Errorf("category is required")
+	}
+	
 	tenantSiteRegex := regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
 	if e.TenantID == "" || !tenantSiteRegex.MatchString(e.TenantID) {
 		return fmt.Errorf("invalid tenant_id")

@@ -3,9 +3,7 @@ package config
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -26,7 +24,7 @@ func LoadConfig() Config {
 		cfg.ValkeyAddr = "localhost:6379"
 	}
 	if cfg.DatabaseURL == "" {
-		cfg.DatabaseURL = "postgres://root:development_password@localhost:5432/redcyberfox"
+		cfg.DatabaseURL = "postgres://root:development_password@localhost:5433/redcyberfox"
 	}
 
 	return cfg

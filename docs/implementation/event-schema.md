@@ -31,4 +31,4 @@ The Canonical Event is the unified data model used across the entire RedCyberFox
 - `rule_version` (String)
 - `attck_enterprise` (String array)
 - `attck_ics` (String array)
-- `quality_flags` (Integer)
+- `quality_flags` (String array)
