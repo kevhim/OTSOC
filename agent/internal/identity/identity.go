@@ -14,8 +14,8 @@ type Identity struct {
 }
 
 // LoadOrInitialize atomically initializes or loads a device identity from a file.
-// A crash during this initialization must never cause a different device_id
-// to be generated on the next startup. We achieve this by atomic temp-file rename.
+// It uses atomic temp-file replacement to prevent partial identity-file writes.
+// Authoritative durable device identity will move into SQLite in Phase 2B.
 func LoadOrInitialize(path string) (*Identity, error) {
 	// Try to load existing
 	data, err := os.ReadFile(path)

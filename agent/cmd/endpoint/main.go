@@ -11,7 +11,6 @@ import (
 	"redcyberfox/agent/internal/config"
 	"redcyberfox/agent/internal/health"
 	"redcyberfox/agent/internal/identity"
-	"redcyberfox/pkg/events"
 )
 
 func main() {
@@ -21,18 +20,18 @@ func main() {
 
 	log.Println("Starting Endpoint Agent Alpha Phase 2A Foundation...")
 
-	// 1. Identity Initialization (Crash-safe)
+	// 1. Config Loading & Validation
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	// 2. Identity Initialization (Atomic replacement, durability via SQLite in 2B)
 	id, err := identity.LoadOrInitialize(*identityPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize device identity: %v", err)
 	}
 	log.Printf("Device Identity: %s", id.DeviceID)
-
-	// 2. Config Loading
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
-	}
 
 	// 3. Graceful Shutdown Context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -48,9 +47,9 @@ func main() {
 	}()
 
 	// 4. Initialize Core Components (Mocks for Phase 2A)
-	eventsCh := make(chan *events.CanonicalEvent, 100)
+	healthCh := make(chan *health.Signal, 100)
 
-	healthMgr := health.NewManager(id.DeviceID, cfg.TenantID, cfg.SiteID, eventsCh)
+	healthMgr := health.NewManager(id.DeviceID, cfg.TenantID, cfg.SiteID, healthCh)
 
 	// Start components
 	go func() {
@@ -65,8 +64,8 @@ func main() {
 			select {
 			case <-ctx.Done():
 				return
-			case ev := <-eventsCh:
-				log.Printf("Internal pipeline received event: Category=%s Source=%s", ev.Category, ev.Source)
+			case sig := <-healthCh:
+				log.Printf("Internal pipeline received health signal: Type=%s", sig.Type)
 			}
 		}
 	}()

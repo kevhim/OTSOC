@@ -3,18 +3,23 @@ package health
 import (
 	"context"
 	"time"
-
-	"redcyberfox/pkg/events"
 )
+
+// Signal represents an internal health/lifecycle event in Phase 2A.
+// The canonical heartbeat event is created in the Phase 2B persistence layer.
+type Signal struct {
+	Type       string
+	OccurredAt time.Time
+}
 
 type Manager struct {
 	deviceID string
 	tenantID string
 	siteID   string
-	out      chan<- *events.CanonicalEvent
+	out      chan<- *Signal
 }
 
-func NewManager(deviceID, tenantID, siteID string, out chan<- *events.CanonicalEvent) *Manager {
+func NewManager(deviceID, tenantID, siteID string, out chan<- *Signal) *Manager {
 	return &Manager{
 		deviceID: deviceID,
 		tenantID: tenantID,
@@ -42,15 +47,12 @@ func (m *Manager) Start(ctx context.Context) error {
 }
 
 func (m *Manager) emitHeartbeat(ctx context.Context) {
-	event := &events.CanonicalEvent{
-		TenantID:   m.tenantID,
-		SiteID:     m.siteID,
-		Source:     "agent",
-		Category:   "health",
+	sig := &Signal{
+		Type:       "heartbeat",
 		OccurredAt: time.Now().UTC(),
 	}
 	select {
-	case m.out <- event:
+	case m.out <- sig:
 	case <-ctx.Done():
 	}
 }
