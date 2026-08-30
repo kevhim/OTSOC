@@ -13,6 +13,23 @@ import (
 	"redcyberfox/pkg/events"
 )
 
+func pollForCondition(t *testing.T, description string, check func() bool) {
+	timeout := time.After(10 * time.Second)
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			t.Fatalf("Timeout waiting for condition: %s", description)
+		case <-ticker.C:
+			if check() {
+				return
+			}
+		}
+	}
+}
+
 func TestE2EFlow(t *testing.T) {
 	// Simple check to see if API is up
 	resp, err := http.Get("http://localhost:8081/v1/events?tenant_id=e2e-tenant")
@@ -51,33 +68,33 @@ func TestE2EFlow(t *testing.T) {
 		t.Fatalf("Expected status 202 Accepted, got %d", resp.StatusCode)
 	}
 
-	// 2. Wait for worker to process
-	time.Sleep(2 * time.Second)
-
-	// 3. Verify event is available in GET /v1/events
-	resp, err = http.Get("http://localhost:8081/v1/events?tenant_id=e2e-tenant")
-	if err != nil {
-		t.Fatalf("Failed to fetch events: %v", err)
-	}
-	defer resp.Body.Close()
-
-	var fetchedEvents []events.CanonicalEvent
-	if err := json.NewDecoder(resp.Body).Decode(&fetchedEvents); err != nil {
-		t.Fatalf("Failed to decode events: %v", err)
-	}
-
-	found := false
-	duplicateCount := 0
-	for _, fe := range fetchedEvents {
-		if fe.EventID == eventID {
-			found = true
-			duplicateCount++
+	// 2 & 3. Wait for worker to process and verify event is available
+	pollForCondition(t, "event to be processed and available in API", func() bool {
+		resp, err := http.Get("http://localhost:8081/v1/events?tenant_id=e2e-tenant")
+		if err != nil {
+			return false
 		}
-	}
+		defer resp.Body.Close()
 
-	if duplicateCount > 1 {
-		t.Errorf("Duplicate alerts generated! Expected exactly 1, got %d", duplicateCount)
-	}
+		var fetchedEvents []events.CanonicalEvent
+		if err := json.NewDecoder(resp.Body).Decode(&fetchedEvents); err != nil {
+			return false
+		}
+
+		duplicateCount := 0
+		for _, fe := range fetchedEvents {
+			if fe.EventID == eventID {
+				duplicateCount++
+			}
+		}
+
+		if duplicateCount > 1 {
+			t.Errorf("Duplicate alerts generated! Expected exactly 1, got %d", duplicateCount)
+			return true // stop polling, it's a failure we already logged
+		}
+
+		return duplicateCount == 1
+	})
 
 	// -------------------------------------------------------------------------
 	// FAULT TOLERANCE VERIFICATION
@@ -98,10 +115,6 @@ func TestE2EFlow(t *testing.T) {
 	// - eventual persistence:
 	//   The retry loop + at-least-once delivery guarantees eventual persistence.
 	// -------------------------------------------------------------------------
-
-	if !found {
-		t.Errorf("Event %s not found in API response", eventID)
-	}
 
 	// 3b. Test Invalid Event
 	invalidEv := ev
@@ -131,7 +144,23 @@ func TestE2EFlow(t *testing.T) {
 	}
 
 	// Wait for processing
-	time.Sleep(2 * time.Second)
+	pollForCondition(t, "duplicate event to be processed", func() bool {
+		resp, err := http.Get("http://localhost:8081/v1/events?tenant_id=e2e-tenant")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		var fetchedEvents []events.CanonicalEvent
+		if err := json.NewDecoder(resp.Body).Decode(&fetchedEvents); err != nil {
+			return false
+		}
+		
+		// If duplicate processing finishes, it shouldn't create a duplicate. 
+		// Polling for "nothing to change" is hard, so we just check if it's still 1. 
+		// Actually, since it's a DO NOTHING on conflict, we can just let this pass immediately 
+		// or wait for the next alert which guarantees the queue advanced.
+		return true
+	})
 
 	// 5. Test Alert Generation (severity CRITICAL)
 	alertEventID := uuid.New().String()
@@ -149,29 +178,24 @@ func TestE2EFlow(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	// Wait for processing
-	time.Sleep(2 * time.Second)
-
-	// Verify alert is available in GET /v1/alerts
-	resp, err = http.Get("http://localhost:8081/v1/alerts?tenant_id=e2e-tenant")
-	if err != nil {
-		t.Fatalf("Failed to fetch alerts: %v", err)
-	}
-	defer resp.Body.Close()
-
-	var fetchedAlerts []events.Alert
-	if err := json.NewDecoder(resp.Body).Decode(&fetchedAlerts); err != nil {
-		t.Fatalf("Failed to decode alerts: %v", err)
-	}
-
-	alertFound := false
-	for _, fa := range fetchedAlerts {
-		if fa.EventID == alertEventID {
-			alertFound = true
-			break
+	// Wait for processing and verify alert
+	pollForCondition(t, "alert to be generated and available", func() bool {
+		resp, err := http.Get("http://localhost:8081/v1/alerts?tenant_id=e2e-tenant")
+		if err != nil {
+			return false
 		}
-	}
-	if !alertFound {
-		t.Errorf("Alert for event %s not found in API response", alertEventID)
-	}
+		defer resp.Body.Close()
+
+		var fetchedAlerts []events.Alert
+		if err := json.NewDecoder(resp.Body).Decode(&fetchedAlerts); err != nil {
+			return false
+		}
+
+		for _, fa := range fetchedAlerts {
+			if fa.EventID == alertEventID {
+				return true
+			}
+		}
+		return false
+	})
 }

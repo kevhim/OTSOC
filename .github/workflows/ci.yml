@@ -48,8 +48,13 @@ jobs:
       - name: Go Vet
         run: go vet ./...
 
-      - name: Go Test (Unit)
-        run: go test -v ./...
+      - name: Go Test (Unit/Integration)
+        run: go test -v -skip=TestMigrations ./...
+
+      - name: Go Test (Migration)
+        run: go test -v -run=TestMigrations ./server
+        env:
+          DATABASE_URL: "postgres://root:development_password@localhost:5433/redcyberfox?sslmode=disable"
 
       - name: Start API & Worker for E2E
         run: |
@@ -57,7 +62,23 @@ jobs:
           go build -o worker.exe ./server/cmd/worker
           ./api.exe &
           ./worker.exe &
-          sleep 2
+          
+          # Bounded readiness loop for API
+          timeout=10
+          for i in $(seq 1 $timeout); do
+            # We just need to get any HTTP response that isn't connection refused to prove it's up.
+            # The API returns 400 for 'test' tenant because of invalid format, but that's a valid HTTP response from the API.
+            # Let's use 400 or 200 as success.
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8081/v1/events?tenant_id=test || echo "000")
+            if [ "$code" = "200" ] || [ "$code" = "400" ]; then
+              echo "API is ready (HTTP $code)"
+              exit 0
+            fi
+            echo "Waiting for API... ($i/$timeout)"
+            sleep 1
+          done
+          echo "API failed to start within $timeout seconds"
+          exit 1
         env:
           DATABASE_URL: "postgres://root:development_password@localhost:5433/redcyberfox?sslmode=disable"
           VALKEY_ADDR: "localhost:6379"

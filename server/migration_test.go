@@ -137,4 +137,16 @@ func TestMigrations(t *testing.T) {
 	if err != nil || !indexExists {
 		t.Fatalf("Index idx_events_tenant_site_time not found after migrations: %v", err)
 	}
+
+	// Verify alerts index (idx_alerts_tenant_created)
+	var alertIndexExists bool
+	err = conn.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT FROM pg_indexes
+			WHERE schemaname = $1 AND tablename = 'alerts' AND indexname = 'idx_alerts_tenant_created'
+		)
+	`, schema).Scan(&alertIndexExists)
+	if err != nil || !alertIndexExists {
+		t.Fatalf("Index idx_alerts_tenant_created not found after migrations: %v", err)
+	}
 }

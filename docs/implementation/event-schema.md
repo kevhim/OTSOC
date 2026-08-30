@@ -7,8 +7,8 @@ The Canonical Event is the unified data model used across the entire RedCyberFox
 ## Required Fields
 
 - `event_id` (UUID): Unique identifier for the event.
-- `tenant_id` (UUID or simple string): Tenant context. Must be valid UUID or alphanumeric with hyphens.
-- `site_id` (UUID or simple string): Site context. Must be valid UUID or alphanumeric with hyphens.
+- `tenant_id`: Opaque alphanumeric/hyphen identifier (UUIDs are valid and commonly used).
+- `site_id`: Opaque alphanumeric/hyphen identifier (UUIDs are valid and commonly used).
 - `occurred_at` (Timestamp): When the event occurred.
 - `seq_no` (Integer): Monotonically increasing sequence number from the agent.
 - `source` (String): Agent/Sensor name.

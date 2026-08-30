@@ -26,6 +26,7 @@ func (h *ReadHandler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// DEVELOPMENT ONLY: Wildcard CORS should not be used in production
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
 
@@ -87,6 +88,7 @@ func (h *ReadHandler) ServeAlerts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// DEVELOPMENT ONLY: Wildcard CORS should not be used in production
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
 
