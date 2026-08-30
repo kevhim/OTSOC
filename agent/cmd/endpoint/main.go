@@ -31,12 +31,7 @@ func main() {
 	// 2. Config Loading
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		log.Printf("Warning: Could not load config (%v), using defaults for Phase 2A mock", err)
-		cfg = &config.Config{
-			APIAddr:  "http://localhost:8081",
-			TenantID: "default-tenant",
-			SiteID:   "default-site",
-		}
+		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
 	// 3. Graceful Shutdown Context

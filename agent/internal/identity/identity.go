@@ -1,11 +1,12 @@
 package identity
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+
+	"github.com/google/uuid"
 )
 
 type Identity struct {
@@ -28,11 +29,7 @@ func LoadOrInitialize(path string) (*Identity, error) {
 	}
 
 	// Generate new UUID
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return nil, fmt.Errorf("failed to generate random bytes: %w", err)
-	}
-	newID := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+	newID := uuid.New().String()
 
 	id := &Identity{DeviceID: newID}
 

@@ -32,4 +32,25 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.TenantID != "t-1" {
 		t.Errorf("Expected TenantID t-1, got %s", cfg.TenantID)
 	}
+
+	// Test invalid config (missing APIAddr)
+	invalidJSON1 := []byte(`{"tenant_id":"t-1","site_id":"s-1"}`)
+	os.WriteFile(cfgPath, invalidJSON1, 0600)
+	if _, err := Load(cfgPath); err == nil {
+		t.Fatal("Expected error for missing api_addr")
+	}
+
+	// Test invalid config (missing TenantID)
+	invalidJSON2 := []byte(`{"api_addr":"http://test:8081","site_id":"s-1"}`)
+	os.WriteFile(cfgPath, invalidJSON2, 0600)
+	if _, err := Load(cfgPath); err == nil {
+		t.Fatal("Expected error for missing tenant_id")
+	}
+
+	// Test invalid config (missing SiteID)
+	invalidJSON3 := []byte(`{"api_addr":"http://test:8081","tenant_id":"t-1"}`)
+	os.WriteFile(cfgPath, invalidJSON3, 0600)
+	if _, err := Load(cfgPath); err == nil {
+		t.Fatal("Expected error for missing site_id")
+	}
 }
