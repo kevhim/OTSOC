@@ -99,7 +99,7 @@ func TestE2EFlow(t *testing.T) {
 	// -------------------------------------------------------------------------
 	// FAULT TOLERANCE VERIFICATION
 	// The following checks are verified through design and manual chaos testing:
-	// 
+	//
 	// - worker interruption before ACK:
 	//   Valkey keeps messages in the consumer group's PEL (Pending Entries List).
 	//   The consumer calls `recoverPending` on startup to claim and process unACKed messages.
@@ -154,10 +154,10 @@ func TestE2EFlow(t *testing.T) {
 		if err := json.NewDecoder(resp.Body).Decode(&fetchedEvents); err != nil {
 			return false
 		}
-		
-		// If duplicate processing finishes, it shouldn't create a duplicate. 
-		// Polling for "nothing to change" is hard, so we just check if it's still 1. 
-		// Actually, since it's a DO NOTHING on conflict, we can just let this pass immediately 
+
+		// If duplicate processing finishes, it shouldn't create a duplicate.
+		// Polling for "nothing to change" is hard, so we just check if it's still 1.
+		// Actually, since it's a DO NOTHING on conflict, we can just let this pass immediately
 		// or wait for the next alert which guarantees the queue advanced.
 		return true
 	})

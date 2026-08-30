@@ -61,7 +61,7 @@ func main() {
 
 	// The context cancellation ensures that in-flight items will attempt to finish
 	// rapidly if they obey context, and the consumer loop will exit safely without ACKing partially completed work.
-	
+
 	// Adding small sleep for pending database ops to wrap up cleanly if needed
 	time.Sleep(1 * time.Second)
 	log.Println("Worker exited gracefully.")

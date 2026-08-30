@@ -38,7 +38,7 @@ func TestMigrations(t *testing.T) {
 	defer conn.Release()
 
 	schema := fmt.Sprintf("test_mig_%d", time.Now().UnixNano())
-	
+
 	// Safe identifier by quoting
 	if _, err := conn.Exec(ctx, fmt.Sprintf("CREATE SCHEMA %q", schema)); err != nil {
 		t.Fatalf("Failed to create schema: %v", err)

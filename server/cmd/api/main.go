@@ -46,7 +46,7 @@ func main() {
 	mux.Handle("/v1/ingest", ingestHandler)
 	mux.HandleFunc("/v1/events", readHandler.ServeEvents)
 	mux.HandleFunc("/v1/alerts", readHandler.ServeAlerts)
-	
+
 	// Add simple health check
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -73,7 +73,7 @@ func main() {
 	log.Println("Shutting down server gracefully...")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	
+
 	// Finish in-flight requests
 	if err := server.Shutdown(ctx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)

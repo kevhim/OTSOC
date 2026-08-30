@@ -14,6 +14,11 @@ type Collector interface {
 type Storage interface {
 	Init(ctx context.Context) error
 	Store(ctx context.Context, event *events.CanonicalEvent) error
+	GetPendingEvents(ctx context.Context, limit int) ([]*events.CanonicalEvent, error)
+	RemoveEvent(ctx context.Context, eventID string) error
+	MarkFailed(ctx context.Context, eventID string, retryAfter int, err error) error
+	MoveToDLQ(ctx context.Context, event *events.CanonicalEvent, failureType, failureReason string) error
+	GetDeviceID() string
 	Close() error
 }
 

@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	
-	"redcyberfox/server/internal/db"
+
 	"redcyberfox/pkg/events"
+	"redcyberfox/server/internal/db"
 )
 
 const (
@@ -20,11 +20,11 @@ const (
 )
 
 type Consumer struct {
-	client    *redis.Client
-	repo      *db.Repository
-	stream    string
-	group     string
-	consumer  string
+	client   *redis.Client
+	repo     *db.Repository
+	stream   string
+	group    string
+	consumer string
 }
 
 func NewConsumer(client *redis.Client, repo *db.Repository, stream, group, consumer string) *Consumer {
@@ -126,7 +126,7 @@ func (c *Consumer) recoverPending(ctx context.Context) error {
 				MinIdle:  MinIdleTime,
 				Messages: []string{p.ID},
 			}).Err()
-			
+
 			if errClaim != nil {
 				log.Printf("Failed to XClaim message %s: %v", p.ID, errClaim)
 				continue
@@ -181,7 +181,7 @@ func (c *Consumer) processMessage(ctx context.Context, msg redis.XMessage, retry
 		}
 		return
 	}
-	
+
 	if err := ev.Validate(); err != nil {
 		log.Printf("Failed to validate event %s, ACKing as poison: %v", msg.ID, err)
 		if err := c.sendToDLQ(ctx, msg.ID, dataRaw, err.Error(), "validation", retryCount, idle); err == nil {

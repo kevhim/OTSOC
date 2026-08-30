@@ -68,7 +68,7 @@ func (e *CanonicalEvent) Validate() error {
 	if _, err := uuid.Parse(e.EventID); err != nil {
 		return fmt.Errorf("invalid event_id: %w", err)
 	}
-	
+
 	if e.OccurredAt.IsZero() {
 		return fmt.Errorf("occurred_at is required")
 	}
@@ -78,7 +78,7 @@ func (e *CanonicalEvent) Validate() error {
 	if e.Category == "" {
 		return fmt.Errorf("category is required")
 	}
-	
+
 	tenantSiteRegex := regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
 	if e.TenantID == "" || !tenantSiteRegex.MatchString(e.TenantID) {
 		return fmt.Errorf("invalid tenant_id")
@@ -86,24 +86,24 @@ func (e *CanonicalEvent) Validate() error {
 	if e.SiteID == "" || !tenantSiteRegex.MatchString(e.SiteID) {
 		return fmt.Errorf("invalid site_id")
 	}
-	
+
 	if e.SeqNo < 0 {
 		return fmt.Errorf("seq_no cannot be negative")
 	}
-	
+
 	switch e.Severity {
 	case "DEBUG", "INFO", "WARNING", "CRITICAL", "FATAL":
 		// valid
 	default:
 		return fmt.Errorf("invalid severity: %s", e.Severity)
 	}
-	
+
 	if e.Confidence != nil {
 		if *e.Confidence < 0 || *e.Confidence > 100 {
 			return fmt.Errorf("confidence must be between 0 and 100")
 		}
 	}
-	
+
 	// Ensure SchemaVersion matches supported versions exactly
 	if e.SchemaVersion != CurrentSchemaVersion {
 		return fmt.Errorf("unsupported schema_version: %s (expected %s)", e.SchemaVersion, CurrentSchemaVersion)

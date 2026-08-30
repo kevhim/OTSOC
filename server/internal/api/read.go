@@ -68,13 +68,13 @@ func (h *ReadHandler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	
+
 	if err := rows.Err(); err != nil {
 		log.Printf("Error iterating event rows: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	
+
 	if result == nil {
 		result = []map[string]interface{}{}
 	}
