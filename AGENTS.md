@@ -14,6 +14,20 @@ When working on this repository, you MUST:
 - Run tests and report failures.
 - NEVER implement unsafe OT actions unless explicitly requested for an isolated lab.
 
+## Context System
+
+Before substantial work:
+- read `docs/context/CONTEXT_INDEX.md`
+- read `docs/context/PROJECT_CONTEXT.md`
+- read relevant task-specific context
+- inspect ADRs
+- inspect source/tests
+
+After substantial work:
+- update `docs/context/CURRENT_STATE.md`
+- update relevant context
+- update roadmap context
+
 ## Git Workflow
 
 - **Never perform implementation directly on `main`.** Work on feature/fix/security branches.

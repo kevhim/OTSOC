@@ -12,7 +12,11 @@ This roadmap tracks the incremental delivery of the RedCyberFox OT SOC platform.
 - Free stack: Go, PostgreSQL, Valkey, React
 - Exit / proof: One test endpoint produces a visible alert end-to-end.
 
-## Phase 2 — Endpoint Alpha: READY
+## Phase 2 — Endpoint Alpha
+
+2A — Agent Foundation: COMPLETE
+2B — SQLite + Offline Sync: COMPLETE
+2C — Process Telemetry: READY
 
 ## Future Phases
 - **Phase 3:** Detection Core

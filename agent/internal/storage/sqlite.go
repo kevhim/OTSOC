@@ -562,8 +562,14 @@ func (s *SQLiteStorage) MoveToDLQ(ctx context.Context, event *events.CanonicalEv
 
 func (s *SQLiteStorage) degradeStorage(err error) error {
 	corruptPath := fmt.Sprintf("%s.corrupt.%d", s.dbPath, time.Now().Unix())
-	os.Rename(s.dbPath, corruptPath)
-	os.Rename(s.dbPath+"-wal", corruptPath+"-wal")
-	os.Rename(s.dbPath+"-shm", corruptPath+"-shm")
+	if rErr := os.Rename(s.dbPath, corruptPath); rErr != nil && !errors.Is(rErr, os.ErrNotExist) {
+		return fmt.Errorf("DEGRADED_STORAGE: %w (additionally failed to move DB: %v)", err, rErr)
+	}
+	if rErr := os.Rename(s.dbPath+"-wal", corruptPath+"-wal"); rErr != nil && !errors.Is(rErr, os.ErrNotExist) {
+		return fmt.Errorf("DEGRADED_STORAGE: %w (additionally failed to move WAL: %v)", err, rErr)
+	}
+	if rErr := os.Rename(s.dbPath+"-shm", corruptPath+"-shm"); rErr != nil && !errors.Is(rErr, os.ErrNotExist) {
+		return fmt.Errorf("DEGRADED_STORAGE: %w (additionally failed to move SHM: %v)", err, rErr)
+	}
 	return fmt.Errorf("DEGRADED_STORAGE: %w (moved to %s)", err, corruptPath)
 }
