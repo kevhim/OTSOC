@@ -283,7 +283,7 @@ func TestStorage_CorruptPayloadDLQMoveError(t *testing.T) {
 	}
 }
 
-func TestStorage_IdentityMigrationCleanupFailure(t *testing.T) {
+func TestStorage_LegacyIdentityCleanupFailureIgnored(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 	identityPath := filepath.Join(tmpDir, "identity.json")
