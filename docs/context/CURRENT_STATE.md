@@ -1,7 +1,7 @@
 # Current State
 
 - **Current Git Branch**: `feature/phase-2b-sqlite-offline-sync`
-- **Current Commit Hash**: `ce4c768c8b376f04e0f4f6fbac29a44688a1a680`
+- **Current Commit Hash**: `3c941b7d507b771a351abc45cd8e2837b9a4e072`
 - **Phase 2B Tag**: `v0.3.0-phase-2b-offline-sync`
 
 ## Phase Status
@@ -18,7 +18,7 @@
 ## Known Limitations
 - End-to-end integration with the central server relies on mocks in current test suites.
 - Serialized SQLite access acts as a bottleneck under extreme concurrent load, by design for Alpha stability.
-- Hardcoded maximum storage quotas are used without dynamic configuration scaling.
+- Storage quota is configurable at storage initialization, but a complete dynamic runtime configuration/policy system is not yet implemented.
 
 ## Next Approved Task
 - Proceed to Phase 2C (if and only if explicitly instructed).
