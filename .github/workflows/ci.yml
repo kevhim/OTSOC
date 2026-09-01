@@ -103,7 +103,7 @@ jobs:
       - name: npm install and build
         run: |
           cd dashboard
-          npm ci
+          npm install
           npm run lint
           npm run build
 
