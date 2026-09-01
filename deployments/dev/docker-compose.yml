@@ -8,9 +8,10 @@ services:
       POSTGRES_PASSWORD: development_password
       POSTGRES_DB: redcyberfox
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ../../server/migrations:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U root -d redcyberfox"]
       interval: 10s
