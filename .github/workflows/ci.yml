@@ -103,6 +103,7 @@ jobs:
       - name: npm install and build
         run: |
           cd dashboard
+          rm -f package-lock.json
           npm install
           npm run lint
           npm run build
