@@ -56,6 +56,12 @@ jobs:
         env:
           DATABASE_URL: "postgres://root:development_password@localhost:5433/redcyberfox?sslmode=disable"
 
+      - name: Apply DB Migrations
+        run: |
+          for f in server/migrations/*.sql; do
+            psql "postgres://root:development_password@localhost:5433/redcyberfox?sslmode=disable" -f "$f"
+          done
+
       - name: Start API & Worker for E2E
         run: |
           go build -o api.exe ./server/cmd/api
