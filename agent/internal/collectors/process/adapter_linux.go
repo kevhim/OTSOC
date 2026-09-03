@@ -5,6 +5,7 @@ package process
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"encoding/binary"
 )
 
 // linuxAdapter encapsulates the Linux-specific /proc polling mechanism.
@@ -49,14 +49,24 @@ func (c *ProcessCollector) startOSAdapter(ctx context.Context) {
 	defer ticker.Stop()
 
 	// Initial reconciliation
-	c.Reconcile(ctx, adapter.captureSnapshot())
+	snapshot, err := adapter.captureSnapshot()
+	if err != nil {
+		log.Printf("ProcessCollector: initial /proc scan failed: %v", err)
+	} else {
+		c.Reconcile(ctx, snapshot)
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			c.Reconcile(ctx, adapter.captureSnapshot())
+			snapshot, err := adapter.captureSnapshot()
+			if err != nil {
+				log.Printf("ProcessCollector: /proc scan failed: %v", err)
+				continue
+			}
+			c.Reconcile(ctx, snapshot)
 		}
 	}
 }
@@ -67,9 +77,9 @@ func newLinuxAdapter(procPath string) (*linuxAdapter, error) {
 		return nil, fmt.Errorf("could not determine boot time: %w", err)
 	}
 
-	userHz := getClkTick(procPath)
-	if userHz <= 0 {
-		userHz = 100
+	userHz, err := getClkTick(procPath)
+	if err != nil {
+		return nil, fmt.Errorf("could not determine clock ticks: %w", err)
 	}
 
 	return &linuxAdapter{
@@ -79,13 +89,12 @@ func newLinuxAdapter(procPath string) (*linuxAdapter, error) {
 	}, nil
 }
 
-func (a *linuxAdapter) captureSnapshot() *Snapshot {
+func (a *linuxAdapter) captureSnapshot() (*Snapshot, error) {
 	a.uidCache = make(map[string]string) // Reset cache for this pass
 
 	entries, err := os.ReadDir(a.procPath)
 	if err != nil {
-		log.Printf("ProcessCollector: failed to read %s: %v", a.procPath, err)
-		return &Snapshot{}
+		return nil, fmt.Errorf("failed to read %s: %w", a.procPath, err)
 	}
 
 	var instances []*Instance
@@ -108,7 +117,7 @@ func (a *linuxAdapter) captureSnapshot() *Snapshot {
 
 	return &Snapshot{
 		Instances: instances,
-	}
+	}, nil
 }
 
 func (a *linuxAdapter) parseProcess(pid int) *Instance {
@@ -275,17 +284,17 @@ func getBootTime(procPath string) (int64, error) {
 			}
 		}
 	}
-	
+
 	return 0, fmt.Errorf("btime not found in %s", statPath)
 }
 
 // getClkTick reads /proc/self/auxv to find the AT_CLKTCK value.
 // AT_CLKTCK is type 17.
-func getClkTick(procPath string) int64 {
+func getClkTick(procPath string) (int64, error) {
 	auxvPath := filepath.Join(procPath, "self", "auxv")
 	data, err := os.ReadFile(auxvPath)
 	if err != nil {
-		return 100
+		return 0, fmt.Errorf("failed to read auxv: %w", err)
 	}
 
 	// auxv is an array of unsigned long pairs (type, value)
@@ -294,7 +303,7 @@ func getClkTick(procPath string) int64 {
 	// A more robust way is to check the size of int or pointer, but this is a heuristic.
 	// To be safer without CGO, we can try 8-byte parsing, if that yields reasonable types,
 	// use it. Otherwise, try 4-byte. Or we can just use the pointer size from runtime.
-	
+
 	// Assuming 64-bit for now, as most modern systems are. If it fails, fallback to 100.
 	// But let's check pointer size.
 	wordSize := 8
@@ -315,12 +324,12 @@ func getClkTick(procPath string) int64 {
 		}
 
 		if typ == 17 { // AT_CLKTCK
-			return int64(val)
+			return int64(val), nil
 		}
 		if typ == 0 { // AT_NULL
 			break
 		}
 	}
 
-	return 100
+	return 0, fmt.Errorf("AT_CLKTCK not found in auxv")
 }

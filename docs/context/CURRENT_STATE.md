@@ -1,16 +1,17 @@
 # Current State
 
-- **Current Git Branch**: `feature/phase-2b-sqlite-offline-sync`
-- **Current Commit Hash**: `3c941b7d507b771a351abc45cd8e2837b9a4e072`
-- **Phase 2B Tag**: `v0.3.0-phase-2b-offline-sync`
+- **Current Git Branch**: `feature/phase-2c-process-telemetry`
+- **Current Commit Hash**: `HEAD`
 
 ## Phase Status
 - **Phase 2A (Foundation)**: COMPLETE
 - **Phase 2B (Agent Storage & Integrity)**: COMPLETE / FROZEN
 - **Phase 2C.0 (Process Telemetry Contract)**: COMPLETE
-- **Phase 2C.1 (Lifecycle Model)**: COMPLETE / VALIDATION IN PROGRESS
-- **Phase 2C.2 (Linux Collector)**: NOT STARTED
-- **Phase 2C.3 (Windows Collector)**: NOT STARTED
+- **Phase 2C.1 (Process Lifecycle Engine)**: COMPLETE
+- **Phase 2C.2 (Linux Process Collector)**: COMPLETE
+- **Phase 2C.3 (Windows Collector)**: COMPLETE (Windows snapshot/reconciliation)
+- **Phase 2C.4**: NOT STARTED
+- **Phase 2C.5**: NOT STARTED
 - **Phase 2C (Overall)**: NOT COMPLETE
 
 ## Completed Phase 2B Features
@@ -23,6 +24,8 @@
 - End-to-end integration with the central server relies on mocks in current test suites.
 - Serialized SQLite access acts as a bottleneck under extreme concurrent load, by design for Alpha stability.
 - Storage quota is configurable at storage initialization, but a complete dynamic runtime configuration/policy system is not yet implemented.
+- **Windows Process Collector**: `CommandLine` is unavailable in this phase (Phase 2C.3) because it requires brittle PEB reading.
+- **Windows Process Collector**: No ETW (real-time event-driven) implementation yet; strictly snapshot/reconciliation based.
 
 ## Next Approved Task
 - Proceed to Phase 2C (if and only if explicitly instructed).

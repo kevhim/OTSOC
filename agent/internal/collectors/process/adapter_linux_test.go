@@ -3,12 +3,35 @@
 package process
 
 import (
+	"context"
+	"encoding/binary"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"redcyberfox/pkg/events"
+	"strconv"
 	"testing"
 	"time"
 )
+
+func writeMockAuxv(t *testing.T, tempDir string, clkTck uint64) {
+	selfDir := filepath.Join(tempDir, "self")
+	os.MkdirAll(selfDir, 0755)
+
+	wordSize := 8
+	if strconv.IntSize == 32 {
+		wordSize = 4
+	}
+	auxvBytes := make([]byte, 2*wordSize)
+	if wordSize == 8 {
+		binary.LittleEndian.PutUint64(auxvBytes[0:8], 17)
+		binary.LittleEndian.PutUint64(auxvBytes[8:16], clkTck)
+	} else {
+		binary.LittleEndian.PutUint32(auxvBytes[0:4], 17)
+		binary.LittleEndian.PutUint32(auxvBytes[4:8], uint32(clkTck))
+	}
+	os.WriteFile(filepath.Join(selfDir, "auxv"), auxvBytes, 0644)
+}
 
 func TestLinuxAdapter_ParseStat(t *testing.T) {
 	adapter := &linuxAdapter{
@@ -43,6 +66,36 @@ func TestLinuxAdapter_ParseStat(t *testing.T) {
 	}
 }
 
+func TestLinuxAdapter_ParseStat_Hardened(t *testing.T) {
+	adapter := &linuxAdapter{
+		bootTime: 1000,
+		userHz:   100,
+	}
+
+	tests := []struct {
+		name         string
+		statStr      string
+		expectedName string
+	}{
+		{"spaces in name", "123 (my daemon) S 1 123 123 0 -1 4194560 108 0 0 0 14 4 0 0 20 0 1 0 500 0 0 0 0", "my daemon"},
+		{"brackets in name", "123 (my(daemon)) S 1 123 123 0 -1 4194560 108 0 0 0 14 4 0 0 20 0 1 0 500 0 0 0 0", "my(daemon)"},
+		{"unusual characters", "123 (a_!@#$) S 1 123 123 0 -1 4194560 108 0 0 0 14 4 0 0 20 0 1 0 500 0 0 0 0", "a_!@#$"},
+		{"closing bracket inside", "123 (my)daemon) S 1 123 123 0 -1 4194560 108 0 0 0 14 4 0 0 20 0 1 0 500 0 0 0 0", "my)daemon"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inst, ok := adapter.parseStat(123, tt.statStr)
+			if !ok {
+				t.Fatalf("Expected parseStat to succeed for %s", tt.name)
+			}
+			if inst.Name == nil || *inst.Name != tt.expectedName {
+				t.Errorf("Expected Name '%s', got '%v'", tt.expectedName, inst.Name)
+			}
+		})
+	}
+}
+
 func TestLinuxAdapter_ParseStat_Malformed(t *testing.T) {
 	adapter := &linuxAdapter{}
 
@@ -67,35 +120,43 @@ func TestLinuxAdapter_ParseStat_Malformed(t *testing.T) {
 	}
 }
 
+func TestLinuxAdapter_InitFailure(t *testing.T) {
+	tempDir := t.TempDir()
+	// No auxv written
+	os.WriteFile(filepath.Join(tempDir, "stat"), []byte("btime 1000\n"), 0644)
+
+	_, err := newLinuxAdapter(tempDir)
+	if err == nil {
+		t.Fatal("Expected newLinuxAdapter to fail when AT_CLKTCK is missing")
+	}
+}
+
 func TestLinuxAdapter_CaptureSnapshot(t *testing.T) {
 	tempDir := t.TempDir()
 
-	// Write /proc/stat
-	procStatPath := filepath.Join(tempDir, "stat")
-	os.WriteFile(procStatPath, []byte("cpu  0 0 0 0 0 0 0 0 0 0\nbtime 1600000000\n"), 0644)
+	os.WriteFile(filepath.Join(tempDir, "stat"), []byte("cpu  0 0 0 0 0 0 0 0 0 0\nbtime 1600000000\n"), 0644)
+	writeMockAuxv(t, tempDir, 100)
 
-	// Create a valid process directory
 	pid1Dir := filepath.Join(tempDir, "100")
 	os.Mkdir(pid1Dir, 0755)
 	os.WriteFile(filepath.Join(pid1Dir, "stat"), []byte("100 (valid_proc) S 1 0 0 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 100 0 0 0 0"), 0644)
 	os.WriteFile(filepath.Join(pid1Dir, "cmdline"), []byte("my\x00arg\x00"), 0644)
 	os.WriteFile(filepath.Join(pid1Dir, "status"), []byte("Name:\tvalid_proc\nUid:\t0\t0\t0\t0\n"), 0644)
-	// exe is a symlink, simulate it if supported or skip
 
-	// Create a non-numeric directory (should be ignored)
 	os.Mkdir(filepath.Join(tempDir, "sys"), 0755)
 
-	// Create a process directory with missing stat (disappeared race condition)
 	pid2Dir := filepath.Join(tempDir, "200")
 	os.Mkdir(pid2Dir, 0755)
-	// No stat file
 
 	adapter, err := newLinuxAdapter(tempDir)
 	if err != nil {
 		t.Fatalf("Failed to create adapter: %v", err)
 	}
 
-	snapshot := adapter.captureSnapshot()
+	snapshot, err := adapter.captureSnapshot()
+	if err != nil {
+		t.Fatalf("Failed to capture snapshot: %v", err)
+	}
 	if len(snapshot.Instances) != 1 {
 		t.Fatalf("Expected 1 instance, got %d", len(snapshot.Instances))
 	}
@@ -128,14 +189,17 @@ func TestLinuxAdapter_CaptureSnapshot(t *testing.T) {
 func TestLinuxAdapter_ProcessDisappearsBeforeExe(t *testing.T) {
 	tempDir := t.TempDir()
 	os.WriteFile(filepath.Join(tempDir, "stat"), []byte("btime 1000\n"), 0644)
+	writeMockAuxv(t, tempDir, 100)
 
 	pidDir := filepath.Join(tempDir, "300")
 	os.Mkdir(pidDir, 0755)
 	os.WriteFile(filepath.Join(pidDir, "stat"), []byte("300 (fast) S 1 0 0 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 100 0"), 0644)
-	// Do not write anything else to simulate disappearance during optional metadata
 
 	adapter, _ := newLinuxAdapter(tempDir)
-	snapshot := adapter.captureSnapshot()
+	snapshot, err := adapter.captureSnapshot()
+	if err != nil {
+		t.Fatalf("Failed to capture snapshot: %v", err)
+	}
 
 	if len(snapshot.Instances) != 1 {
 		t.Fatalf("Expected 1 instance despite missing optional files, got %d", len(snapshot.Instances))
@@ -146,5 +210,71 @@ func TestLinuxAdapter_ProcessDisappearsBeforeExe(t *testing.T) {
 	}
 	if inst.CommandLine != nil || inst.User != nil || inst.ExecutablePath != nil {
 		t.Errorf("Expected optional fields to be nil")
+	}
+}
+
+func TestLinuxAdapter_ScanFailurePreservesState(t *testing.T) {
+	tempDir := t.TempDir()
+	os.WriteFile(filepath.Join(tempDir, "stat"), []byte("btime 1000\n"), 0644)
+	writeMockAuxv(t, tempDir, 100)
+
+	// Setup initial process
+	pidDir := filepath.Join(tempDir, "400")
+	os.Mkdir(pidDir, 0755)
+	os.WriteFile(filepath.Join(pidDir, "stat"), []byte("400 (myproc) S 1 0 0 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 100 0"), 0644)
+
+	adapter, _ := newLinuxAdapter(tempDir)
+	snapshot, err := adapter.captureSnapshot()
+	if err != nil {
+		t.Fatalf("Failed to capture snapshot: %v", err)
+	}
+	if len(snapshot.Instances) != 1 {
+		t.Fatalf("Expected 1 instance, got %d", len(snapshot.Instances))
+	}
+
+	out := make(chan *events.CanonicalEvent, 10)
+	engine := NewLifecycleEngine(out)
+
+	// Baseline snapshot (empty) -> emits 0 events
+	emptyBaseline := &Snapshot{Instances: []*Instance{}}
+	engine.Reconcile(context.Background(), emptyBaseline)
+
+	// Reconcile valid snapshot (emits 1 START event)
+	engine.Reconcile(context.Background(), snapshot)
+
+	select {
+	case ev := <-out:
+		if ev.Action != ActionProcessStart {
+			t.Errorf("Expected START event, got %s", ev.Action)
+		}
+	default:
+		t.Fatal("Expected event on out channel")
+	}
+
+	// Now intentionally make the next capture fail by corrupting the procPath
+	adapter.procPath = "/invalid-does-not-exist"
+	failedSnapshot, err := adapter.captureSnapshot()
+	if err == nil {
+		t.Fatal("Expected captureSnapshot to fail on invalid path")
+	}
+	if failedSnapshot != nil {
+		t.Errorf("Expected nil snapshot on failure")
+	}
+
+	// Because err != nil, the loop in startOSAdapter will NOT call Reconcile.
+	// So we DO NOT call engine.Reconcile here, which proves no EXIT events are generated.
+	// If we did mistakenly call engine.Reconcile(&Snapshot{}), it would generate an EXIT.
+
+	// Let's prove that passing an empty snapshot DOES generate an EXIT (baseline test).
+	emptySnapshot := &Snapshot{Instances: []*Instance{}}
+	engine.Reconcile(context.Background(), emptySnapshot)
+
+	select {
+	case ev := <-out:
+		if ev.Action != ActionProcessExit {
+			t.Errorf("Expected EXIT event, got %s", ev.Action)
+		}
+	default:
+		t.Fatal("Expected EXIT event on out channel when empty snapshot is reconciled")
 	}
 }

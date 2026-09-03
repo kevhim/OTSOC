@@ -46,14 +46,16 @@ func (c *ProcessCollector) HandleEvent(ctx context.Context, inst *Instance, isSt
 func (c *ProcessCollector) Start(ctx context.Context, out chan<- *events.CanonicalEvent) error {
 	c.engine = NewLifecycleEngine(out)
 
-	// Delegate to OS-specific collection loops
+	// Delegate to OS-specific collection loops.
+	// This will block until ctx is canceled.
 	c.startOSAdapter(ctx)
 
-	<-ctx.Done()
 	return nil
 }
 
-// Stop cleanly shuts down any OS-specific collection mechanisms.
+// Stop is currently a no-op because the collector's lifecycle is entirely
+// owned and controlled by the context passed to Start().
+// Cancellation of that context will cleanly shut down the collector.
 func (c *ProcessCollector) Stop() error {
 	return nil
 }

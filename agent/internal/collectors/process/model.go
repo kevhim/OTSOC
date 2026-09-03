@@ -15,8 +15,10 @@ type Instance struct {
 	Name           *string
 	ParentPID      *int
 	ExecutablePath *string
-	CommandLine    *string
-	User           *string
+	// CommandLine contains a JSON-encoded array of the NUL-separated argv strings.
+	CommandLine *string
+	// User contains the resolved username when lookup succeeds, otherwise the numeric UID string.
+	User *string
 }
 
 // IdentityKey returns the strong identity for this process instance,

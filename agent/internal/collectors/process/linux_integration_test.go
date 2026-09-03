@@ -15,7 +15,10 @@ func TestLinuxAdapter_Integration(t *testing.T) {
 		t.Fatalf("Failed to initialize real /proc adapter: %v", err)
 	}
 
-	snapshot := adapter.captureSnapshot()
+	snapshot, err := adapter.captureSnapshot()
+	if err != nil {
+		t.Fatalf("Failed to capture snapshot: %v", err)
+	}
 	if len(snapshot.Instances) == 0 {
 		t.Fatal("Expected at least one process instance in real /proc")
 	}
