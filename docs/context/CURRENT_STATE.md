@@ -5,9 +5,13 @@
 - **Phase 2B Tag**: `v0.3.0-phase-2b-offline-sync`
 
 ## Phase Status
-- **Phase 2A**: COMPLETE
-- **Phase 2B**: COMPLETE
-- **Phase 2C**: READY / NOT STARTED
+- **Phase 2A (Foundation)**: COMPLETE
+- **Phase 2B (Agent Storage & Integrity)**: COMPLETE / FROZEN
+- **Phase 2C.0 (Process Telemetry Contract)**: COMPLETE
+- **Phase 2C.1 (Lifecycle Model)**: COMPLETE / VALIDATION IN PROGRESS
+- **Phase 2C.2 (Linux Collector)**: NOT STARTED
+- **Phase 2C.3 (Windows Collector)**: NOT STARTED
+- **Phase 2C (Overall)**: NOT COMPLETE
 
 ## Completed Phase 2B Features
 - SQLite Durability for events (atomic inserts, offline queuing).
