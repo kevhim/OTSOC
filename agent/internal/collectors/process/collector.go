@@ -3,6 +3,7 @@ package process
 import (
 	"context"
 
+	"redcyberfox/agent/internal/config"
 	"redcyberfox/pkg/events"
 )
 
@@ -12,11 +13,14 @@ import (
 // attached to this struct in future phases.
 type ProcessCollector struct {
 	engine *LifecycleEngine
+	cfg    *config.Config
 }
 
 // NewCollector creates a new platform-neutral ProcessCollector.
-func NewCollector() *ProcessCollector {
-	return &ProcessCollector{}
+func NewCollector(cfg *config.Config) *ProcessCollector {
+	return &ProcessCollector{
+		cfg: cfg,
+	}
 }
 
 // Reconcile exposes the internal state machine's snapshot capability
@@ -42,8 +46,8 @@ func (c *ProcessCollector) HandleEvent(ctx context.Context, inst *Instance, isSt
 func (c *ProcessCollector) Start(ctx context.Context, out chan<- *events.CanonicalEvent) error {
 	c.engine = NewLifecycleEngine(out)
 
-	// OS-specific scheduling or event loop will be implemented in subsequent phases
-	// and will call c.Reconcile() and c.HandleEvent().
+	// Delegate to OS-specific collection loops
+	c.startOSAdapter(ctx)
 
 	<-ctx.Done()
 	return nil
