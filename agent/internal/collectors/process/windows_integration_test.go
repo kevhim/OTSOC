@@ -3,67 +3,109 @@
 package process
 
 import (
-	"os"
+	"context"
+	"os/exec"
 	"testing"
+	"time"
+
+	"redcyberfox/pkg/events"
 )
 
-func TestWindowsIntegration_RealHost(t *testing.T) {
-	// 1. Instantiate the Windows process adapter
+func TestWindowsIntegration_Lifecycle(t *testing.T) {
 	adapter := &windowsAdapter{
-		api: &realWindowsAPI{},
+		api: defaultOSAPI, // Uses the real Windows API on host
 	}
 
-	// 2. Capture a real process snapshot
+	out := make(chan *events.CanonicalEvent, 1000)
+	engine := NewLifecycleEngine(out)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// 1. Baseline
 	snap, err := adapter.captureSnapshot()
 	if err != nil {
-		t.Fatalf("failed to capture snapshot on real host: %v", err)
+		t.Fatalf("Failed to capture initial snapshot: %v", err)
 	}
+	engine.Reconcile(ctx, snap)
 
-	if len(snap.Instances) == 0 {
-		t.Fatalf("expected at least 1 process (the test process), got 0")
-	}
-
-	// 3. Confirm at least the current test process can be represented
-	myPID := os.Getpid()
-	var myInst *Instance
-
-	systemProcessAccessDenied := false
-
-	for _, inst := range snap.Instances {
-		if inst.PID == myPID {
-			myInst = inst
-		}
-		// Confirm collector survives inaccessible processes
-		// We expect that we cannot read the ExecutablePath of some system processes without admin/debug privileges
-		if inst.PID != myPID && inst.ExecutablePath == nil {
-			systemProcessAccessDenied = true
+	// Drain baseline events
+drainLoop1:
+	for {
+		select {
+		case <-out:
+		default:
+			break drainLoop1
 		}
 	}
 
-	if myInst == nil {
-		t.Fatalf("test process PID %d was not found in the snapshot", myPID)
+	// 2. Spawn a short-lived process (using timeout instead of sleep for Windows)
+	cmd := exec.Command("timeout", "10")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Failed to start timeout: %v", err)
+	}
+	defer func() {
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+	}()
+
+	pid := cmd.Process.Pid
+
+	// 3. Observe PROCESS_START
+	snap, err = adapter.captureSnapshot()
+	if err != nil {
+		t.Fatalf("Failed to capture snapshot: %v", err)
+	}
+	engine.Reconcile(ctx, snap)
+
+	foundStart := false
+drainLoop2:
+	for {
+		select {
+		case ev := <-out:
+			if ev.Action == "PROCESS_START" {
+				sem := projectToSemantic(ev)
+				if sem.PID == pid {
+					foundStart = true
+				}
+			}
+		default:
+			break drainLoop2
+		}
 	}
 
-	// 4. Confirm PID is populated
-	if myInst.PID != myPID {
-		t.Errorf("expected PID %d, got %d", myPID, myInst.PID)
+	if !foundStart {
+		t.Fatalf("Did not observe PROCESS_START for spawned PID %d", pid)
 	}
 
-	// 5. Confirm StartTime is populated
-	if myInst.StartTime.IsZero() {
-		t.Errorf("expected StartTime to be populated for test process")
+	// 4. Terminate process
+	cmd.Process.Kill()
+	cmd.Wait()
+
+	// 5. Observe PROCESS_EXIT
+	snap, err = adapter.captureSnapshot()
+	if err != nil {
+		t.Fatalf("Failed to capture snapshot: %v", err)
+	}
+	engine.Reconcile(ctx, snap)
+
+	foundExit := false
+drainLoop3:
+	for {
+		select {
+		case ev := <-out:
+			if ev.Action == "PROCESS_EXIT" {
+				sem := projectToSemantic(ev)
+				if sem.PID == pid {
+					foundExit = true
+				}
+			}
+		default:
+			break drainLoop3
+		}
 	}
 
-	// Optional check for test process executable
-	if myInst.ExecutablePath != nil {
-		t.Logf("Test process path: %s", *myInst.ExecutablePath)
-	} else {
-		t.Logf("Test process path unavailable")
-	}
-	
-	// 6. Confirm the collector survives inaccessible processes
-	// Note: in extremely isolated environments this might be false, but practically on a normal Windows machine it will be true
-	if systemProcessAccessDenied {
-		t.Logf("Successfully survived inaccessible processes (found processes missing optional metadata)")
+	if !foundExit {
+		t.Fatalf("Did not observe PROCESS_EXIT for killed PID %d", pid)
 	}
 }

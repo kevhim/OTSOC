@@ -5,11 +5,13 @@ package process
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/windows"
 
+	"redcyberfox/agent/internal/config"
 	"redcyberfox/pkg/events"
 )
 
@@ -279,10 +281,56 @@ func TestWindowsAdapter_captureSnapshot_Failure(t *testing.T) {
 
 	snap, err := adapter.captureSnapshot()
 	if err == nil {
-		t.Fatalf("expected error, got nil")
+		t.Fatal("expected error, got nil")
 	}
 	if snap != nil {
-		t.Fatalf("expected nil snapshot on failure")
+		t.Fatal("expected nil snapshot on failure")
+	}
+}
+
+func TestWindowsAPI_EnumerateProcesses_PartialFailure(t *testing.T) {
+	// We want to test realWindowsAPI.EnumerateProcesses() explicitly
+	// by overriding the Toolhelp seams.
+	originalCreate := sysCreateToolhelp32Snapshot
+	originalFirst := sysProcess32First
+	originalNext := sysProcess32Next
+
+	defer func() {
+		sysCreateToolhelp32Snapshot = originalCreate
+		sysProcess32First = originalFirst
+		sysProcess32Next = originalNext
+	}()
+
+	sysCreateToolhelp32Snapshot = func(flags uint32, pid uint32) (windows.Handle, error) {
+		return windows.Handle(1234), nil // mock handle
+	}
+
+	sysProcess32First = func(handle windows.Handle, entry *windows.ProcessEntry32) error {
+		entry.ProcessID = 100
+		return nil
+	}
+
+	callCount := 0
+	sysProcess32Next = func(handle windows.Handle, entry *windows.ProcessEntry32) error {
+		callCount++
+		if callCount == 1 {
+			entry.ProcessID = 101
+			return nil
+		}
+		// Simulate unexpected failure on the 2nd call to Next
+		return errors.New("unexpected error in Process32Next")
+	}
+
+	api := &realWindowsAPI{}
+	entries, err := api.EnumerateProcesses()
+	if err == nil {
+		t.Fatal("expected error from unexpected Process32Next failure, got nil")
+	}
+	if err.Error() != "unexpected error in Process32Next" {
+		t.Fatalf("expected specific error, got %v", err)
+	}
+	if entries != nil {
+		t.Fatalf("expected entries to be nil on partial failure, but got partial list of length %d", len(entries))
 	}
 }
 
@@ -328,5 +376,145 @@ func TestWindowsAdapter_PIDReuse(t *testing.T) {
 	ev2 := <-out
 	if ev2.Action != "PROCESS_START" {
 		t.Errorf("expected PROCESS_START, got %s", ev2.Action)
+	}
+}
+
+func TestStartOSAdapter_Concurrency(t *testing.T) {
+	// Restore defaultOSAPI after test
+	originalAPI := defaultOSAPI
+	defer func() { defaultOSAPI = originalAPI }()
+
+	var concurrent int32
+	var maxConcurrent int32
+	var count int32
+
+	enterCh := make(chan struct{})
+	releaseCh := make(chan struct{})
+
+	mockAPI := &mockWindowsAPI{
+		enumFunc: func() ([]ProcessEntry, error) {
+			current := atomic.AddInt32(&concurrent, 1)
+			defer atomic.AddInt32(&concurrent, -1)
+
+			for {
+				max := atomic.LoadInt32(&maxConcurrent)
+				if current <= max || atomic.CompareAndSwapInt32(&maxConcurrent, max, current) {
+					break
+				}
+			}
+
+			// Block the first enumeration
+			if atomic.AddInt32(&count, 1) == 1 {
+				close(enterCh)
+				<-releaseCh
+			}
+
+			return []ProcessEntry{}, nil
+		},
+	}
+	defaultOSAPI = mockAPI
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := &config.Config{ProcessInterval: "1ms"} // extremely short tick
+	collector := NewCollector(cfg)
+
+	out := make(chan *events.CanonicalEvent, 100)
+	go func() {
+		_ = collector.Start(ctx, out)
+	}()
+
+	// 1. first enumeration enters -> signal test
+	<-enterCh
+
+	// Give a short time for the extremely short (1ms) ticks to pile up
+	time.Sleep(20 * time.Millisecond)
+
+	// 2. verify second enumeration has NOT started
+	if max := atomic.LoadInt32(&maxConcurrent); max > 1 {
+		t.Errorf("expected max concurrent enumerations to be 1, got %d", max)
+	}
+
+	// 3. release first enumeration -> allow loop to proceed
+	close(releaseCh)
+
+	// wait for completion
+	time.Sleep(10 * time.Millisecond)
+}
+func TestStartOSAdapter_EnumerationFailure(t *testing.T) {
+	originalAPI := defaultOSAPI
+	defer func() { defaultOSAPI = originalAPI }()
+
+	var callCount int32
+	mockAPI := &mockWindowsAPI{
+		enumFunc: func() ([]ProcessEntry, error) {
+			count := atomic.AddInt32(&callCount, 1)
+			if count == 1 {
+				// First snapshot: baseline (empty)
+				return []ProcessEntry{}, nil
+			} else if count == 2 {
+				// Second snapshot: success
+				return []ProcessEntry{
+					{PID: 100, Name: "A.exe"},
+					{PID: 101, Name: "B.exe"},
+					{PID: 102, Name: "C.exe"},
+				}, nil
+			} else if count == 3 {
+				// Third snapshot: fails part-way through
+				return nil, errors.New("unexpected error in Process32Next")
+			}
+			// Fourth snapshot: success, state restored
+			return []ProcessEntry{
+				{PID: 100, Name: "A.exe"},
+				{PID: 101, Name: "B.exe"},
+				{PID: 102, Name: "C.exe"},
+			}, nil
+		},
+		startFunc: func(pid uint32) (time.Time, error) {
+			return time.Unix(0, 0), nil
+		},
+	}
+	defaultOSAPI = mockAPI
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := &config.Config{ProcessInterval: "10ms"}
+	collector := NewCollector(cfg)
+
+	out := make(chan *events.CanonicalEvent, 100) // startOSAdapter takes chan<- *events.CanonicalEvent
+	go func() {
+		_ = collector.Start(ctx, out)
+	}()
+
+	// Wait for multiple ticks
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	var evs []*events.CanonicalEvent
+	for len(out) > 0 {
+		evs = append(evs, <-out)
+	}
+
+	// We expect exactly 3 PROCESS_START events from the first successful snapshot
+	// The second failed snapshot should yield NO PROCESS_EXIT events
+	// The third successful snapshot should just reconcile the existing 3 processes and emit nothing
+	starts := 0
+	exits := 0
+	for _, ev := range evs {
+		if ev.Action == "PROCESS_START" {
+			starts++
+		}
+		if ev.Action == "PROCESS_EXIT" {
+			exits++
+		}
+	}
+
+	if starts != 3 {
+		t.Errorf("expected 3 PROCESS_START events, got %d", starts)
+	}
+	if exits != 0 {
+		t.Errorf("expected 0 PROCESS_EXIT events (due to failed enumeration), got %d", exits)
 	}
 }

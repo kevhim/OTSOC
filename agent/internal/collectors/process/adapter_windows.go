@@ -39,6 +39,8 @@ type windowsAdapter struct {
 	userCache map[string]string
 }
 
+var defaultOSAPI osAPI = &realWindowsAPI{}
+
 func (c *ProcessCollector) startOSAdapter(ctx context.Context) {
 	interval := 30 * time.Second
 	if c.cfg != nil && c.cfg.ProcessInterval != "" {
@@ -50,7 +52,7 @@ func (c *ProcessCollector) startOSAdapter(ctx context.Context) {
 	}
 
 	adapter := &windowsAdapter{
-		api: &realWindowsAPI{},
+		api: defaultOSAPI,
 	}
 
 	ticker := time.NewTicker(interval)
@@ -155,11 +157,17 @@ func (a *windowsAdapter) resolveUser(sid string) *string {
 
 // --- Windows API implementation ---
 
+var (
+	sysCreateToolhelp32Snapshot = windows.CreateToolhelp32Snapshot
+	sysProcess32First           = windows.Process32First
+	sysProcess32Next            = windows.Process32Next
+)
+
 type realWindowsAPI struct{}
 
 func (api *realWindowsAPI) EnumerateProcesses() ([]ProcessEntry, error) {
 	// Create snapshot. We want all processes.
-	handle, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	handle, err := sysCreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +177,7 @@ func (api *realWindowsAPI) EnumerateProcesses() ([]ProcessEntry, error) {
 	var pe32 windows.ProcessEntry32
 	pe32.Size = uint32(unsafe.Sizeof(pe32))
 
-	err = windows.Process32First(handle, &pe32)
+	err = sysProcess32First(handle, &pe32)
 	if err != nil {
 		return nil, err
 	}
@@ -182,13 +190,12 @@ func (api *realWindowsAPI) EnumerateProcesses() ([]ProcessEntry, error) {
 			Name: name,
 		})
 
-		err = windows.Process32Next(handle, &pe32)
+		err = sysProcess32Next(handle, &pe32)
 		if err != nil {
 			if err == windows.ERROR_NO_MORE_FILES {
 				break
 			}
-			// Other errors mean we stop iterating but return what we have
-			break
+			return nil, err
 		}
 	}
 
@@ -196,9 +203,6 @@ func (api *realWindowsAPI) EnumerateProcesses() ([]ProcessEntry, error) {
 }
 
 func (api *realWindowsAPI) GetProcessStartTime(pid uint32) (time.Time, error) {
-	if pid == 0 || pid == 4 {
-		return time.Time{}, fmt.Errorf("system processes not fully queryable")
-	}
 
 	// Least privilege access right
 	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
@@ -217,9 +221,6 @@ func (api *realWindowsAPI) GetProcessStartTime(pid uint32) (time.Time, error) {
 }
 
 func (api *realWindowsAPI) GetExecutablePath(pid uint32) (string, error) {
-	if pid == 0 || pid == 4 {
-		return "", fmt.Errorf("system processes not queryable for image name")
-	}
 
 	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
 	if err != nil {
@@ -227,20 +228,22 @@ func (api *realWindowsAPI) GetExecutablePath(pid uint32) (string, error) {
 	}
 	defer windows.CloseHandle(handle)
 
-	var buf [windows.MAX_PATH]uint16
-	size := uint32(len(buf))
-	err = windows.QueryFullProcessImageName(handle, 0, &buf[0], &size)
-	if err != nil {
+	buf := make([]uint16, windows.MAX_PATH)
+	for {
+		size := uint32(len(buf))
+		err = windows.QueryFullProcessImageName(handle, 0, &buf[0], &size)
+		if err == nil {
+			return windows.UTF16ToString(buf[:size]), nil
+		}
+		if err == windows.ERROR_INSUFFICIENT_BUFFER {
+			buf = make([]uint16, len(buf)*2)
+			continue
+		}
 		return "", err
 	}
-
-	return windows.UTF16ToString(buf[:size]), nil
 }
 
 func (api *realWindowsAPI) GetProcessUserSID(pid uint32) (string, error) {
-	if pid == 0 || pid == 4 {
-		return "", fmt.Errorf("system processes not queryable for user")
-	}
 
 	processHandle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
 	if err != nil {

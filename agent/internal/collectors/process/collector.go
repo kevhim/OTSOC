@@ -14,6 +14,7 @@ import (
 type ProcessCollector struct {
 	engine *LifecycleEngine
 	cfg    *config.Config
+	cancel context.CancelFunc
 }
 
 // NewCollector creates a new platform-neutral ProcessCollector.
@@ -46,6 +47,9 @@ func (c *ProcessCollector) HandleEvent(ctx context.Context, inst *Instance, isSt
 func (c *ProcessCollector) Start(ctx context.Context, out chan<- *events.CanonicalEvent) error {
 	c.engine = NewLifecycleEngine(out)
 
+	ctx, cancel := context.WithCancel(ctx)
+	c.cancel = cancel
+
 	// Delegate to OS-specific collection loops.
 	// This will block until ctx is canceled.
 	c.startOSAdapter(ctx)
@@ -53,9 +57,10 @@ func (c *ProcessCollector) Start(ctx context.Context, out chan<- *events.Canonic
 	return nil
 }
 
-// Stop is currently a no-op because the collector's lifecycle is entirely
-// owned and controlled by the context passed to Start().
-// Cancellation of that context will cleanly shut down the collector.
+// Stop halts the process collector by cancelling the internal context.
 func (c *ProcessCollector) Stop() error {
+	if c.cancel != nil {
+		c.cancel()
+	}
 	return nil
 }

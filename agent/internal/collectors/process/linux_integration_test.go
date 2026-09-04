@@ -3,53 +3,110 @@
 package process
 
 import (
-	"os"
+	"context"
+	"os/exec"
 	"testing"
+	"time"
+
+	"redcyberfox/pkg/events"
 )
 
-// TestLinuxAdapter_Integration runs against the real /proc filesystem.
-// It proves the adapter can read the current test process.
-func TestLinuxAdapter_Integration(t *testing.T) {
+func TestLinuxIntegration_Lifecycle(t *testing.T) {
 	adapter, err := newLinuxAdapter("/proc")
 	if err != nil {
 		t.Fatalf("Failed to initialize real /proc adapter: %v", err)
 	}
 
-	snapshot, err := adapter.captureSnapshot()
-	if err != nil {
-		t.Fatalf("Failed to capture snapshot: %v", err)
-	}
-	if len(snapshot.Instances) == 0 {
-		t.Fatal("Expected at least one process instance in real /proc")
-	}
+	out := make(chan *events.CanonicalEvent, 1000)
+	engine := NewLifecycleEngine(out)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	// Find this test process in the snapshot
-	myPid := os.Getpid()
-	var found *Instance
-	for _, inst := range snapshot.Instances {
-		if inst.PID == myPid {
-			found = inst
-			break
+	// 1. Baseline
+	snap, err := adapter.captureSnapshot()
+	if err != nil {
+		t.Fatalf("Failed to capture initial snapshot: %v", err)
+	}
+	engine.Reconcile(ctx, snap)
+
+	// Drain baseline events
+drainLoop1:
+	for {
+		select {
+		case <-out:
+		default:
+			break drainLoop1
 		}
 	}
 
-	if found == nil {
-		t.Fatalf("Could not find test process PID %d in /proc", myPid)
+	// 2. Spawn a short-lived process
+	cmd := exec.Command("sleep", "10")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Failed to start sleep: %v", err)
+	}
+	defer func() {
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+	}()
+
+	pid := cmd.Process.Pid
+
+	// 3. Observe PROCESS_START
+	snap, err = adapter.captureSnapshot()
+	if err != nil {
+		t.Fatalf("Failed to capture snapshot: %v", err)
+	}
+	engine.Reconcile(ctx, snap)
+
+	foundStart := false
+drainLoop2:
+	for {
+		select {
+		case ev := <-out:
+			if ev.Action == "PROCESS_START" {
+				sem := projectToSemantic(ev)
+				if sem.PID == pid {
+					foundStart = true
+				}
+			}
+		default:
+			break drainLoop2
+		}
 	}
 
-	if found.Name == nil || *found.Name == "" {
-		t.Error("Test process Name should not be empty")
+	if !foundStart {
+		t.Fatalf("Did not observe PROCESS_START for spawned PID %d", pid)
 	}
 
-	if found.StartTime.IsZero() {
-		t.Error("Test process StartTime should not be zero")
+	// 4. Terminate process
+	cmd.Process.Kill()
+	cmd.Wait()
+
+	// 5. Observe PROCESS_EXIT
+	snap, err = adapter.captureSnapshot()
+	if err != nil {
+		t.Fatalf("Failed to capture snapshot: %v", err)
+	}
+	engine.Reconcile(ctx, snap)
+
+	foundExit := false
+drainLoop3:
+	for {
+		select {
+		case ev := <-out:
+			if ev.Action == "PROCESS_EXIT" {
+				sem := projectToSemantic(ev)
+				if sem.PID == pid {
+					foundExit = true
+				}
+			}
+		default:
+			break drainLoop3
+		}
 	}
 
-	if found.ParentPID == nil {
-		t.Error("Test process ParentPID should not be nil")
-	}
-
-	if found.CommandLine == nil {
-		t.Error("Test process CommandLine should not be nil")
+	if !foundExit {
+		t.Fatalf("Did not observe PROCESS_EXIT for killed PID %d", pid)
 	}
 }

@@ -10,7 +10,7 @@
 - **Phase 2C.1 (Process Lifecycle Engine)**: COMPLETE
 - **Phase 2C.2 (Linux Process Collector)**: COMPLETE
 - **Phase 2C.3 (Windows Collector)**: COMPLETE (Windows snapshot/reconciliation)
-- **Phase 2C.4**: NOT STARTED
+- **Phase 2C.4**: COMPLETE (Cross-Platform Validation)
 - **Phase 2C.5**: NOT STARTED
 - **Phase 2C (Overall)**: NOT COMPLETE
 
@@ -28,7 +28,7 @@
 - **Windows Process Collector**: No ETW (real-time event-driven) implementation yet; strictly snapshot/reconciliation based.
 
 ## Next Approved Task
-- Proceed to Phase 2C (if and only if explicitly instructed).
+- Phase 2C.5 — Runtime Wiring and Central Storage
 
 ## Forbidden Components (DO NOT implement until 2C or later)
 - Process collectors
