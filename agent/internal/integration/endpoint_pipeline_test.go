@@ -73,7 +73,7 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 			storeCancel()
 
 			fwd.Wakeup()
-			
+
 			// For testing, we signal that at least one event was ingested
 			select {
 			case <-ingestComplete:
@@ -89,13 +89,13 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 	readyCtx, readyCancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	err := procCol.WaitReady(readyCtx)
 	readyCancel()
-	
+
 	if err != nil {
 		// Fallback for unsupported platforms where startOSAdapter is a no-op
 		procCol.Reconcile(ctx, &process.Snapshot{})
 	}
 
-	// Simulate a process lifecycle event. 
+	// Simulate a process lifecycle event.
 	now := time.Now()
 	inst := &process.Instance{
 		PID:       1234,
@@ -103,7 +103,7 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 	}
 	name := "test_proc.exe"
 	inst.Name = &name
-	
+
 	procCol.HandleEvent(ctx, inst, true)
 
 	// Wait for ingestion
@@ -155,12 +155,12 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 
 	// Shutdown Sequence verification
 	cancel() // Cancel global context
-	
-	procCol.Stop()        // 1. Stop collector
-	close(processEvents)  // 2. Close channel, draining loop
-	ingestWg.Wait()       // 3. Wait for loop to exit
-	fwd.Stop()            // 4. Stop forwarder
-	db.Close()            // 5. Close DB
-	
+
+	procCol.Stop()       // 1. Stop collector
+	close(processEvents) // 2. Close channel, draining loop
+	ingestWg.Wait()      // 3. Wait for loop to exit
+	fwd.Stop()           // 4. Stop forwarder
+	db.Close()           // 5. Close DB
+
 	// If we get here without a deadlock or panic, the explicit shutdown sequence works perfectly.
 }
