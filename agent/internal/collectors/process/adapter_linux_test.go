@@ -157,13 +157,19 @@ func TestLinuxAdapter_CaptureSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to capture snapshot: %v", err)
 	}
-	if len(snapshot.Instances) != 1 {
-		t.Fatalf("Expected 1 instance, got %d", len(snapshot.Instances))
+	if len(snapshot.Instances) != 2 {
+		t.Fatalf("Expected 2 instances (1 valid, 1 unobservable), got %d", len(snapshot.Instances))
 	}
 
-	inst := snapshot.Instances[0]
-	if inst.PID != 100 {
-		t.Errorf("Expected PID 100, got %d", inst.PID)
+	var inst *Instance
+	for _, i := range snapshot.Instances {
+		if i.PID == 100 {
+			inst = i
+			break
+		}
+	}
+	if inst == nil {
+		t.Fatalf("Expected PID 100 to be present")
 	}
 	if inst.Name == nil || *inst.Name != "valid_proc" {
 		t.Errorf("Expected Name 'valid_proc'")
