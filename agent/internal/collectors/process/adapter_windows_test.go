@@ -193,11 +193,17 @@ func TestWindowsAdapter_captureSnapshot_DisappearingProcess(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(snap.Instances) != 1 {
-		t.Fatalf("expected 1 instance, got %d", len(snap.Instances))
+	if len(snap.Instances) != 2 {
+		t.Fatalf("expected 2 instances, got %d", len(snap.Instances))
 	}
 	if snap.Instances[0].PID != 100 {
 		t.Errorf("expected PID 100 to survive")
+	}
+	if snap.Instances[1].PID != 101 {
+		t.Errorf("expected PID 101 to be appended as unobservable")
+	}
+	if !snap.Instances[1].StartTime.IsZero() {
+		t.Errorf("expected PID 101 to have zero StartTime")
 	}
 }
 

@@ -112,6 +112,8 @@ func (a *linuxAdapter) captureSnapshot() (*Snapshot, error) {
 		inst := a.parseProcess(pid)
 		if inst != nil {
 			instances = append(instances, inst)
+		} else {
+			instances = append(instances, &Instance{PID: pid})
 		}
 	}
 
@@ -219,7 +221,7 @@ func (a *linuxAdapter) parseStat(pid int, statStr string) (*Instance, bool) {
 	// Calculate StartTime using bootTime and userHz
 	// startTime = bootTime + (startTimeTicks / userHz)
 	sec := a.bootTime + (startTimeTicks / a.userHz)
-	nsec := (startTimeTicks % a.userHz) * (1e9 / a.userHz)
+	nsec := ((startTimeTicks % a.userHz) * 1_000_000_000) / a.userHz
 
 	start := time.Unix(sec, nsec)
 

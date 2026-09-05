@@ -278,3 +278,57 @@ func TestLinuxAdapter_ScanFailurePreservesState(t *testing.T) {
 		t.Fatal("Expected EXIT event on out channel when empty snapshot is reconciled")
 	}
 }
+
+func TestLinuxAdapter_StatFailureYieldsUnobservable(t *testing.T) {
+	tempDir := t.TempDir()
+	os.WriteFile(filepath.Join(tempDir, "stat"), []byte("btime 1000\n"), 0644)
+	writeMockAuxv(t, tempDir, 100)
+
+	// Create a pid dir but DO NOT create a stat file
+	// This simulates the process vanishing just before we read stat
+	pidDir := filepath.Join(tempDir, "500")
+	os.Mkdir(pidDir, 0755)
+
+	adapter, _ := newLinuxAdapter(tempDir)
+	snapshot, err := adapter.captureSnapshot()
+	if err != nil {
+		t.Fatalf("Failed to capture snapshot: %v", err)
+	}
+
+	if len(snapshot.Instances) != 1 {
+		t.Fatalf("Expected 1 instance (unobservable), got %d", len(snapshot.Instances))
+	}
+	inst := snapshot.Instances[0]
+	if inst.PID != 500 {
+		t.Errorf("Expected PID 500, got %d", inst.PID)
+	}
+	if !inst.StartTime.IsZero() {
+		t.Errorf("Expected unobservable instance to have zero StartTime")
+	}
+}
+
+func TestLinuxAdapter_PrecisionFix(t *testing.T) {
+	// 300 USER_HZ does not evenly divide 1e9
+	adapter := &linuxAdapter{
+		bootTime: 1000,
+		userHz:   300,
+	}
+
+	// Ticks = 500
+	// Sec = 500 / 300 = 1
+	// Remainder = 200
+	// Nano = (200 * 1e9) / 300 = 666666666
+	// Total = 1001 sec, 666666666 nsec
+	statStr := "123 (test) S 1 123 123 0 -1 4194560 108 0 0 0 14 4 0 0 20 0 1 0 500 0 0 0 0"
+
+	inst, ok := adapter.parseStat(123, statStr)
+	if !ok {
+		t.Fatal("Expected parseStat to succeed")
+	}
+
+	expectedTime := time.Unix(1001, 666666666)
+	if !inst.StartTime.Equal(expectedTime) {
+		t.Errorf("Expected StartTime %v, got %v", expectedTime, inst.StartTime)
+	}
+}
+

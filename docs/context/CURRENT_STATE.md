@@ -10,8 +10,9 @@
 - **Phase 2C.1 (Process Lifecycle Engine)**: COMPLETE
 - **Phase 2C.2 (Linux Process Collector)**: COMPLETE
 - **Phase 2C.3 (Windows Collector)**: COMPLETE (Windows snapshot/reconciliation)
-- **Phase 2C.4**: COMPLETE (Cross-Platform Validation)
-- **Phase 2C.5**: NOT STARTED
+- **Phase 2C.4**: COMPLETE / CLOSED (Cross-Platform Validation - Fixed non-determinism, temporary unobservability identity loss, and Linux nanosecond precision defects. Validation gates passed on both Windows and Linux).
+- **Phase 2C.5-A (Endpoint Runtime Wiring & Lifecycle Synchronization)**: COMPLETE (Synchronized shutdown sequence and pipeline draining to prevent race conditions).
+- **Phase 2C.5-B/C (Integration tests & Next steps)**: NOT STARTED
 - **Phase 2C (Overall)**: NOT COMPLETE
 
 ## Completed Phase 2B Features
@@ -28,7 +29,7 @@
 - **Windows Process Collector**: No ETW (real-time event-driven) implementation yet; strictly snapshot/reconciliation based.
 
 ## Next Approved Task
-- Phase 2C.5 — Runtime Wiring and Central Storage
+- Phase 2C.5-C — Endpoint-to-Server Pipeline Forwarding (or Server-side ingest and schema validation as delegated)
 
 ## Forbidden Components (DO NOT implement until 2C or later)
 - Process collectors

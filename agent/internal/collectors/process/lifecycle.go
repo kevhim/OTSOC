@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -22,6 +23,7 @@ type LifecycleEngine struct {
 	mu          sync.Mutex
 	state       map[string]*Instance
 	initialized bool
+	ready       chan struct{}
 	out         chan<- *events.CanonicalEvent
 }
 
@@ -30,6 +32,7 @@ func NewLifecycleEngine(out chan<- *events.CanonicalEvent) *LifecycleEngine {
 	return &LifecycleEngine{
 		state:       make(map[string]*Instance),
 		initialized: false,
+		ready:       make(chan struct{}),
 		out:         out,
 	}
 }
@@ -41,12 +44,14 @@ func (le *LifecycleEngine) Reconcile(ctx context.Context, snapshot *Snapshot) {
 	le.mu.Lock()
 
 	observed := make(map[string]bool)
+	unobservablePIDs := make(map[int]bool)
 	var exits []*Instance
 	var starts []*Instance
 
 	for _, inst := range snapshot.Instances {
 		// StartTime is strictly required for strong instance identity.
 		if inst.StartTime.IsZero() {
+			unobservablePIDs[inst.PID] = true
 			continue
 		}
 
@@ -66,21 +71,48 @@ func (le *LifecycleEngine) Reconcile(ctx context.Context, snapshot *Snapshot) {
 	if le.initialized {
 		for key, inst := range le.state {
 			if !observed[key] {
+				if unobservablePIDs[inst.PID] {
+					continue
+				}
 				exits = append(exits, inst)
 				delete(le.state, key)
 			}
 		}
 	} else {
 		le.initialized = true
+		close(le.ready)
 	}
 	le.mu.Unlock()
 
 	// Deterministic ordering: emit exits first, then starts outside of the lock
+	sort.Slice(exits, func(i, j int) bool {
+		if exits[i].PID != exits[j].PID {
+			return exits[i].PID < exits[j].PID
+		}
+		return exits[i].StartTime.Before(exits[j].StartTime)
+	})
+	sort.Slice(starts, func(i, j int) bool {
+		if starts[i].PID != starts[j].PID {
+			return starts[i].PID < starts[j].PID
+		}
+		return starts[i].StartTime.Before(starts[j].StartTime)
+	})
+
 	for _, inst := range exits {
 		le.emit(ctx, inst, ActionProcessExit)
 	}
 	for _, inst := range starts {
 		le.emit(ctx, inst, ActionProcessStart)
+	}
+}
+
+// WaitReady blocks until the engine has established its initial baseline.
+func (le *LifecycleEngine) WaitReady(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-le.ready:
+		return nil
 	}
 }
 

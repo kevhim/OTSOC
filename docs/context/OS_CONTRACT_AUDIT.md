@@ -12,7 +12,7 @@ A process is uniquely identified by the combination of its `PID` and `StartTime`
 
 ## 2. Mandatory vs Optional Metadata
 
-- **Mandatory Fields**: `PID` and `StartTime`. If an OS adapter cannot determine these fields for a process, that process **MUST** be skipped (omitted from the `Snapshot`).
+- **Mandatory Fields**: `PID` and `StartTime`. If an OS adapter cannot determine the `StartTime` for a known process (e.g. transient failure), the process must be included in the `Snapshot` as an *unobservable* instance (empty `StartTime`), rather than omitted, to prevent false `PROCESS_EXIT` events.
 - **Optional Fields**: `Name`, `ParentPID`, `User`, `ExecutablePath`, `CommandLine`.
 - **Metadata Asymmetry**: It is explicitly expected and permitted for different operating systems (or different privilege levels on the same OS) to yield different optional metadata. 
   - E.g., Linux may provide `CommandLine` via `/proc/pid/cmdline`, while Windows may yield `nil` due to ETW/PEB constraints.
@@ -28,7 +28,7 @@ The OS adapter acts as an observer that captures a point-in-time `Snapshot` of r
 | :--- | :--- | :--- |
 | **Success** | Return `Snapshot` containing all observed processes. | Diffs against prior state, emits `START`/`EXIT`. |
 | **Empty Success** (no processes found) | Return `Snapshot` with 0 instances. | Assumes all previously known processes exited. Emits `EXIT` for all. |
-| **Single Process Identity Failure** (cannot read PID/StartTime) | Skip process, exclude from `Snapshot`. | If previously known, engine treats it as exited (`EXIT`). If unknown, remains ignored. |
+| **Single Process Identity Failure** (cannot read StartTime) | Include process in `Snapshot` with zero-value `StartTime`. | Treated as temporary/insufficient observation. Prior state is preserved, no `EXIT` emitted. |
 | **Single Process Metadata Failure** (Access Denied for Exe/User) | Include process in `Snapshot` with missing fields as `nil`. | Emits `START` (if new) with reduced metadata. Existing state preserved. |
 | **Complete Snapshot Failure** (e.g. `/proc` unreadable, Toolhelp fails midway) | Return `error`. **DO NOT** return a partial list. | Engine skips reconciliation. **Zero** `EXIT` events are emitted. Prior state is frozen until recovery. |
 

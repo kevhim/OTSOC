@@ -275,3 +275,94 @@ func TestLifecycleEngine_Concurrency(t *testing.T) {
 		t.Fatalf("expected exactly 50 PROCESS_EXIT events, got %d", len(evs))
 	}
 }
+
+func TestLifecycleEngine_TemporaryUnobservability(t *testing.T) {
+	out := make(chan *events.CanonicalEvent, 10)
+	engine := NewLifecycleEngine(out)
+	engine.Reconcile(context.Background(), &Snapshot{})
+
+	now := time.Now()
+	// Snapshot 1: observed normally
+	inst1 := &Instance{PID: 500, StartTime: now, Name: strPtr("app.exe")}
+	engine.Reconcile(context.Background(), &Snapshot{Instances: []*Instance{inst1}})
+	
+	evs := drainEvents(out)
+	if len(evs) != 1 || evs[0].Action != ActionProcessStart {
+		t.Fatalf("expected 1 PROCESS_START")
+	}
+
+	// Snapshot 2: unobservable (empty StartTime)
+	inst2 := &Instance{PID: 500}
+	engine.Reconcile(context.Background(), &Snapshot{Instances: []*Instance{inst2}})
+	
+	evs = drainEvents(out)
+	if len(evs) != 0 {
+		t.Fatalf("expected NO events during temporary unobservability, got %d", len(evs))
+	}
+
+	// Snapshot 3: fully recovered
+	engine.Reconcile(context.Background(), &Snapshot{Instances: []*Instance{inst1}})
+	evs = drainEvents(out)
+	if len(evs) != 0 {
+		t.Fatalf("expected NO duplicate events upon recovery, got %d", len(evs))
+	}
+
+	// Snapshot 4: confirmed absence
+	engine.Reconcile(context.Background(), &Snapshot{Instances: []*Instance{}})
+	evs = drainEvents(out)
+	if len(evs) != 1 || evs[0].Action != ActionProcessExit {
+		t.Fatalf("expected exactly 1 PROCESS_EXIT on confirmed absence")
+	}
+}
+
+func TestLifecycleEngine_DeterministicOrdering(t *testing.T) {
+	out := make(chan *events.CanonicalEvent, 100)
+	now := time.Now()
+
+	// Create a mixed snapshot of 10 processes
+	var initial []*Instance
+	for i := 0; i < 10; i++ {
+		initial = append(initial, &Instance{PID: 1000 + i, StartTime: now.Add(time.Duration(i) * time.Second)})
+	}
+
+	// Create a second snapshot where evens exit, odds stay, and some new processes start
+	var second []*Instance
+	for i := 1; i < 10; i += 2 {
+		second = append(second, initial[i]) // odds stay
+	}
+	for i := 0; i < 5; i++ {
+		second = append(second, &Instance{PID: 2000 + i, StartTime: now.Add(time.Duration(i) * time.Second)})
+	}
+
+	// Run multiple times and ensure the sequence of emitted actions/PIDs is EXACTLY identical
+	var firstRunSeq []string
+
+	for run := 0; run < 10; run++ {
+		engine := NewLifecycleEngine(out)
+		engine.Reconcile(context.Background(), &Snapshot{}) // baseline
+		engine.Reconcile(context.Background(), &Snapshot{Instances: append([]*Instance{}, initial...)}) // start all
+		drainEvents(out) // ignore the initial starts
+
+		// Now trigger exits and starts simultaneously
+		engine.Reconcile(context.Background(), &Snapshot{Instances: append([]*Instance{}, second...)})
+
+		evs := drainEvents(out)
+		var currentRunSeq []string
+		for _, ev := range evs {
+			currentRunSeq = append(currentRunSeq, ev.Action+":"+string(rune(ev.Metadata["pid"].(int))))
+		}
+
+		if run == 0 {
+			firstRunSeq = currentRunSeq
+		} else {
+			if len(firstRunSeq) != len(currentRunSeq) {
+				t.Fatalf("Run %d: expected %d events, got %d", run, len(firstRunSeq), len(currentRunSeq))
+			}
+			for i := range firstRunSeq {
+				if firstRunSeq[i] != currentRunSeq[i] {
+					t.Fatalf("Run %d: event ordering mismatch at index %d. Expected %s, got %s", run, i, firstRunSeq[i], currentRunSeq[i])
+				}
+			}
+		}
+	}
+}

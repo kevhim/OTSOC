@@ -95,7 +95,8 @@ func (a *windowsAdapter) captureSnapshot() (*Snapshot, error) {
 		// Mandatory StartTime
 		startTime, err := a.api.GetProcessStartTime(entry.PID)
 		if err != nil {
-			// Process may have exited, or access denied. Skip.
+			// Process may have exited, or access denied. Record as unobservable.
+			instances = append(instances, &Instance{PID: int(entry.PID)})
 			continue
 		}
 

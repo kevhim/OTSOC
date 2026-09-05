@@ -2,6 +2,8 @@ package process
 
 import (
 	"context"
+	"fmt"
+	"sync"
 
 	"redcyberfox/agent/internal/config"
 	"redcyberfox/pkg/events"
@@ -15,6 +17,11 @@ type ProcessCollector struct {
 	engine *LifecycleEngine
 	cfg    *config.Config
 	cancel context.CancelFunc
+
+	mu      sync.Mutex
+	wg      sync.WaitGroup
+	started bool
+	stopped bool
 }
 
 // NewCollector creates a new platform-neutral ProcessCollector.
@@ -40,27 +47,60 @@ func (c *ProcessCollector) HandleEvent(ctx context.Context, inst *Instance, isSt
 	}
 }
 
-// Start begins process telemetry collection. It wires the collector to the out channel
-// and blocks until the context is canceled.
+// Start begins process telemetry collection. It wires the collector to the out channel.
+// It returns immediately, but the OS collection runs in a background goroutine.
 // NOTE: CanonicalEvents emitted to the out channel are not durable until they are
 // transactionally committed by Storage.Store() later in the pipeline.
 func (c *ProcessCollector) Start(ctx context.Context, out chan<- *events.CanonicalEvent) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.stopped {
+		return fmt.Errorf("collector cannot be restarted")
+	}
+	if c.started {
+		return fmt.Errorf("collector already started")
+	}
+	c.started = true
+
 	c.engine = NewLifecycleEngine(out)
 
-	ctx, cancel := context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	// Delegate to OS-specific collection loops.
-	// This will block until ctx is canceled.
-	c.startOSAdapter(ctx)
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		// Delegate to OS-specific collection loops.
+		c.startOSAdapter(runCtx)
+	}()
 
 	return nil
 }
 
-// Stop halts the process collector by cancelling the internal context.
+// WaitReady blocks until the underlying collector has established its baseline.
+func (c *ProcessCollector) WaitReady(ctx context.Context) error {
+	c.mu.Lock()
+	engine := c.engine
+	c.mu.Unlock()
+
+	if engine != nil {
+		return engine.WaitReady(ctx)
+	}
+	return nil
+}
+
+// Stop halts the process collector by cancelling the internal context
+// and waits for the OS collection loop to terminate.
 func (c *ProcessCollector) Stop() error {
+	c.mu.Lock()
 	if c.cancel != nil {
 		c.cancel()
+		c.cancel = nil
 	}
+	c.stopped = true
+	c.mu.Unlock()
+
+	c.wg.Wait()
 	return nil
 }
