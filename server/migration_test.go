@@ -15,7 +15,7 @@ import (
 func TestMigrations(t *testing.T) {
 	pgURL := os.Getenv("DATABASE_URL")
 	if pgURL == "" {
-		t.Fatalf("DATABASE_URL not set, migration test requires a real database")
+		t.Skipf("DATABASE_URL not set, migration test requires a real database")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
