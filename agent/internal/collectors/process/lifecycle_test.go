@@ -285,7 +285,7 @@ func TestLifecycleEngine_TemporaryUnobservability(t *testing.T) {
 	// Snapshot 1: observed normally
 	inst1 := &Instance{PID: 500, StartTime: now, Name: strPtr("app.exe")}
 	engine.Reconcile(context.Background(), &Snapshot{Instances: []*Instance{inst1}})
-	
+
 	evs := drainEvents(out)
 	if len(evs) != 1 || evs[0].Action != ActionProcessStart {
 		t.Fatalf("expected 1 PROCESS_START")
@@ -294,7 +294,7 @@ func TestLifecycleEngine_TemporaryUnobservability(t *testing.T) {
 	// Snapshot 2: unobservable (empty StartTime)
 	inst2 := &Instance{PID: 500}
 	engine.Reconcile(context.Background(), &Snapshot{Instances: []*Instance{inst2}})
-	
+
 	evs = drainEvents(out)
 	if len(evs) != 0 {
 		t.Fatalf("expected NO events during temporary unobservability, got %d", len(evs))
@@ -339,9 +339,9 @@ func TestLifecycleEngine_DeterministicOrdering(t *testing.T) {
 
 	for run := 0; run < 10; run++ {
 		engine := NewLifecycleEngine(out)
-		engine.Reconcile(context.Background(), &Snapshot{}) // baseline
+		engine.Reconcile(context.Background(), &Snapshot{})                                             // baseline
 		engine.Reconcile(context.Background(), &Snapshot{Instances: append([]*Instance{}, initial...)}) // start all
-		drainEvents(out) // ignore the initial starts
+		drainEvents(out)                                                                                // ignore the initial starts
 
 		// Now trigger exits and starts simultaneously
 		engine.Reconcile(context.Background(), &Snapshot{Instances: append([]*Instance{}, second...)})

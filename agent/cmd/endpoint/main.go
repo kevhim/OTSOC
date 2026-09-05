@@ -124,22 +124,22 @@ func main() {
 	// Wait for shutdown
 	<-ctx.Done()
 	log.Println("Endpoint Agent shutdown sequence initiated.")
-	
+
 	// Shutdown Sequence
 	// 1. Stop Process Collector (stops OS collection, waits for collector to exit)
 	procCol.Stop()
-	
+
 	// 2. Close processEvents channel to drain the ingestion loop
 	close(processEvents)
-	
+
 	// 3. Wait for ingestion loop to finish draining and exit
 	ingestWg.Wait()
-	
+
 	// 4. Stop Forwarder (waits for forwarding loop to exit)
 	fwd.Stop()
-	
+
 	// 5. Close Storage
 	db.Close()
-	
+
 	log.Println("Endpoint Agent shutdown cleanly.")
 }

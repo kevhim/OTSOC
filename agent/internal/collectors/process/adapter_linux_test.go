@@ -331,4 +331,3 @@ func TestLinuxAdapter_PrecisionFix(t *testing.T) {
 		t.Errorf("Expected StartTime %v, got %v", expectedTime, inst.StartTime)
 	}
 }
-
