@@ -31,12 +31,14 @@ func TestIngestHandler(t *testing.T) {
 
 	tests := []struct {
 		name            string
+		queryTenant     string
 		payload         interface{}
 		expectedStatus  int
 		shouldFailQueue bool
 	}{
 		{
-			name: "valid event",
+			name:        "valid event",
+			queryTenant: "t1",
 			payload: events.CanonicalEvent{
 				EventID:       "123e4567-e89b-12d3-a456-426614174000",
 				TenantID:      "t1",
@@ -50,15 +52,18 @@ func TestIngestHandler(t *testing.T) {
 			expectedStatus: http.StatusAccepted,
 		},
 		{
-			name: "missing required fields",
+			name:        "missing required fields",
+			queryTenant: "t1",
 			payload: events.CanonicalEvent{
 				EventID: "123",
-				// Missing TenantID, SiteID, OccurredAt, SchemaVersion
+				TenantID: "t1",
+				// Missing SiteID, OccurredAt, SchemaVersion
 			},
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
-			name: "invalid uuid",
+			name:        "invalid uuid",
+			queryTenant: "t1",
 			payload: events.CanonicalEvent{
 				EventID:       "123",
 				TenantID:      "t1",
@@ -72,7 +77,8 @@ func TestIngestHandler(t *testing.T) {
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
-			name: "queue failure",
+			name:        "queue failure",
+			queryTenant: "t1",
 			payload: events.CanonicalEvent{
 				EventID:       "123e4567-e89b-12d3-a456-426614174000",
 				TenantID:      "t1",
@@ -86,6 +92,36 @@ func TestIngestHandler(t *testing.T) {
 			expectedStatus:  http.StatusInternalServerError,
 			shouldFailQueue: true,
 		},
+		{
+			name:        "missing tenant_id query",
+			queryTenant: "",
+			payload: events.CanonicalEvent{
+				EventID:       "123e4567-e89b-12d3-a456-426614174000",
+				TenantID:      "t1",
+				SiteID:        "s1",
+				Source:        "sensor-1",
+				Category:      "network",
+				OccurredAt:    time.Now(),
+				SchemaVersion: "1.0.0",
+				Severity:      "INFO",
+			},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:        "tenant_id mismatch",
+			queryTenant: "t2",
+			payload: events.CanonicalEvent{
+				EventID:       "123e4567-e89b-12d3-a456-426614174000",
+				TenantID:      "t1",
+				SiteID:        "s1",
+				Source:        "sensor-1",
+				Category:      "network",
+				OccurredAt:    time.Now(),
+				SchemaVersion: "1.0.0",
+				Severity:      "INFO",
+			},
+			expectedStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tt := range tests {
@@ -96,6 +132,11 @@ func TestIngestHandler(t *testing.T) {
 			json.NewEncoder(&body).Encode(tt.payload)
 
 			req := httptest.NewRequest(http.MethodPost, "/v1/ingest", &body)
+			if tt.queryTenant != "" {
+				q := req.URL.Query()
+				q.Add("tenant_id", tt.queryTenant)
+				req.URL.RawQuery = q.Encode()
+			}
 			w := httptest.NewRecorder()
 
 			handler.ServeHTTP(w, req)

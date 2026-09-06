@@ -29,9 +29,20 @@ func (h *IngestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tenantID := r.URL.Query().Get("tenant_id")
+	if tenantID == "" {
+		http.Error(w, "Bad Request: Missing tenant_id", http.StatusBadRequest)
+		return
+	}
+
 	var ev events.CanonicalEvent
 	if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
 		http.Error(w, "Bad Request: Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+
+	if ev.TenantID != tenantID {
+		http.Error(w, "Bad Request: tenant_id mismatch", http.StatusBadRequest)
 		return
 	}
 

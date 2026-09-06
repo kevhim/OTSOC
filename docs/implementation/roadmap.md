@@ -16,7 +16,8 @@ This roadmap tracks the incremental delivery of the RedCyberFox OT SOC platform.
 
 2A — Agent Foundation: COMPLETE
 2B — SQLite + Offline Sync: COMPLETE
-2C — Process Telemetry: READY
+2C — Process Telemetry: COMPLETE
+2D — Filesystem Telemetry: OPEN
 
 ## Future Phases
 - **Phase 3:** Detection Core

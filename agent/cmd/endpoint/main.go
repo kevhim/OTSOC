@@ -10,7 +10,11 @@ import (
 	"syscall"
 	"time"
 
+	"redcyberfox/agent/internal/collectors/filesystem"
+	"redcyberfox/agent/internal/collectors/inventory"
+	"redcyberfox/agent/internal/collectors/network"
 	"redcyberfox/agent/internal/collectors/process"
+	"redcyberfox/agent/internal/collectors/usb"
 	"redcyberfox/agent/internal/config"
 	"redcyberfox/agent/internal/forwarder"
 	"redcyberfox/agent/internal/health"
@@ -65,11 +69,36 @@ func main() {
 	}
 
 	// 6. Collector Initialization
-	processEvents := make(chan *events.CanonicalEvent, 100)
+	centralEvents := make(chan *events.CanonicalEvent, 200)
+
 	procCol := process.NewCollector(cfg)
 	log.Println("Starting Process Collector...")
-	if err := procCol.Start(ctx, processEvents); err != nil {
+	if err := procCol.Start(ctx, centralEvents); err != nil {
 		log.Fatalf("Process collector failed to start: %v", err)
+	}
+
+	fsCol := filesystem.NewCollector(cfg)
+	log.Println("Starting Filesystem Collector...")
+	if err := fsCol.Start(ctx, centralEvents); err != nil {
+		log.Fatalf("Filesystem collector failed to start: %v", err)
+	}
+
+	invCol := inventory.NewCollector(cfg)
+	log.Println("Starting Inventory Collector...")
+	if err := invCol.Start(ctx, centralEvents); err != nil {
+		log.Fatalf("Inventory collector failed to start: %v", err)
+	}
+
+	netCol := network.NewCollector(cfg)
+	log.Println("Starting Network Collector...")
+	if err := netCol.Start(ctx, centralEvents); err != nil {
+		log.Fatalf("Network collector failed to start: %v", err)
+	}
+
+	usbCol := usb.NewCollector(cfg)
+	log.Println("Starting USB Collector...")
+	if err := usbCol.Start(ctx, centralEvents); err != nil {
+		log.Fatalf("USB collector failed to start: %v", err)
 	}
 
 	// 7. Health Manager (from previous phase)
@@ -90,9 +119,9 @@ func main() {
 			select {
 			case sig := <-healthCh:
 				log.Printf("Internal pipeline received health signal: Type=%s", sig.Type)
-			case ev, ok := <-processEvents:
+			case ev, ok := <-centralEvents:
 				if !ok {
-					// ProcessEvents channel closed, drain complete, exit loop
+					// centralEvents channel closed, drain complete, exit loop
 					return
 				}
 				// Enrichment Boundary
@@ -126,11 +155,15 @@ func main() {
 	log.Println("Endpoint Agent shutdown sequence initiated.")
 
 	// Shutdown Sequence
-	// 1. Stop Process Collector (stops OS collection, waits for collector to exit)
+	// 1. Stop Collectors (stops OS collection, waits for collector to exit)
 	procCol.Stop()
+	fsCol.Stop()
+	invCol.Stop()
+	netCol.Stop()
+	usbCol.Stop()
 
-	// 2. Close processEvents channel to drain the ingestion loop
-	close(processEvents)
+	// 2. Close centralEvents channel to drain the ingestion loop
+	close(centralEvents)
 
 	// 3. Wait for ingestion loop to finish draining and exit
 	ingestWg.Wait()
