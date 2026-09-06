@@ -6,8 +6,6 @@ package usb
 import (
 	"context"
 	"fmt"
-	"regexp"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -249,26 +247,4 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam uintptr, lParam unsafe.Poin
 
 	ret, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(msg), wParam, uintptr(lParam))
 	return ret
-}
-
-var vidPidRegex = regexp.MustCompile(`(?i)VID_([0-9A-F]{4})&PID_([0-9A-F]{4})`)
-
-func parseDevicePath(path string) (vid, pid, serial string) {
-	// Example path: \\?\USB#VID_1234&PID_5678#SERIALNUMBER#{guid}
-
-	matches := vidPidRegex.FindStringSubmatch(path)
-	if len(matches) == 3 {
-		vid = strings.ToLower(matches[1])
-		pid = strings.ToLower(matches[2])
-	}
-
-	parts := strings.Split(path, "#")
-	if len(parts) >= 4 {
-		// Usually parts[2] is the serial or an instance ID
-		if parts[2] != "" && !strings.Contains(parts[2], "&") {
-			// standard serials typically don't have &
-			serial = parts[2]
-		}
-	}
-	return
 }
