@@ -10,7 +10,8 @@ type Config struct {
 	APIAddr         string `json:"api_addr"`
 	TenantID        string `json:"tenant_id"`
 	SiteID          string `json:"site_id"`
-	ProcessInterval string `json:"process_interval,omitempty"`
+	ProcessInterval string   `json:"process_interval,omitempty"`
+	MonitorPaths    []string `json:"monitor_paths,omitempty"`
 }
 
 func Load(path string) (*Config, error) {
