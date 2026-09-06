@@ -11,7 +11,10 @@ import (
 	"time"
 
 	"redcyberfox/agent/internal/collectors/filesystem"
+	"redcyberfox/agent/internal/collectors/inventory"
+	"redcyberfox/agent/internal/collectors/network"
 	"redcyberfox/agent/internal/collectors/process"
+	"redcyberfox/agent/internal/collectors/usb"
 	"redcyberfox/agent/internal/config"
 	"redcyberfox/agent/internal/forwarder"
 	"redcyberfox/agent/internal/health"
@@ -80,6 +83,24 @@ func main() {
 		log.Fatalf("Filesystem collector failed to start: %v", err)
 	}
 
+	invCol := inventory.NewCollector(cfg)
+	log.Println("Starting Inventory Collector...")
+	if err := invCol.Start(ctx, centralEvents); err != nil {
+		log.Fatalf("Inventory collector failed to start: %v", err)
+	}
+
+	netCol := network.NewCollector(cfg)
+	log.Println("Starting Network Collector...")
+	if err := netCol.Start(ctx, centralEvents); err != nil {
+		log.Fatalf("Network collector failed to start: %v", err)
+	}
+
+	usbCol := usb.NewCollector(cfg)
+	log.Println("Starting USB Collector...")
+	if err := usbCol.Start(ctx, centralEvents); err != nil {
+		log.Fatalf("USB collector failed to start: %v", err)
+	}
+
 	// 7. Health Manager (from previous phase)
 	healthCh := make(chan *health.Signal, 100)
 	healthMgr := health.NewManager(id.DeviceID, cfg.TenantID, cfg.SiteID, healthCh)
@@ -137,6 +158,9 @@ func main() {
 	// 1. Stop Collectors (stops OS collection, waits for collector to exit)
 	procCol.Stop()
 	fsCol.Stop()
+	invCol.Stop()
+	netCol.Stop()
+	usbCol.Stop()
 
 	// 2. Close centralEvents channel to drain the ingestion loop
 	close(centralEvents)
