@@ -199,14 +199,14 @@ func defaultStartOSWatcher(ctx context.Context, out chan<- USBEvent) error {
 	return nil
 }
 
-func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
+func wndProc(hwnd syscall.Handle, msg uint32, wParam uintptr, lParam unsafe.Pointer) uintptr {
 	switch msg {
 	case WM_DEVICECHANGE:
 		if wParam == DBT_DEVICEARRIVAL || wParam == DBT_DEVICEREMOVECOMPLETE {
-			if lParam != 0 {
-				hdr := (*DEV_BROADCAST_HDR)(unsafe.Pointer(lParam))
+			if lParam != nil {
+				hdr := (*DEV_BROADCAST_HDR)(lParam)
 				if hdr.dbch_devicetype == DBT_DEVTYP_DEVICEINTERFACE {
-					devInterface := (*DEV_BROADCAST_DEVICEINTERFACE)(unsafe.Pointer(lParam))
+					devInterface := (*DEV_BROADCAST_DEVICEINTERFACE)(lParam)
 
 					nameSlice := (*[1024]uint16)(unsafe.Pointer(&devInterface.dbcc_name[0]))[:]
 
@@ -247,7 +247,7 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		return 0
 	}
 
-	ret, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(msg), wParam, lParam)
+	ret, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(msg), wParam, uintptr(lParam))
 	return ret
 }
 
