@@ -10,13 +10,13 @@ func TestParseTcpTable_IPv4(t *testing.T) {
 	// DWORD dwNumEntries = 1
 	// MIB_TCPROW_OWNER_PID (24 bytes)
 	// state, localaddr, localport, remoteaddr, remoteport, pid
-	
+
 	buf := make([]byte, 28)
 	binary.LittleEndian.PutUint32(buf[0:4], 1) // 1 entry
 
 	offset := 4
 	binary.LittleEndian.PutUint32(buf[offset:offset+4], 2) // LISTEN
-	
+
 	// Local: 127.0.0.1 (0100007F in little endian) -> 0x7F000001
 	// Actually inet_addr("127.0.0.1") = 0x0100007f (Little Endian bytes: 7F 00 00 01)
 	buf[offset+4] = 127
@@ -32,7 +32,7 @@ func TestParseTcpTable_IPv4(t *testing.T) {
 
 	// Remote Addr: 0.0.0.0
 	// Remote Port: 0
-	
+
 	// PID: 1234
 	binary.LittleEndian.PutUint32(buf[offset+20:offset+24], 1234)
 
@@ -51,7 +51,7 @@ func TestParseTcpTable_IPv4(t *testing.T) {
 func TestParseTcpTable_TruncatedBuffer(t *testing.T) {
 	buf := make([]byte, 16)
 	binary.LittleEndian.PutUint32(buf[0:4], 2) // claims 2 entries but buffer is small
-	
+
 	conns := parseTcpTable(buf, AF_INET)
 	if len(conns) != 0 {
 		t.Fatalf("expected 0 connections on truncated buffer, got %d", len(conns))

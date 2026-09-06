@@ -112,10 +112,10 @@ func TestUSBCollector_ShutdownWhileBlocked(t *testing.T) {
 
 	cfg := &config.Config{TenantID: "t1"}
 	col := NewCollector(cfg)
-	
+
 	// Unbuffered channel, so the emitEvent timer will trigger after 1s
-	out := make(chan *events.CanonicalEvent) 
-	
+	out := make(chan *events.CanonicalEvent)
+
 	ctx := context.Background()
 	if err := col.Start(ctx, out); err != nil {
 		t.Fatalf("failed to start: %v", err)

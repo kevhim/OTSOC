@@ -91,10 +91,10 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 	// 4. Central Ingestion Loop
 	var ingestWg sync.WaitGroup
 	ingestWg.Add(1)
-	
+
 	// This channel helps us wait for events to at least reach the DB
 	storeComplete := make(chan struct{}, 10)
-	
+
 	go func() {
 		defer ingestWg.Done()
 		for ev := range processEvents {
@@ -111,7 +111,7 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 			storeCancel()
 
 			fwd.Wakeup()
-			
+
 			select {
 			case storeComplete <- struct{}{}:
 			default:
@@ -136,7 +136,7 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 			Name:      &name,
 		}
 		procCol.HandleEvent(ctx, inst, true)
-		
+
 		// Wait for it to be stored
 		select {
 		case <-storeComplete:
@@ -165,12 +165,12 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("Expected 0 pending events after 202, got %d", count)
 	}
-	
+
 	mu.Lock()
 	if received == 0 {
 		t.Fatalf("Expected httptest server to receive event")
 	}
-	
+
 	var ev events.CanonicalEvent
 	if err := json.Unmarshal(lastBody, &ev); err != nil {
 		t.Fatalf("Failed to parse request body: %v", err)
@@ -217,8 +217,6 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("Expected 1 failed/pending event after 429, got %d", count)
 	}
-
-
 
 	// Shutdown Sequence verification
 	cancel()             // Cancel global context

@@ -7,9 +7,9 @@ import (
 )
 
 type Config struct {
-	APIAddr         string `json:"api_addr"`
-	TenantID        string `json:"tenant_id"`
-	SiteID          string `json:"site_id"`
+	APIAddr           string   `json:"api_addr"`
+	TenantID          string   `json:"tenant_id"`
+	SiteID            string   `json:"site_id"`
 	ProcessInterval   string   `json:"process_interval,omitempty"`
 	InventoryInterval string   `json:"inventory_interval,omitempty"`
 	NetworkInterval   string   `json:"network_interval,omitempty"`

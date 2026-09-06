@@ -75,7 +75,7 @@ func parseProcNetFile(path, protocol string, isIPv6 bool) ([]Connection, error) 
 func parseProcNetReader(r io.Reader, protocol string, isIPv6 bool) ([]Connection, error) {
 	var conns []Connection
 	scanner := bufio.NewScanner(r)
-	
+
 	// Skip header
 	if scanner.Scan() {
 		_ = scanner.Text()
@@ -90,7 +90,7 @@ func parseProcNetReader(r io.Reader, protocol string, isIPv6 bool) ([]Connection
 
 		srcIP, srcPort := parseIPPort(fields[1], isIPv6)
 		dstIP, dstPort := parseIPPort(fields[2], isIPv6)
-		
+
 		stateHex := fields[3]
 		state := tcpStates[stateHex]
 

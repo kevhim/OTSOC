@@ -116,7 +116,7 @@ var getConnections = osSpecificConnections
 func (c *Collector) takeSnapshot(ctx context.Context, out chan<- *events.CanonicalEvent) {
 	// Implemented by OS-specific logic
 	connections, qualityFlags, err := getConnections()
-	
+
 	if err != nil {
 		// Complete failure - do not emit false empty snapshot.
 		// Emit observable error logic (not yet implemented in health subsys, so just return for now)
@@ -161,7 +161,7 @@ func (c *Collector) takeSnapshot(ctx context.Context, out chan<- *events.Canonic
 			"connections": rawConns,
 		},
 	}
-	
+
 	if len(qualityFlags) > 0 {
 		ev.QualityFlags = qualityFlags
 	}

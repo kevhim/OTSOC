@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	iphlpapi = syscall.NewLazyDLL("iphlpapi.dll")
+	iphlpapi                = syscall.NewLazyDLL("iphlpapi.dll")
 	procGetExtendedTcpTable = iphlpapi.NewProc("GetExtendedTcpTable")
 	procGetExtendedUdpTable = iphlpapi.NewProc("GetExtendedUdpTable")
 )
@@ -17,10 +17,10 @@ var (
 const (
 	AF_INET  = 2
 	AF_INET6 = 23
-	
+
 	TCP_TABLE_OWNER_PID_ALL = 5
 	UDP_TABLE_OWNER_PID     = 1
-	
+
 	ERROR_INSUFFICIENT_BUFFER = 122
 )
 
@@ -86,7 +86,7 @@ func osSpecificConnections() ([]Connection, []string, error) {
 func getTcpTable(family uint32) ([]Connection, error) {
 	var buf []byte
 	var size uint32
-	
+
 	// Initial call to get size
 	ret, _, _ := procGetExtendedTcpTable.Call(
 		0,
@@ -121,7 +121,7 @@ func getTcpTable(family uint32) ([]Connection, error) {
 func getUdpTable(family uint32) ([]Connection, error) {
 	var buf []byte
 	var size uint32
-	
+
 	ret, _, _ := procGetExtendedUdpTable.Call(
 		0,
 		uintptr(unsafe.Pointer(&size)),
@@ -163,14 +163,14 @@ func parseTcpTable(buf []byte, family uint32) []Connection {
 		// MIB_TCPTABLE_OWNER_PID
 		// DWORD dwNumEntries;
 		// MIB_TCPROW_OWNER_PID table[ANY_SIZE];
-		
+
 		// MIB_TCPROW_OWNER_PID struct size is 24 bytes
 		offset := uint32(4)
 		for i := uint32(0); i < numEntries; i++ {
 			if offset+24 > uint32(len(buf)) {
 				break
 			}
-			
+
 			state := *(*uint32)(unsafe.Pointer(&buf[offset]))
 			localAddr := *(*uint32)(unsafe.Pointer(&buf[offset+4]))
 			localPort := *(*uint32)(unsafe.Pointer(&buf[offset+8]))
@@ -193,7 +193,7 @@ func parseTcpTable(buf []byte, family uint32) []Connection {
 		// MIB_TCP6TABLE_OWNER_PID
 		// DWORD dwNumEntries;
 		// MIB_TCP6ROW_OWNER_PID table[ANY_SIZE];
-		
+
 		// MIB_TCP6ROW_OWNER_PID is 56 bytes
 		offset := uint32(4)
 		for i := uint32(0); i < numEntries; i++ {

@@ -74,7 +74,7 @@ func (c *Collector) Stop() error {
 		c.cancel()
 		c.cancel = nil
 	}
-	
+
 	if c.watcher != nil {
 		err := c.watcher.Close()
 		if err != nil {
@@ -127,7 +127,7 @@ func (c *Collector) handleEvent(ctx context.Context, event fsnotify.Event, out c
 	var size int64
 	var isDir bool
 	var statOk bool
-	
+
 	if action != "FILE_DELETE" && action != "FILE_RENAME" {
 		info, err := os.Stat(event.Name)
 		if err == nil {
@@ -156,7 +156,7 @@ func (c *Collector) handleEvent(ctx context.Context, event fsnotify.Event, out c
 			"file_path": absEventPath,
 		},
 	}
-	
+
 	if statOk {
 		ev.Metadata["size"] = size
 	}

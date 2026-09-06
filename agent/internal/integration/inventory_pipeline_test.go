@@ -136,7 +136,7 @@ func TestInventoryPipeline_Integration(t *testing.T) {
 	// Verify Local Removal
 	queryCtx, qCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer qCancel()
-	
+
 	row := db.GetDB().QueryRowContext(queryCtx, "SELECT COUNT(*) FROM events WHERE event_id = ?", ev.EventID)
 	var count int
 	if err := row.Scan(&count); err != nil {

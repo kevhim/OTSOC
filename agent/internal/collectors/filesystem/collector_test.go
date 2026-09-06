@@ -25,10 +25,10 @@ func TestFilesystemCollector_Integration(t *testing.T) {
 
 	collector := NewCollector(cfg)
 	out := make(chan *events.CanonicalEvent, 100)
-	
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	if err := collector.Start(ctx, out); err != nil {
 		t.Fatalf("Failed to start collector: %v", err)
 	}
@@ -65,10 +65,10 @@ func TestFilesystemCollector_Integration(t *testing.T) {
 
 	// Collect events with a timeout
 	collected := make(map[string]int)
-	
+
 	timer := time.NewTimer(2 * time.Second)
 	defer timer.Stop()
-	
+
 loop:
 	for {
 		select {
@@ -80,10 +80,10 @@ loop:
 				t.Errorf("Tenant/Site mismatch")
 			}
 			collected[ev.Action]++
-			if collected["FILE_CREATE"] >= 1 && 
-			   collected["FILE_MODIFY"] >= 1 && 
-			   collected["FILE_RENAME"] >= 1 && 
-			   collected["FILE_DELETE"] >= 1 {
+			if collected["FILE_CREATE"] >= 1 &&
+				collected["FILE_MODIFY"] >= 1 &&
+				collected["FILE_RENAME"] >= 1 &&
+				collected["FILE_DELETE"] >= 1 {
 				// Got all expected event types
 				break loop
 			}
@@ -117,13 +117,13 @@ func TestFilesystemCollector_FailuresAndMetadata(t *testing.T) {
 		SiteID:       "site-1",
 		MonitorPaths: []string{missingPath, tmpDir}, // valid path alongside invalid
 	}
-	
+
 	collector := NewCollector(cfg)
 	out := make(chan *events.CanonicalEvent, 10)
-	
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	// Should not panic or fail start, just gracefully skip missingPath
 	if err := collector.Start(ctx, out); err != nil {
 		t.Fatalf("Failed to start collector: %v", err)
@@ -134,7 +134,7 @@ func TestFilesystemCollector_FailuresAndMetadata(t *testing.T) {
 	// 2. Size = 0 Metadata Test
 	zeroFile := filepath.Join(tmpDir, "zero.txt")
 	os.WriteFile(zeroFile, []byte(""), 0644)
-	
+
 	// 3. Metadata Unavailable Test (Rapid delete before stat)
 	// fsnotify might emit CREATE, but we delete it so fast stat fails.
 	// Since this is a race condition, we'll try it a few times if we don't get it.
@@ -146,10 +146,10 @@ func TestFilesystemCollector_FailuresAndMetadata(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
-	
+
 	timer := time.NewTimer(2 * time.Second)
 	defer timer.Stop()
-	
+
 	foundZeroSize := false
 	foundMissingMetadata := false
 
@@ -173,7 +173,7 @@ loop:
 					}
 				}
 			}
-			
+
 			if strings.Contains(ev.Metadata["file_path"].(string), "rapid_") {
 				t.Logf("Received rapidFile event: Action=%s, Metadata=%v", ev.Action, ev.Metadata)
 				if ev.Action == "FILE_CREATE" || ev.Action == "FILE_MODIFY" {
@@ -182,7 +182,7 @@ loop:
 					}
 				}
 			}
-			
+
 			if foundZeroSize && foundMissingMetadata {
 				break loop
 			}
@@ -191,7 +191,7 @@ loop:
 			break loop
 		}
 	}
-	
+
 	if !foundZeroSize {
 		t.Errorf("Did not properly emit size=0 metadata")
 	}
@@ -203,32 +203,32 @@ loop:
 func TestFilesystemCollector_ShutdownWhileBlocked(t *testing.T) {
 	// Create an unbuffered channel to guarantee blocking
 	out := make(chan *events.CanonicalEvent)
-	
+
 	cfg := &config.Config{
 		MonitorPaths: []string{t.TempDir()},
 	}
-	
+
 	col := NewCollector(cfg)
 	ctx := context.Background()
-	
+
 	if err := col.Start(ctx, out); err != nil {
 		t.Fatalf("Failed to start collector: %v", err)
 	}
-	
+
 	// Create a file to trigger an event that will block on the unbuffered out channel
 	testFile := filepath.Join(cfg.MonitorPaths[0], "block_test.txt")
 	os.WriteFile(testFile, []byte("block"), 0644)
-	
+
 	// Wait a moment to ensure the collector is blocked in its send loop
 	time.Sleep(1500 * time.Millisecond) // Wait >1s to also trigger the health log path
-	
+
 	// Now stop the collector while the channel is still blocked
 	stopDone := make(chan struct{})
 	go func() {
 		col.Stop()
 		close(stopDone)
 	}()
-	
+
 	select {
 	case <-stopDone:
 		// Success, Stop() returned
