@@ -95,9 +95,9 @@ func TestFilesystemPipeline_Integration(t *testing.T) {
 	// 4. Central Ingestion Loop
 	var ingestWg sync.WaitGroup
 	ingestWg.Add(1)
-	
+
 	storeComplete := make(chan struct{}, 10)
-	
+
 	go func() {
 		defer ingestWg.Done()
 		for ev := range fsEvents {
@@ -114,7 +114,7 @@ func TestFilesystemPipeline_Integration(t *testing.T) {
 			storeCancel()
 
 			fwd.Wakeup()
-			
+
 			select {
 			case storeComplete <- struct{}{}:
 			default:
@@ -173,8 +173,8 @@ func TestFilesystemPipeline_Integration(t *testing.T) {
 	}
 
 	// Shutdown Sequence verification
-	cancel()             // Cancel global context
-	fsCol.Stop()         // 1. Stop collector
-	close(fsEvents)      // 2. Close channel, draining loop
-	ingestWg.Wait()      // 3. Wait for loop to exit
+	cancel()        // Cancel global context
+	fsCol.Stop()    // 1. Stop collector
+	close(fsEvents) // 2. Close channel, draining loop
+	ingestWg.Wait() // 3. Wait for loop to exit
 }

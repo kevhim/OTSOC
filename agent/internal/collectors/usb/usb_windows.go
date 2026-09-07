@@ -6,8 +6,6 @@ package usb
 import (
 	"context"
 	"fmt"
-	"regexp"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -17,25 +15,25 @@ import (
 var (
 	user32 = syscall.NewLazyDLL("user32.dll")
 
-	procRegisterClassExW         = user32.NewProc("RegisterClassExW")
-	procCreateWindowExW          = user32.NewProc("CreateWindowExW")
-	procDefWindowProcW           = user32.NewProc("DefWindowProcW")
-	procDestroyWindow            = user32.NewProc("DestroyWindow")
-	procUnregisterClassW         = user32.NewProc("UnregisterClassW")
-	procGetMessageW              = user32.NewProc("GetMessageW")
-	procTranslateMessage         = user32.NewProc("TranslateMessage")
-	procDispatchMessageW         = user32.NewProc("DispatchMessageW")
-	procPostMessageW             = user32.NewProc("PostMessageW")
-	procRegisterDeviceNotificationW = user32.NewProc("RegisterDeviceNotificationW")
+	procRegisterClassExW             = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW              = user32.NewProc("CreateWindowExW")
+	procDefWindowProcW               = user32.NewProc("DefWindowProcW")
+	procDestroyWindow                = user32.NewProc("DestroyWindow")
+	procUnregisterClassW             = user32.NewProc("UnregisterClassW")
+	procGetMessageW                  = user32.NewProc("GetMessageW")
+	procTranslateMessage             = user32.NewProc("TranslateMessage")
+	procDispatchMessageW             = user32.NewProc("DispatchMessageW")
+	procPostMessageW                 = user32.NewProc("PostMessageW")
+	procRegisterDeviceNotificationW  = user32.NewProc("RegisterDeviceNotificationW")
 	procUnregisterDeviceNotification = user32.NewProc("UnregisterDeviceNotification")
 )
 
 const (
-	WM_DEVICECHANGE          = 0x0219
-	WM_CLOSE                 = 0x0010
-	DBT_DEVICEARRIVAL        = 0x8000
-	DBT_DEVICEREMOVECOMPLETE = 0x8004
-	DBT_DEVTYP_DEVICEINTERFACE = 0x00000005
+	WM_DEVICECHANGE             = 0x0219
+	WM_CLOSE                    = 0x0010
+	DBT_DEVICEARRIVAL           = 0x8000
+	DBT_DEVICEREMOVECOMPLETE    = 0x8004
+	DBT_DEVTYP_DEVICEINTERFACE  = 0x00000005
 	DEVICE_NOTIFY_WINDOW_HANDLE = 0x00000000
 )
 
@@ -192,24 +190,24 @@ func defaultStartOSWatcher(ctx context.Context, out chan<- USBEvent) error {
 	}
 
 	<-ctx.Done()
-	
+
 	// Safely post a message to wake up GetMessageW and terminate the loop
 	procPostMessageW.Call(uintptr(hwnd), WM_CLOSE, 0, 0)
-	
+
 	return nil
 }
 
-func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
+func wndProc(hwnd syscall.Handle, msg uint32, wParam uintptr, lParam unsafe.Pointer) uintptr {
 	switch msg {
 	case WM_DEVICECHANGE:
 		if wParam == DBT_DEVICEARRIVAL || wParam == DBT_DEVICEREMOVECOMPLETE {
-			if lParam != 0 {
-				hdr := (*DEV_BROADCAST_HDR)(unsafe.Pointer(lParam))
+			if lParam != nil {
+				hdr := (*DEV_BROADCAST_HDR)(lParam)
 				if hdr.dbch_devicetype == DBT_DEVTYP_DEVICEINTERFACE {
-					devInterface := (*DEV_BROADCAST_DEVICEINTERFACE)(unsafe.Pointer(lParam))
-					
+					devInterface := (*DEV_BROADCAST_DEVICEINTERFACE)(lParam)
+
 					nameSlice := (*[1024]uint16)(unsafe.Pointer(&devInterface.dbcc_name[0]))[:]
-					
+
 					var length int
 					for i, v := range nameSlice {
 						if v == 0 {
@@ -217,9 +215,9 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 							break
 						}
 					}
-					
+
 					pathStr := syscall.UTF16ToString(nameSlice[:length])
-					
+
 					action := "USB_INSERT"
 					if wParam == DBT_DEVICEREMOVECOMPLETE {
 						action = "USB_REMOVE"
@@ -247,28 +245,6 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		return 0
 	}
 
-	ret, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(msg), wParam, lParam)
+	ret, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(msg), wParam, uintptr(lParam))
 	return ret
-}
-
-var vidPidRegex = regexp.MustCompile(`(?i)VID_([0-9A-F]{4})&PID_([0-9A-F]{4})`)
-
-func parseDevicePath(path string) (vid, pid, serial string) {
-	// Example path: \\?\USB#VID_1234&PID_5678#SERIALNUMBER#{guid}
-	
-	matches := vidPidRegex.FindStringSubmatch(path)
-	if len(matches) == 3 {
-		vid = strings.ToLower(matches[1])
-		pid = strings.ToLower(matches[2])
-	}
-
-	parts := strings.Split(path, "#")
-	if len(parts) >= 4 {
-		// Usually parts[2] is the serial or an instance ID
-		if parts[2] != "" && !strings.Contains(parts[2], "&") {
-			// standard serials typically don't have &
-			serial = parts[2]
-		}
-	}
-	return
 }

@@ -55,7 +55,7 @@ func TestE2EFlow(t *testing.T) {
 	}
 
 	payload, _ := json.Marshal(ev)
-	req, _ := http.NewRequest(http.MethodPost, "http://localhost:8081/v1/ingest", bytes.NewBuffer(payload))
+	req, _ := http.NewRequest(http.MethodPost, "http://localhost:8081/v1/ingest?tenant_id=e2e-tenant", bytes.NewBuffer(payload))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err = http.DefaultClient.Do(req)
@@ -120,7 +120,7 @@ func TestE2EFlow(t *testing.T) {
 	invalidEv := ev
 	invalidEv.EventID = "invalid-uuid-format"
 	invalidPayload, _ := json.Marshal(invalidEv)
-	reqInv, _ := http.NewRequest(http.MethodPost, "http://localhost:8081/v1/ingest", bytes.NewBuffer(invalidPayload))
+	reqInv, _ := http.NewRequest(http.MethodPost, "http://localhost:8081/v1/ingest?tenant_id=e2e-tenant", bytes.NewBuffer(invalidPayload))
 	reqInv.Header.Set("Content-Type", "application/json")
 	respInv, err := http.DefaultClient.Do(reqInv)
 	if err != nil {
@@ -132,7 +132,7 @@ func TestE2EFlow(t *testing.T) {
 	}
 
 	// 4. Test duplicate event idempotency (ON CONFLICT DO NOTHING)
-	reqDup, _ := http.NewRequest(http.MethodPost, "http://localhost:8081/v1/ingest", bytes.NewBuffer(payload))
+	reqDup, _ := http.NewRequest(http.MethodPost, "http://localhost:8081/v1/ingest?tenant_id=e2e-tenant", bytes.NewBuffer(payload))
 	reqDup.Header.Set("Content-Type", "application/json")
 	resp, err = http.DefaultClient.Do(reqDup) // Send exactly the same payload again
 	if err != nil {
@@ -169,7 +169,7 @@ func TestE2EFlow(t *testing.T) {
 	alertEv.Severity = "CRITICAL"
 
 	payload, _ = json.Marshal(alertEv)
-	req, _ = http.NewRequest(http.MethodPost, "http://localhost:8081/v1/ingest", bytes.NewBuffer(payload))
+	req, _ = http.NewRequest(http.MethodPost, "http://localhost:8081/v1/ingest?tenant_id=e2e-tenant", bytes.NewBuffer(payload))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err = http.DefaultClient.Do(req)

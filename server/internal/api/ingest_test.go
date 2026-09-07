@@ -55,7 +55,7 @@ func TestIngestHandler(t *testing.T) {
 			name:        "missing required fields",
 			queryTenant: "t1",
 			payload: events.CanonicalEvent{
-				EventID: "123",
+				EventID:  "123",
 				TenantID: "t1",
 				// Missing SiteID, OccurredAt, SchemaVersion
 			},

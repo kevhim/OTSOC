@@ -107,7 +107,7 @@ func (c *Collector) run(ctx context.Context, out chan<- *events.CanonicalEvent) 
 
 func (c *Collector) takeSnapshot(ctx context.Context, out chan<- *events.CanonicalEvent) {
 	qualityFlags := []string{}
-	
+
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "unknown"
@@ -149,14 +149,14 @@ func (c *Collector) takeSnapshot(ctx context.Context, out chan<- *events.Canonic
 		Severity:      "INFO",
 		SchemaVersion: events.CurrentSchemaVersion,
 		Metadata: map[string]interface{}{
-			"hostname":   hostname,
-			"os":         runtime.GOOS,
-			"arch":       runtime.GOARCH,
-			"num_cpu":    runtime.NumCPU(),
+			"hostname": hostname,
+			"os":       runtime.GOOS,
+			"arch":     runtime.GOARCH,
+			"num_cpu":  runtime.NumCPU(),
 			// mem basics omitted to avoid external dependencies like gopsutil for now
 		},
 	}
-	
+
 	if len(qualityFlags) > 0 {
 		ev.QualityFlags = qualityFlags
 	}
