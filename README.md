@@ -9,8 +9,8 @@ To provide robust, deterministic, and safe security monitoring for environments 
 The architecture is fundamentally divided into an edge-light / central-heavy model. Edge components (agents, OT sensors, SQLite buffers) handle passive collection, local detections, and store-and-forward resilience. Central components (PostgreSQL, Valkey, workers) handle heavy correlation, analytics, and incident management.
 
 ### Development Status
-Development stage: `Phase 2C — Process Telemetry & SQLite Wiring COMPLETE`
-Next: `Phase 2D — Filesystem Telemetry OPEN`
+Development stage: `Phase 2E.3.1 — Windows USB COMPLETE`
+Next: `Pending Assignment`
 
 ### Architecture Documentation
 The architecture is detailed across multiple files in this repository:
