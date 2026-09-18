@@ -293,7 +293,7 @@ func (s *SQLiteStorage) Store(ctx context.Context, event *events.CanonicalEvent)
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("%w: %v", ErrStoreUncertain, err)
 	}
-	
+
 	return nil
 }
 

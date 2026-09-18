@@ -90,7 +90,7 @@ func parseUevent(payload []byte) (USBEvent, bool) {
 		if len(part) == 0 {
 			continue
 		}
-		
+
 		strPart := string(part)
 		idx := strings.IndexByte(strPart, '=')
 		if idx == -1 {

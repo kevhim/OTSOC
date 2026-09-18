@@ -18,7 +18,7 @@ func TestRealWindowsWatcher_Lifecycle(t *testing.T) {
 
 	// Test 1: Start and stop cleanly.
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- defaultStartOSWatcher(ctx, ch)

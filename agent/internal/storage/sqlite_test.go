@@ -2,11 +2,11 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
-	"errors"
 
 	"redcyberfox/pkg/events"
 )

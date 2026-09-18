@@ -76,7 +76,7 @@ func printEvent(ev *events.CanonicalEvent, verbose bool) {
 	fmt.Printf("Action:      %s\n", ev.Action)
 	fmt.Printf("Event ID:    %s\n", ev.EventID)
 	fmt.Printf("Occurred At: %s\n", ev.OccurredAt.String())
-	
+
 	if vid, ok := ev.Metadata["vendor_id"]; ok {
 		fmt.Printf("Vendor ID:   %s\n", vid)
 	}
@@ -91,7 +91,7 @@ func printEvent(ev *events.CanonicalEvent, verbose bool) {
 		if path, ok := ev.Metadata["device_path"]; ok {
 			fmt.Printf("Device Path: %s\n", path)
 		}
-		
+
 		rawJSON, _ := json.MarshalIndent(ev, "", "  ")
 		fmt.Printf("Raw JSON:\n%s\n", string(rawJSON))
 	} else {

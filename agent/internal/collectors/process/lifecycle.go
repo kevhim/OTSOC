@@ -179,7 +179,7 @@ func (le *LifecycleEngine) emit(ctx context.Context, inst *Instance, action stri
 	}
 
 	event := &events.CanonicalEvent{
-		EventID:       uuid.New().String(),
+		EventID: uuid.New().String(),
 		// SeqNo is left empty per durability requirement;
 		// Storage.Store() owns these transactionally.
 		OccurredAt:    time.Now().UTC(),
