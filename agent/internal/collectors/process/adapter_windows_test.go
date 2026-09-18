@@ -456,26 +456,28 @@ func TestStartOSAdapter_EnumerationFailure(t *testing.T) {
 	mockAPI := &mockWindowsAPI{
 		enumFunc: func() ([]ProcessEntry, error) {
 			count := atomic.AddInt32(&callCount, 1)
-			if count == 1 {
+			switch count {
+			case 1:
 				// First snapshot: baseline (empty)
 				return []ProcessEntry{}, nil
-			} else if count == 2 {
+			case 2:
 				// Second snapshot: success
 				return []ProcessEntry{
 					{PID: 100, Name: "A.exe"},
 					{PID: 101, Name: "B.exe"},
 					{PID: 102, Name: "C.exe"},
 				}, nil
-			} else if count == 3 {
+			case 3:
 				// Third snapshot: fails part-way through
 				return nil, errors.New("unexpected error in Process32Next")
+			default:
+				// Fourth snapshot: success, state restored
+				return []ProcessEntry{
+					{PID: 100, Name: "A.exe"},
+					{PID: 101, Name: "B.exe"},
+					{PID: 102, Name: "C.exe"},
+				}, nil
 			}
-			// Fourth snapshot: success, state restored
-			return []ProcessEntry{
-				{PID: 100, Name: "A.exe"},
-				{PID: 101, Name: "B.exe"},
-				{PID: 102, Name: "C.exe"},
-			}, nil
 		},
 		startFunc: func(pid uint32) (time.Time, error) {
 			return time.Unix(0, 0), nil

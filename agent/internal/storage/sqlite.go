@@ -332,13 +332,16 @@ func (s *SQLiteStorage) enforceQuota(ctx context.Context, incomingSeverity strin
 			}
 			log.Printf("Disk pressure: pruned %d %s events", rows, sev)
 
-			colName := "dropped_" + sev
-			if sev == "WARNING" {
+			var colName string
+			switch sev {
+			case "WARNING":
 				colName = "dropped_warning"
-			} else if sev == "INFO" {
+			case "INFO":
 				colName = "dropped_info"
-			} else if sev == "DEBUG" {
+			case "DEBUG":
 				colName = "dropped_debug"
+			default:
+				colName = "dropped_" + sev
 			}
 			_, err = s.db.ExecContext(ctx, fmt.Sprintf(`UPDATE agent_state SET dropped_total = dropped_total + %d, %s = %s + %d, storage_pressure_state = 'PRUNING', last_pressure_at = CURRENT_TIMESTAMP WHERE id = 1`, rows, colName, colName, rows))
 			if err != nil {
