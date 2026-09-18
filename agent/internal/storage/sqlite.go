@@ -19,6 +19,11 @@ import (
 	"redcyberfox/pkg/events"
 )
 
+var (
+	ErrStoreFailedBeforeCommit = errors.New("store definitely failed before commit")
+	ErrStoreUncertain          = errors.New("store commit result uncertain")
+)
+
 type SQLiteStorage struct {
 	dbPath       string
 	identityPath string
@@ -207,11 +212,11 @@ func (s *SQLiteStorage) Store(ctx context.Context, event *events.CanonicalEvent)
 		return errors.New("DEGRADED_STORAGE: DB not initialized")
 	}
 
-	isNewEventID := false
 	if event.EventID == "" {
-		event.EventID = uuid.New().String()
-		isNewEventID = true
+		return fmt.Errorf("%w: event_id must not be empty", ErrStoreFailedBeforeCommit)
 	}
+
+	isNewEventID := false
 
 	// Estimate payload size for quota enforcement
 	estBytes, _ := json.Marshal(event)
@@ -221,12 +226,12 @@ func (s *SQLiteStorage) Store(ctx context.Context, event *events.CanonicalEvent)
 		if event.Severity == "CRITICAL" || event.Severity == "FATAL" {
 			log.Printf("CRITICAL TELEMETRY LOSS: storage emergency, unable to persist event: %v", err)
 		}
-		return err
+		return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
 	}
 
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
 	}
 	defer tx.Rollback()
 
@@ -240,9 +245,9 @@ func (s *SQLiteStorage) Store(ctx context.Context, event *events.CanonicalEvent)
 			if existingPayload == string(payloadBytes) {
 				return nil // Idempotent success
 			}
-			return fmt.Errorf("integrity error: event_id %s already exists with different payload", event.EventID)
+			return fmt.Errorf("%w: integrity error: event_id %s already exists with different payload", ErrStoreFailedBeforeCommit, event.EventID)
 		} else if !errors.Is(err, sql.ErrNoRows) {
-			return err
+			return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
 		}
 
 		err = tx.QueryRowContext(ctx, "SELECT seq_no, payload FROM dead_letter_queue WHERE event_id = ?", event.EventID).Scan(&existingSeqNo, &existingPayload)
@@ -252,23 +257,23 @@ func (s *SQLiteStorage) Store(ctx context.Context, event *events.CanonicalEvent)
 			if existingPayload == string(payloadBytes) {
 				return nil // Idempotent success
 			}
-			return fmt.Errorf("integrity error: event_id %s already in DLQ with different payload", event.EventID)
+			return fmt.Errorf("%w: integrity error: event_id %s already in DLQ with different payload", ErrStoreFailedBeforeCommit, event.EventID)
 		} else if !errors.Is(err, sql.ErrNoRows) {
-			return err
+			return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
 		}
 	}
 
 	var nextSeqNo int64
 	err = tx.QueryRowContext(ctx, "SELECT next_seq_no FROM agent_state WHERE id = 1").Scan(&nextSeqNo)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
 	}
 
 	event.SeqNo = nextSeqNo
 
 	payloadBytes, err := event.Serialize()
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
 	}
 	payloadStr := string(payloadBytes)
 
@@ -277,15 +282,19 @@ func (s *SQLiteStorage) Store(ctx context.Context, event *events.CanonicalEvent)
 		VALUES (?, ?, ?, ?, ?, 'PENDING')
 	`, event.EventID, s.deviceID, event.SeqNo, event.Severity, payloadStr)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
 	}
 
 	_, err = tx.ExecContext(ctx, "UPDATE agent_state SET next_seq_no = next_seq_no + 1 WHERE id = 1")
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%w: %v", ErrStoreUncertain, err)
+	}
+	
+	return nil
 }
 
 func (s *SQLiteStorage) enforceQuota(ctx context.Context, incomingSeverity string, estimatedSize int64) error {

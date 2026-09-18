@@ -12,7 +12,7 @@ Phase 2D - COMPLETE
 Phase 2E.1 (Inventory) - COMPLETE
 Phase 2E.2 (Network) - COMPLETE
 Phase 2E.3.1 (Windows USB) - COMPLETE
-Phase 2E.3.2 (Linux USB) - NOT STARTED
+Phase 2E.3.2 (Linux USB) - COMPLETE
 Phase 2E.4 (Cross-source) - NOT STARTED
 Phase 3 - NOT STARTED
 

@@ -2,9 +2,11 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"errors"
 
 	"redcyberfox/pkg/events"
 )
@@ -42,6 +44,7 @@ func TestStorage_StoreIdempotency(t *testing.T) {
 	defer s.Close()
 
 	ev := &events.CanonicalEvent{
+		EventID:  "idempotent-id-1",
 		Severity: "INFO",
 		Source:   "test1",
 	}
@@ -50,8 +53,8 @@ func TestStorage_StoreIdempotency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Store failed: %v", err)
 	}
-	if ev.EventID == "" {
-		t.Errorf("EventID should be populated")
+	if ev.EventID != "idempotent-id-1" {
+		t.Errorf("EventID should be preserved")
 	}
 	if ev.SeqNo != 1 {
 		t.Errorf("SeqNo should be 1, got %d", ev.SeqNo)
@@ -83,6 +86,7 @@ func TestStorage_DiskQuotaEnforcement(t *testing.T) {
 
 	for i := 0; i < 100; i++ {
 		ev := &events.CanonicalEvent{
+			EventID:  fmt.Sprintf("debug-%d", i),
 			Severity: "DEBUG",
 			Source:   "large payload to trigger quota 0000000000000000000000000000000",
 		}
@@ -90,6 +94,7 @@ func TestStorage_DiskQuotaEnforcement(t *testing.T) {
 	}
 
 	critEv := &events.CanonicalEvent{
+		EventID:  "critical-1",
 		Severity: "CRITICAL",
 		Source:   "critical event",
 	}
@@ -364,6 +369,7 @@ func TestStorage_IntegrityAndSequenceRollback(t *testing.T) {
 
 	// Next event should get SeqNo 2 (no sequence leak)
 	ev3 := &events.CanonicalEvent{
+		EventID:  "unique-id-3",
 		Severity: "INFO",
 		Source:   "payload3",
 	}
@@ -373,5 +379,50 @@ func TestStorage_IntegrityAndSequenceRollback(t *testing.T) {
 	}
 	if ev3.SeqNo != 2 {
 		t.Errorf("Expected SeqNo 2, got %d", ev3.SeqNo)
+	}
+}
+
+func TestStorage_EventIDOwnership(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	s := NewSQLiteStorage(dbPath, "", 1024*1024*10)
+	s.Init(context.Background())
+	defer s.Close()
+
+	// 1. Missing EventID fails
+	evEmpty := &events.CanonicalEvent{
+		Severity: "INFO",
+		Source:   "test1",
+	}
+	err := s.Store(context.Background(), evEmpty)
+	if err == nil {
+		t.Fatalf("Store should fail if EventID is empty")
+	}
+	if !errors.Is(err, ErrStoreFailedBeforeCommit) {
+		t.Errorf("Expected ErrStoreFailedBeforeCommit for missing EventID, got %v", err)
+	}
+
+	// 2. Existing EventID survives unchanged
+	originalID := "fixed-event-id-1234"
+	evWithID := &events.CanonicalEvent{
+		EventID:  originalID,
+		Severity: "INFO",
+		Source:   "test2",
+	}
+	err = s.Store(context.Background(), evWithID)
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+	if evWithID.EventID != originalID {
+		t.Errorf("EventID mutated during Store. Expected %s, got %s", originalID, evWithID.EventID)
+	}
+
+	// 3. Retry preserves EventID (Idempotency)
+	err = s.Store(context.Background(), evWithID)
+	if err != nil {
+		t.Fatalf("Idempotent Store failed: %v", err)
+	}
+	if evWithID.EventID != originalID {
+		t.Errorf("EventID mutated during idempotent Store")
 	}
 }

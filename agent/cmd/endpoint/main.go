@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
 	"os"
@@ -135,14 +136,35 @@ func main() {
 				// Duplicating validation here is unnecessary and conflicts with Storage's EventID ownership.
 
 				// Local Durability Boundary
-				// We use a context with a timeout for Storage to prevent hanging the main loop if SQLite locks.
-				storeCtx, storeCancel := context.WithTimeout(context.Background(), 2*time.Second)
-				if err := db.Store(storeCtx, ev); err != nil {
-					log.Printf("Storage error: failed to persist event %s: %v", ev.EventID, err)
+				// Use the endpoint lifecycle context to ensure cancellation awareness.
+				// We bounded-retry if the commit is uncertain or the lock times out, but eventually crash if it persists
+				// to avoid silently losing telemetry in memory.
+				var storeErr error
+				for attempt := 1; attempt <= 3; attempt++ {
+					storeCtx, storeCancel := context.WithTimeout(ctx, 2*time.Second)
+					storeErr = db.Store(storeCtx, ev)
 					storeCancel()
-					continue
+
+					if storeErr == nil {
+						break
+					}
+
+					// If the context is cancelled, the endpoint is shutting down.
+					if errors.Is(storeErr, context.Canceled) && ctx.Err() != nil {
+						// Perform one final detached attempt to persist the event before exit.
+						finalCtx, finalCancel := context.WithTimeout(context.Background(), 2*time.Second)
+						storeErr = db.Store(finalCtx, ev)
+						finalCancel()
+						break
+					}
+
+					// Back off briefly before retrying transient lock/timeout or uncertain commit
+					time.Sleep(100 * time.Millisecond)
 				}
-				storeCancel()
+
+				if storeErr != nil {
+					log.Fatalf("CRITICAL: Failed to durably persist event %s: %v", ev.EventID, storeErr)
+				}
 
 				// Forwarding Eligibility Boundary
 				fwd.Wakeup()

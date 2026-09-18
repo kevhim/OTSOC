@@ -18,7 +18,7 @@
 - **Phase 2E.1 (Inventory Collector)**: COMPLETE
 - **Phase 2E.2 (Network Collector)**: COMPLETE
 - **Phase 2E.3.1 (Windows USB)**: COMPLETE (Physical Win32 events captured via real-host testing)
-- **Phase 2E.3.2 (Linux USB)**: NOT STARTED
+- **Phase 2E.3.2 (Linux USB)**: COMPLETE (Real-Host Validated)
 - **Phase 2E.4 (Cross-source)**: NOT STARTED
 - **Phase 3**: NOT STARTED
 
@@ -35,14 +35,13 @@
 - **Windows Process Collector**: `CommandLine` is unavailable in this phase (Phase 2C.3) because it requires brittle PEB reading.
 - **Windows Process Collector**: No ETW (real-time event-driven) implementation yet; strictly snapshot/reconciliation based.
 - No real-host validation performed for network and inventory beyond unit/integration tests.
-- **Linux USB Collector**: Linux USB not implemented and not validated (NOT VERIFIED).
+- **Linux USB Collector**: Verified on real host. Cannot be automatically validated in standard CI without a hardware-in-the-loop Linux VM.
 - No remote deployment E2E performed.
 
 ## Next Approved Task
 - Pending Assignment
 
 ## Forbidden Components (DO NOT implement until explicitly started)
-- Linux USB Collector (Do NOT implement Linux USB)
 - Phase 2E.4 (Do NOT start 2E.4)
 - Phase 3 (Do NOT start Phase 3)
 - Governor

@@ -21,7 +21,7 @@ This roadmap tracks the incremental delivery of the RedCyberFox OT SOC platform.
 2E.1 — Inventory: COMPLETE
 2E.2 — Network: COMPLETE
 2E.3.1 — Windows USB: COMPLETE
-2E.3.2 — Linux USB: NOT STARTED
+2E.3.2 — Linux USB: COMPLETE
 2E.4 — Cross-source: NOT STARTED
 
 ## Future Phases
