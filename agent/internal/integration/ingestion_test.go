@@ -16,9 +16,9 @@ import (
 // IngestionTestHarness replicates the centralEvents ingestion loop from main.go
 // to allow precise deterministic testing of shutdown semantics and retries.
 func runIngestionTestHarness(
-	ctx context.Context, 
+	ctx context.Context,
 	cancel context.CancelFunc,
-	db *storage.SQLiteStorage, 
+	db *storage.SQLiteStorage,
 	centralEvents <-chan *events.CanonicalEvent,
 	onDrainCtxCreated func(context.Context),
 	injectError func(context.Context, *events.CanonicalEvent) error,
@@ -54,7 +54,7 @@ func runIngestionTestHarness(
 				if !ok {
 					return
 				}
-				
+
 				storeCtx := ctx
 				if ctx.Err() != nil {
 					storeCtx = drainCtx
@@ -69,7 +69,7 @@ func runIngestionTestHarness(
 					if storeErr == nil {
 						storeErr = db.Store(storeCtx, ev)
 					}
-					
+
 					if storeErr == nil {
 						break
 					}
@@ -90,7 +90,7 @@ func runIngestionTestHarness(
 							dlqCancel()
 							break
 						}
-						
+
 						timer := time.NewTimer(10 * time.Millisecond)
 						select {
 						case <-storeCtx.Done():
@@ -119,7 +119,7 @@ func TestFocusedIngestion_ShutdownSemantics(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "agent.db")
 	db := storage.NewSQLiteStorage(dbPath, filepath.Join(tmpDir, "identity.json"), 10*1024*1024)
-	
+
 	initCtx, cancelInit := context.WithCancel(context.Background())
 	defer cancelInit()
 	if err := db.Init(initCtx); err != nil {

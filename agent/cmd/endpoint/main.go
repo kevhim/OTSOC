@@ -59,7 +59,7 @@ func main() {
 		<-sigCh
 		log.Println("Received termination signal, shutting down...")
 		cancel()
-		
+
 		// Establish one global provisional deterministic drain bound for shutdown
 		go func() {
 			timer := time.NewTimer(10 * time.Second)
@@ -187,13 +187,13 @@ func main() {
 						// Persistent uncertain errors beyond 3 attempts indicate severe disk/DB issues.
 						if attempts >= 3 {
 							log.Printf("CRITICAL: Event %s uncertain commit after 3 attempts. Attempting recovery.", ev.EventID)
-							
-							// Recovery metadata: move to DLQ. 
+
+							// Recovery metadata: move to DLQ.
 							// Bounded by active storeCtx so it cannot escape global shutdown deadline.
 							dlqCtx, dlqCancel := context.WithTimeout(storeCtx, 2*time.Second)
 							dlqErr := db.MoveToDLQ(dlqCtx, ev, "uncertain_commit", storeErr.Error())
 							dlqCancel()
-							
+
 							if dlqErr == nil {
 								log.Printf("INFO: Event %s successfully recovered to DLQ (metadata only).", ev.EventID)
 								break
@@ -214,7 +214,7 @@ func main() {
 							// Terminal behavior
 							log.Fatalf("FATAL: Event %s uncertain commit, DLQ failed (%v), and emergency spill failed (%v). Terminating.", ev.EventID, dlqErr, spillErr)
 						}
-						
+
 						// Cancellation-aware bounded wait
 						timer := time.NewTimer(100 * time.Millisecond)
 						select {

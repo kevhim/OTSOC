@@ -29,7 +29,7 @@ func TestPhase2E4_BroadCrossSourceRegression(t *testing.T) {
 
 	dbPath := filepath.Join(tempDir, "agent.db")
 	idPath := filepath.Join(tempDir, "identity.json")
-	
+
 	// Create minimal valid config
 	cfg := &config.Config{
 		TenantID:          "tenant-1",
@@ -98,7 +98,7 @@ func TestPhase2E4_BroadCrossSourceRegression(t *testing.T) {
 	go func() {
 		time.Sleep(500 * time.Millisecond) // Let collectors generate events
 		cancel()
-		
+
 		// Establish global drain deadline
 		go func() {
 			timer := time.NewTimer(10 * time.Second)
@@ -121,11 +121,11 @@ func TestPhase2E4_BroadCrossSourceRegression(t *testing.T) {
 				if !ok {
 					return
 				}
-				
+
 				if ev.EventID == "" {
 					t.Errorf("Fabricated identity detected: empty event_id received")
 				}
-				
+
 				if _, loaded := eventIDs.LoadOrStore(ev.EventID, true); loaded {
 					mu.Lock()
 					duplicateCount++
@@ -173,7 +173,7 @@ func TestPhase2E4_BroadCrossSourceRegression(t *testing.T) {
 							mu.Unlock()
 							break
 						}
-						
+
 						timer := time.NewTimer(10 * time.Millisecond) // Faster for tests
 						select {
 						case <-storeCtx.Done():
@@ -194,7 +194,7 @@ func TestPhase2E4_BroadCrossSourceRegression(t *testing.T) {
 						}
 						continue
 					}
-					
+
 					break
 				}
 			}

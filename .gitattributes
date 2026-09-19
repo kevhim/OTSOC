@@ -1,0 +1,2 @@
+# Ensure all Go source files are always checked out with LF line endings across all platforms
+*.go text eol=lf
