@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"log"
@@ -48,6 +49,9 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	drainCtx, drainCancel := context.WithCancel(context.Background())
+	defer drainCancel()
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
@@ -55,6 +59,17 @@ func main() {
 		<-sigCh
 		log.Println("Received termination signal, shutting down...")
 		cancel()
+		
+		// Establish one global provisional deterministic drain bound for shutdown
+		go func() {
+			timer := time.NewTimer(10 * time.Second)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				drainCancel() // will surface as context.Canceled for drainCtx
+			case <-drainCtx.Done():
+			}
+		}()
 	}()
 
 	// 4. Storage Initialization
@@ -114,8 +129,10 @@ func main() {
 	// 8. Central Event Ingestion Loop
 	var ingestWg sync.WaitGroup
 	ingestWg.Add(1)
+
 	go func() {
 		defer ingestWg.Done()
+
 		for {
 			select {
 			case sig := <-healthCh:
@@ -130,44 +147,103 @@ func main() {
 				ev.SiteID = cfg.SiteID
 				ev.AssetID = id.DeviceID
 
-				// Validation Boundary
-				// CanonicalEvent.Validate() requires EventID, which is assigned by Storage.
-				// Validation is owned by the Server; Forwarder handles HTTP 400 by moving to DLQ.
-				// Duplicating validation here is unnecessary and conflicts with Storage's EventID ownership.
-
 				// Local Durability Boundary
-				// Use the endpoint lifecycle context to ensure cancellation awareness.
-				// We bounded-retry if the commit is uncertain or the lock times out, but eventually crash if it persists
-				// to avoid silently losing telemetry in memory.
-				var storeErr error
-				for attempt := 1; attempt <= 3; attempt++ {
-					storeCtx, storeCancel := context.WithTimeout(ctx, 2*time.Second)
-					storeErr = db.Store(storeCtx, ev)
-					storeCancel()
+				storeCtx := ctx
+				if ctx.Err() != nil {
+					storeCtx = drainCtx
+				}
 
+				var storeErr error
+				attempts := 0
+				for {
+					storeErr = db.Store(storeCtx, ev)
+
+					// CASE 1: COMMITTED (Success)
 					if storeErr == nil {
 						break
 					}
 
-					// If the context is cancelled, the endpoint is shutting down.
-					if errors.Is(storeErr, context.Canceled) && ctx.Err() != nil {
-						// Perform one final detached attempt to persist the event before exit.
-						finalCtx, finalCancel := context.WithTimeout(context.Background(), 2*time.Second)
-						storeErr = db.Store(finalCtx, ev)
-						finalCancel()
+					// CASE 2: FAILED BEFORE COMMIT
+					if errors.Is(storeErr, storage.ErrStoreFailedBeforeCommit) {
+						if errors.Is(storeErr, context.Canceled) && storeCtx == ctx {
+							// In-flight event interrupted by lifecycle cancellation.
+							// Retry under global drain context using the SAME event_id.
+							storeCtx = drainCtx
+							continue
+						} else if errors.Is(storeErr, context.Canceled) || errors.Is(storeErr, context.DeadlineExceeded) {
+							// Drain deadline expired. Non-retryable. Explicit terminal handling.
+							log.Printf("ERROR: Event %s explicitly dropped (global drain deadline expired): %v", ev.EventID, storeErr)
+						} else {
+							// Non-retryable cause (e.g. quota full)
+							log.Printf("ERROR: Event %s explicitly dropped (non-retryable failure before commit): %v", ev.EventID, storeErr)
+						}
 						break
 					}
 
-					// Back off briefly before retrying transient lock/timeout or uncertain commit
-					time.Sleep(100 * time.Millisecond)
-				}
+					// CASE 3: UNCERTAIN COMMIT
+					if errors.Is(storeErr, storage.ErrStoreUncertain) {
+						attempts++
+						// We use 3 attempts to ride out transient IO stutters.
+						// Persistent uncertain errors beyond 3 attempts indicate severe disk/DB issues.
+						if attempts >= 3 {
+							log.Printf("CRITICAL: Event %s uncertain commit after 3 attempts. Attempting recovery.", ev.EventID)
+							
+							// Recovery metadata: move to DLQ. 
+							// Bounded by active storeCtx so it cannot escape global shutdown deadline.
+							dlqCtx, dlqCancel := context.WithTimeout(storeCtx, 2*time.Second)
+							dlqErr := db.MoveToDLQ(dlqCtx, ev, "uncertain_commit", storeErr.Error())
+							dlqCancel()
+							
+							if dlqErr == nil {
+								log.Printf("INFO: Event %s successfully recovered to DLQ (metadata only).", ev.EventID)
+								break
+							}
 
-				if storeErr != nil {
-					log.Fatalf("CRITICAL: Failed to durably persist event %s: %v", ev.EventID, storeErr)
+							// DLQ failed. Best-effort emergency spill to disk.
+							spillBytes, marshalErr := json.Marshal(ev)
+							var spillErr error
+							if marshalErr == nil {
+								spillErr = os.WriteFile("agent_emergency_spill.log", append(spillBytes, '\n'), 0600)
+							}
+
+							if spillErr == nil {
+								log.Printf("CRITICAL: Event %s spilled to disk (BEST-EFFORT) due to uncertain commit and DLQ failure.", ev.EventID)
+								break
+							}
+
+							// Terminal behavior
+							log.Fatalf("FATAL: Event %s uncertain commit, DLQ failed (%v), and emergency spill failed (%v). Terminating.", ev.EventID, dlqErr, spillErr)
+						}
+						
+						// Cancellation-aware bounded wait
+						timer := time.NewTimer(100 * time.Millisecond)
+						select {
+						case <-storeCtx.Done():
+							timer.Stop()
+							if storeCtx == ctx {
+								storeCtx = drainCtx
+								continue
+							}
+							log.Printf("ERROR: Event %s uncertain retry aborted due to global drain expiration.", ev.EventID)
+							// Do not break here directly, let it fall out or loop to evaluate context error
+						case <-timer.C:
+						}
+
+						if storeCtx.Err() != nil && storeCtx != ctx {
+							break
+						}
+						continue
+					}
+
+					// UNKNOWN ERROR
+					log.Printf("CRITICAL: Unknown storage error for event %s: %v", ev.EventID, storeErr)
+					break
 				}
 
 				// Forwarding Eligibility Boundary
-				fwd.Wakeup()
+				if storeErr == nil {
+					fwd.Wakeup()
+				}
 			}
 		}
 	}()

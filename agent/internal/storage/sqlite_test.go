@@ -426,3 +426,86 @@ func TestStorage_EventIDOwnership(t *testing.T) {
 		t.Errorf("EventID mutated during idempotent Store")
 	}
 }
+
+func TestStore_UncertainOutcome(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	s := NewSQLiteStorage(dbPath, "", 1024*1024*10)
+	s.Init(context.Background())
+	defer s.Close()
+
+	ev := &events.CanonicalEvent{
+		EventID:  "uncertain-test-1",
+		Severity: "INFO",
+		Source:   "uncertain",
+	}
+
+	// Inject fault to simulate uncertain commit outcome
+	faultCount := 0
+	s.testFaultInjectCommit = func() error {
+		faultCount++
+		if faultCount == 1 {
+			// Fail the first commit to simulate ambiguity
+			return errors.New("simulated I/O error during commit")
+		}
+		// Second attempt succeeds
+		return nil
+	}
+
+	// 1st attempt should fail with ErrStoreUncertain
+	err := s.Store(context.Background(), ev)
+	if err == nil {
+		t.Fatalf("Expected Store to fail due to injected fault")
+	}
+	if !errors.Is(err, ErrStoreUncertain) {
+		t.Errorf("Expected ErrStoreUncertain, got %v", err)
+	}
+
+	// 2nd attempt (Retry) should succeed
+	err = s.Store(context.Background(), ev)
+	if err != nil {
+		t.Fatalf("Expected retry to succeed, got %v", err)
+	}
+
+	if faultCount != 2 {
+		t.Errorf("Expected test fault hook to be called twice, got %d", faultCount)
+	}
+
+	// Verify exactly one durable record was created despite the uncertain outcome and retry
+	var count int
+	s.db.QueryRow("SELECT count(*) FROM events WHERE event_id = ?", ev.EventID).Scan(&count)
+	if count != 1 {
+		t.Errorf("Expected exactly 1 durable event, got %d", count)
+	}
+}
+
+func TestStore_EventIDPreservation(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	s := NewSQLiteStorage(dbPath, "", 1024*1024*10)
+	s.Init(context.Background())
+	defer s.Close()
+
+	originalID := "exact-preservation-123"
+	ev := &events.CanonicalEvent{
+		EventID:  originalID,
+		Severity: "INFO",
+		Source:   "preservation",
+	}
+
+	err := s.Store(context.Background(), ev)
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	retrieved, err := s.GetPendingEvents(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("GetPendingEvents failed: %v", err)
+	}
+	if len(retrieved) != 1 {
+		t.Fatalf("Expected 1 pending event, got %d", len(retrieved))
+	}
+	if retrieved[0].EventID != originalID {
+		t.Errorf("EventID modified during retrieval. Expected %s, got %s", originalID, retrieved[0].EventID)
+	}
+}

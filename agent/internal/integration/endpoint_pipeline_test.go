@@ -102,13 +102,11 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 			ev.SiteID = cfg.SiteID
 			ev.AssetID = deviceID
 
-			storeCtx, storeCancel := context.WithTimeout(context.Background(), 2*time.Second)
-			if err := db.Store(storeCtx, ev); err != nil {
+			// Replace arbitrary timeout with test context to simulate normal operation backpressure
+			if err := db.Store(ctx, ev); err != nil {
 				t.Errorf("Store failed: %v", err)
-				storeCancel()
 				continue
 			}
-			storeCancel()
 
 			fwd.Wakeup()
 

@@ -36,6 +36,8 @@ type SQLiteStorage struct {
 
 	maintenanceCancel context.CancelFunc
 	maintenanceWg     sync.WaitGroup
+
+	testFaultInjectCommit func() error // unexported test hook
 }
 
 func NewSQLiteStorage(dbPath, identityPath string, quotaBytes int64) *SQLiteStorage {
@@ -288,6 +290,12 @@ func (s *SQLiteStorage) Store(ctx context.Context, event *events.CanonicalEvent)
 	_, err = tx.ExecContext(ctx, "UPDATE agent_state SET next_seq_no = next_seq_no + 1 WHERE id = 1")
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
+	}
+
+	if s.testFaultInjectCommit != nil {
+		if err := s.testFaultInjectCommit(); err != nil {
+			return fmt.Errorf("%w: test injected fault: %v", ErrStoreUncertain, err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
