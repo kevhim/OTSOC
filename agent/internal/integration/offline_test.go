@@ -39,6 +39,7 @@ func TestOfflineSync_Integration(t *testing.T) {
 	}
 
 	ev1 := &events.CanonicalEvent{
+		EventID:  "offline-sync-1",
 		TenantID: "tenant-1",
 		Severity: "INFO",
 		Source:   "offline-test",
@@ -159,6 +160,7 @@ func TestLostResponse_Integration(t *testing.T) {
 	defer store.Close()
 
 	ev := &events.CanonicalEvent{
+		EventID:  "lost-resp-1",
 		TenantID: "tenant-1",
 		Severity: "INFO",
 		Source:   "lost-response-test",
@@ -263,6 +265,7 @@ func TestIntegration_LocalRemovalFailure(t *testing.T) {
 	}
 
 	ev := &events.CanonicalEvent{
+		EventID:  "removal-fail-1",
 		TenantID: "tenant-1",
 		Severity: "INFO",
 		Source:   "removal-failure-test",

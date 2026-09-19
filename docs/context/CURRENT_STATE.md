@@ -14,7 +14,13 @@
 - **Phase 2C.5-A (Endpoint Runtime Wiring & Lifecycle Synchronization)**: COMPLETE (Synchronized shutdown sequence and pipeline draining to prevent race conditions).
 - **Phase 2C.5-B/C (Integration tests & Next steps)**: COMPLETE (Endpoint-to-Server pipeline verified).
 - **Phase 2C (Overall)**: COMPLETE
-- **Phase 2D (Filesystem Telemetry)**: OPEN
+- **Phase 2D (Filesystem Telemetry)**: COMPLETE
+- **Phase 2E.1 (Inventory Collector)**: COMPLETE
+- **Phase 2E.2 (Network Collector)**: COMPLETE
+- **Phase 2E.3.1 (Windows USB)**: COMPLETE (Physical Win32 events captured via real-host testing)
+- **Phase 2E.3.2 (Linux USB)**: COMPLETE (Real-Host Validated)
+- **Phase 2E.4 (Cross-source)**: NOT STARTED
+- **Phase 3**: NOT STARTED
 
 ## Completed Phase 2B Features
 - SQLite Durability for events (atomic inserts, offline queuing).
@@ -28,17 +34,16 @@
 - Storage quota is configurable at storage initialization, but a complete dynamic runtime configuration/policy system is not yet implemented.
 - **Windows Process Collector**: `CommandLine` is unavailable in this phase (Phase 2C.3) because it requires brittle PEB reading.
 - **Windows Process Collector**: No ETW (real-time event-driven) implementation yet; strictly snapshot/reconciliation based.
-- No real-host validation performed.
+- No real-host validation performed for network and inventory beyond unit/integration tests.
+- **Linux USB Collector**: Verified on real host. Cannot be automatically validated in standard CI without a hardware-in-the-loop Linux VM.
 - No remote deployment E2E performed.
 
 ## Next Approved Task
-- Phase 2D — Filesystem Telemetry (Audit & Implementation Scope)
+- Pending Assignment
 
-## Forbidden Components (DO NOT implement until 2C or later)
-- Process collectors (further modification without permission)
-- Network collectors
-- USB collection
-- Inventory
+## Forbidden Components (DO NOT implement until explicitly started)
+- Phase 2E.4 (Do NOT start 2E.4)
+- Phase 3 (Do NOT start Phase 3)
 - Governor
 - Service packaging
 - Detection engine

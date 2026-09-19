@@ -24,13 +24,15 @@ var (
 	procTranslateMessage             = user32.NewProc("TranslateMessage")
 	procDispatchMessageW             = user32.NewProc("DispatchMessageW")
 	procPostMessageW                 = user32.NewProc("PostMessageW")
+	procPostQuitMessage              = user32.NewProc("PostQuitMessage")
 	procRegisterDeviceNotificationW  = user32.NewProc("RegisterDeviceNotificationW")
 	procUnregisterDeviceNotification = user32.NewProc("UnregisterDeviceNotification")
 )
 
 const (
-	WM_DEVICECHANGE             = 0x0219
+	WM_DESTROY                  = 0x0002
 	WM_CLOSE                    = 0x0010
+	WM_DEVICECHANGE             = 0x0219
 	DBT_DEVICEARRIVAL           = 0x8000
 	DBT_DEVICEREMOVECOMPLETE    = 0x8004
 	DBT_DEVTYP_DEVICEINTERFACE  = 0x00000005
@@ -109,8 +111,10 @@ func defaultStartOSWatcher(ctx context.Context, out chan<- USBEvent) error {
 
 	errCh := make(chan error, 1)
 	hwndCh := make(chan syscall.Handle, 1)
+	loopDone := make(chan struct{})
 
 	go func() {
+		defer close(loopDone)
 		className, err := syscall.UTF16PtrFromString("RedCyberFoxUSBWatcher")
 		if err != nil {
 			errCh <- err
@@ -194,6 +198,8 @@ func defaultStartOSWatcher(ctx context.Context, out chan<- USBEvent) error {
 	// Safely post a message to wake up GetMessageW and terminate the loop
 	procPostMessageW.Call(uintptr(hwnd), WM_CLOSE, 0, 0)
 
+	<-loopDone // Wait for worker goroutine to exit cleanly
+
 	return nil
 }
 
@@ -242,6 +248,9 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam uintptr, lParam unsafe.Poin
 		}
 	case WM_CLOSE:
 		procDestroyWindow.Call(uintptr(hwnd))
+		return 0
+	case WM_DESTROY:
+		procPostQuitMessage.Call(0)
 		return 0
 	}
 

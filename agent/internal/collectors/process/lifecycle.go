@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"redcyberfox/pkg/events"
 )
 
@@ -177,7 +179,8 @@ func (le *LifecycleEngine) emit(ctx context.Context, inst *Instance, action stri
 	}
 
 	event := &events.CanonicalEvent{
-		// SeqNo and EventID are left empty per durability requirement;
+		EventID: uuid.New().String(),
+		// SeqNo is left empty per durability requirement;
 		// Storage.Store() owns these transactionally.
 		OccurredAt:    time.Now().UTC(),
 		Source:        EventSource,

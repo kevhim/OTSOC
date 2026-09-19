@@ -75,8 +75,8 @@ func TestLifecycleEngine_NewProcess(t *testing.T) {
 	if evs[0].Category != EventCategory || evs[0].Source != EventSource {
 		t.Errorf("expected source/category to match constants")
 	}
-	if evs[0].SeqNo != 0 || evs[0].EventID != "" {
-		t.Errorf("expected unassigned seq_no and event_id (assigned by Storage)")
+	if evs[0].SeqNo != 0 || evs[0].EventID == "" {
+		t.Errorf("expected unassigned seq_no (assigned by Storage) and assigned event_id (assigned by Collector)")
 	}
 }
 

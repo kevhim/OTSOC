@@ -8,7 +8,13 @@ Phase 2C.2 - COMPLETE
 Phase 2C.3 - COMPLETE
 Phase 2C.4 - COMPLETE
 Phase 2C (Overall) - COMPLETE
-Phase 2D - OPEN
+Phase 2D - COMPLETE
+Phase 2E.1 (Inventory) - COMPLETE
+Phase 2E.2 (Network) - COMPLETE
+Phase 2E.3.1 (Windows USB) - COMPLETE
+Phase 2E.3.2 (Linux USB) - COMPLETE
+Phase 2E.4 (Cross-source) - NOT STARTED
+Phase 3 - NOT STARTED
 
 ## Notes
 - Phase 2A provides the robust Agent-Server core.
