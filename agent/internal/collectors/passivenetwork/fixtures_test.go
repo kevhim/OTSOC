@@ -112,3 +112,16 @@ func buildEthernetVLANIPv4TCP(srcMAC, dstMAC net.HardwareAddr, vlanID uint16, sr
 	res = append(res, tcp...)
 	return res
 }
+
+// buildModbusTCPPayload creates an MBAP + PDU payload byte slice.
+func buildModbusTCPPayload(txID, protoID uint16, unitID, fc uint8, funcData []byte) []byte {
+	length := uint16(1 + 1 + len(funcData)) // UnitID (1) + FC (1) + data
+	buf := make([]byte, 7+1+len(funcData))
+	binary.BigEndian.PutUint16(buf[0:2], txID)
+	binary.BigEndian.PutUint16(buf[2:4], protoID)
+	binary.BigEndian.PutUint16(buf[4:6], length)
+	buf[6] = unitID
+	buf[7] = fc
+	copy(buf[8:], funcData)
+	return buf
+}

@@ -186,7 +186,10 @@ func TestPassiveNetworkPipeline_Integration(t *testing.T) {
 	if ev.SeqNo == 0 {
 		t.Errorf("Expected SeqNo > 0 assigned by SQLite, got 0")
 	}
-	if ev.Metadata["confidence"] != "inferred" {
-		t.Errorf("Expected confidence 'inferred', got %v", ev.Metadata["confidence"])
+	if ev.Metadata["confidence"] != "known" {
+		t.Errorf("Expected confidence 'known' from valid Modbus application framing, got %v", ev.Metadata["confidence"])
+	}
+	if ev.Metadata["modbus_function_name"] != "read_holding_registers" {
+		t.Errorf("Expected function 'read_holding_registers', got %v", ev.Metadata["modbus_function_name"])
 	}
 }

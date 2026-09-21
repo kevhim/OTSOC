@@ -109,59 +109,62 @@
 - **AC-6:** Uncertain recovery never fabricates a new event identity.
 
 ## Current Development Phase
-**Phase 3.1A (OT-Safe Passive Capture & Observation Foundation)** - FOUNDATION VALIDATED (IN PROGRESS)
+**Phase 3.1B (Passive Industrial Protocol Identification & Modbus/TCP Foundation)** - FOUNDATION VALIDATED (IN PROGRESS)
 
-- **Current Git Branch**: `feature/phase-3.1a-passive-observation`
+- **Current Git Branch**: `feature/phase-3.1b-modbus-passive-decoder`
 - **Current Commit Hash**: `HEAD`
 
 ## Phase Status
 - **Phase 1**: COMPLETE
 - **Phase 2 (Overall)**: COMPLETE / FROZEN
 - **Phase 2E.4 (Cross-Source Regression & Data Integrity)**: COMPLETE
-- **Phase 3.1A (Passive Capture & Observation Foundation)**: IN PROGRESS / FOUNDATION VALIDATED
-- **Phase 3.1B+ (Protocol Decoders, Asset Graph, Discovery)**: PENDING / NOT STARTED
+- **Phase 3.1A (Passive Capture & Observation Foundation)**: COMPLETE / FROZEN
+- **Phase 3.1B (Modbus/TCP Foundation & Evidence Identification)**: IN PROGRESS (FOUNDATION VALIDATED)
+- **Phase 3.1C+ (Additional OT Decoders, Asset Graph, Discovery)**: PENDING / NOT STARTED
 
 ## Phase 3.1A Implementation Record
+- Status: COMPLETE / FROZEN
+- Boundary: Replaceable `CaptureAdapter` and offline `ReplayAdapter`.
+- Decoders: Ethernet II, 802.1Q VLAN, ARP, IPv4, TCP, UDP, ICMP.
+- Verification: 19 unit tests, full pipeline integration test.
+
+## Phase 3.1B Implementation Record
 
 ### 1. Purpose & Scope
-Phase 3.1A establishes the smallest safe foundation for passive OT network discovery:
-- **Boundary:** Replaceable `CaptureAdapter` interface isolating raw observation sources from agent logic.
-- **Offline Determinism:** `ReplayAdapter` feeding pre-recorded/mock raw observations without network sockets, root privileges, or cloud services.
-- **Normalization:** Passive decoding of Ethernet II, 802.1Q VLAN, ARP, IPv4, TCP, UDP, and ICMP metadata.
-- **Protocol Extension Points:** `ProtocolIdentifier` interface with `DefaultProtocolIdentifier` for Modbus (502), DNP3 (20000), EtherNet/IP (44818), and S7 (102).
-- **CanonicalEvent Integration:** Maps normalized observations to `events.CanonicalEvent` with `Category: "network"`, `Source: "passive_network"`, single provenance `event_id`, and bounded metadata.
-- **Durable Edge Pipeline Integration:** Verified end-to-end integration via `centralEvents` -> SQLite WAL storage -> forwarder.
+Phase 3.1B establishes evidence-based industrial protocol decoding for Modbus/TCP on top of the Phase 3.1A passive observation foundation:
+- **MBAP Parsing:** Decodes Transaction ID, Protocol ID, Length, Unit ID, Function Code.
+- **Evidence-Based Confidence:** Elevates from `ConfidenceInferred` (port 502 candidate) to `ConfidenceKnown` only when valid MBAP framing (Protocol ID == 0, Length >= 2) is observed.
+- **Function Code Handling:** Recognizes standard Modbus function codes (FC 1, 2, 3, 4, 5, 6, 15, 16) and exception responses (FC >= 0x80) without inferring asset roles.
+- **Direction Heuristic:** Infers intra-packet direction (`request`, `response`, or `unknown`) based on port orientation and exception bit without maintaining a global stateful transaction map.
+- **Explicit Invariant:** `REQUEST/RESPONSE CORRELATION = FUTURE PHASE`.
 
-### 2. Non-Goals (Strictly Out of Scope for 3.1A)
-- Full Modbus, DNP3, EtherNet/IP, or S7 application-layer parsers.
-- Asset graph or device inventory persistence.
-- Behavioral baseline engine, risk engine, or cross-source correlation.
-- Active probing, port scanning, ARP scanning, pinging, TCP/UDP connect checks.
-- Packet crafting, injection, or PLC polling.
-- Automatic or disruptive OT response.
+### 2. Non-Goals (Strictly Out of Scope for 3.1B)
+- Active Modbus requests, polling, or PLC state querying.
+- Protocol fuzzing or packet crafting/injection.
+- Port scanning or active host probing.
+- Decoders for DNP3, EtherNet/IP, or S7 (extension points remain inferred).
+- Asset graph or device inventory persistence (Purdue level, PLC identity).
+- Automated or disruptive OT response.
 
 ### 3. Passive Safety Invariant
-The passive network observation component is **STRICTLY PASSIVE**:
-- No sockets configured with write/send capabilities (`net.Dial`, `os/exec`, etc. prohibited).
-- No discovery probes, pings, scans, or PLC queries.
-- Static reflection tests (`TestSafety_NoActiveTransmissionCapability`) and source inspections guarantee that no active network transmission capability exists in the package.
+- STRICTLY PASSIVE: Zero network transmission, zero socket writing, zero probing.
+- Decoder operates exclusively on already-observed byte slices.
 
-### 4. Normalized Observation & Confidence Model
-- **Unknown values:** Preserved strictly as unknown/nil.
-- **No Fabricated Identity:** Port 502 / 20000 / 44818 / 102 yields `ConfidenceInferred` protocol hints ONLY. No asset identity, vendor, or device role (e.g. "PLC") is inferred without verifiable application-layer evidence.
-- **Malformed Frames:** Truncated or invalid frames are flagged explicitly (`QualityMalformedFrame`, `QualityTruncatedPacket`) with `ConfidenceUnsupported`, preventing silent reinterpretation.
+### 4. False-Positive Safety & Confidence Semantics
+- TCP 502 with non-Modbus payload (e.g. HTTP GET or random bytes) strictly fails MBAP validation, emits `MODBUS_INVALID_MBAP`, and NEVER yields `ConfidenceKnown`.
+- Valid Modbus traffic produces protocol evidence but **NEVER** fabricates an asset role or labels an endpoint as a PLC.
 
-### 5. Resource Bounds & Lifecycle
-- **Bounded Buffering:** Internal raw channel bounded (default 100).
-- **Natural Backpressure:** Operates with `DropPolicyBlock` to avoid silent observation drops; bounded drop policy optionally available with explicit metric exposure.
-- **Zero Memory Amplification:** Raw packet byte payloads are inspected synchronously and discarded; only bounded scalar metadata is retained in CanonicalEvents.
-- **Goroutine Leak Proof:** Worker goroutines terminate cleanly on context cancellation; verified via `TestCollector_NoGoroutineLeak`.
+### 5. Malformed Input & Bounded Resource Model
+- **Bounds-Checked Parsing:** All slice offsets and lengths are strictly bounds-checked; parser never panics on arbitrary or malformed input (tested via fuzz inputs).
+- **Quality Flags:** Malformed frames emit explicit quality flags (`MODBUS_INVALID_MBAP`, `MODBUS_TRUNCATED_PAYLOAD`, `MODBUS_UNSUPPORTED_FUNCTION`).
+- **Memory Boundedness:** No heap byte slices or raw packet payloads are stored in `CanonicalEvent.Metadata`.
+- **Zero Stateful Leaks:** No transaction correlation tables or goroutines per packet.
 
-### 6. Test Evidence
-- 19 unit tests in `passivenetwork` covering adapter replay, cancellation, normalization, malformed frame flags, inferred confidence, identity preservation, burst behavior, goroutine leak checks, and transmission prevention.
-- Integration test in `passivenetwork_pipeline_test.go` confirming durable SQLite storage and forwarder dispatch.
-- Broad test suite (`go test ./...`) passing across all packages.
+### 6. Event Integration & AC Verification
+- `event_id` is preserved end-to-end and generated strictly once by the owning collector.
+- Meets AC-1 through AC-6. All unit tests, integration tests, and repository tests pass.
 
 ## Next Approved Task
-- Phase 3.1B: Focused Modbus Application-Layer Decoder & Evidence Validation (PENDING)
+- Phase 3.1C: Passive DNP3 / EtherNet-IP Identification & Framing Decoders (PENDING)
+
 
