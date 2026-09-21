@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"flag"
 	"log"
 	"os"
@@ -21,6 +19,7 @@ import (
 	"redcyberfox/agent/internal/forwarder"
 	"redcyberfox/agent/internal/health"
 	"redcyberfox/agent/internal/identity"
+	"redcyberfox/agent/internal/ingestion"
 	"redcyberfox/agent/internal/storage"
 	"redcyberfox/pkg/events"
 )
@@ -126,124 +125,33 @@ func main() {
 		}
 	}()
 
-	// 8. Central Event Ingestion Loop
+	// 8. Central Event Ingestion Loop (uses shared production Ingestion Engine)
+	ingestEngine := ingestion.NewEngine(db, ingestion.Config{
+		TenantID: cfg.TenantID,
+		SiteID:   cfg.SiteID,
+		AssetID:  id.DeviceID,
+		OnCommitted: func(ev *events.CanonicalEvent) {
+			fwd.Wakeup()
+		},
+	})
+
 	var ingestWg sync.WaitGroup
 	ingestWg.Add(1)
-
 	go func() {
 		defer ingestWg.Done()
+		ingestEngine.Run(ctx, drainCtx, centralEvents)
+	}()
 
+	go func() {
 		for {
 			select {
-			case sig := <-healthCh:
-				log.Printf("Internal pipeline received health signal: Type=%s", sig.Type)
-			case ev, ok := <-centralEvents:
+			case <-ctx.Done():
+				return
+			case sig, ok := <-healthCh:
 				if !ok {
-					// centralEvents channel closed, drain complete, exit loop
 					return
 				}
-				// Enrichment Boundary
-				ev.TenantID = cfg.TenantID
-				ev.SiteID = cfg.SiteID
-				ev.AssetID = id.DeviceID
-
-				// Local Durability Boundary
-				storeCtx := ctx
-				if ctx.Err() != nil {
-					storeCtx = drainCtx
-				}
-
-				var storeErr error
-				attempts := 0
-				for {
-					storeErr = db.Store(storeCtx, ev)
-
-					// CASE 1: COMMITTED (Success)
-					if storeErr == nil {
-						break
-					}
-
-					// CASE 2: FAILED BEFORE COMMIT
-					if errors.Is(storeErr, storage.ErrStoreFailedBeforeCommit) {
-						if errors.Is(storeErr, context.Canceled) && storeCtx == ctx {
-							// In-flight event interrupted by lifecycle cancellation.
-							// Retry under global drain context using the SAME event_id.
-							storeCtx = drainCtx
-							continue
-						} else if errors.Is(storeErr, context.Canceled) || errors.Is(storeErr, context.DeadlineExceeded) {
-							// Drain deadline expired. Non-retryable. Explicit terminal handling.
-							log.Printf("ERROR: Event %s explicitly dropped (global drain deadline expired): %v", ev.EventID, storeErr)
-						} else {
-							// Non-retryable cause (e.g. quota full)
-							log.Printf("ERROR: Event %s explicitly dropped (non-retryable failure before commit): %v", ev.EventID, storeErr)
-						}
-						break
-					}
-
-					// CASE 3: UNCERTAIN COMMIT
-					if errors.Is(storeErr, storage.ErrStoreUncertain) {
-						attempts++
-						// We use 3 attempts to ride out transient IO stutters.
-						// Persistent uncertain errors beyond 3 attempts indicate severe disk/DB issues.
-						if attempts >= 3 {
-							log.Printf("CRITICAL: Event %s uncertain commit after 3 attempts. Attempting recovery.", ev.EventID)
-
-							// Recovery metadata: move to DLQ.
-							// Bounded by active storeCtx so it cannot escape global shutdown deadline.
-							dlqCtx, dlqCancel := context.WithTimeout(storeCtx, 2*time.Second)
-							dlqErr := db.MoveToDLQ(dlqCtx, ev, "uncertain_commit", storeErr.Error())
-							dlqCancel()
-
-							if dlqErr == nil {
-								log.Printf("INFO: Event %s successfully recovered to DLQ (metadata only).", ev.EventID)
-								break
-							}
-
-							// DLQ failed. Best-effort emergency spill to disk.
-							spillBytes, marshalErr := json.Marshal(ev)
-							var spillErr error
-							if marshalErr == nil {
-								spillErr = os.WriteFile("agent_emergency_spill.log", append(spillBytes, '\n'), 0600)
-							}
-
-							if spillErr == nil {
-								log.Printf("CRITICAL: Event %s spilled to disk (BEST-EFFORT) due to uncertain commit and DLQ failure.", ev.EventID)
-								break
-							}
-
-							// Terminal behavior
-							log.Fatalf("FATAL: Event %s uncertain commit, DLQ failed (%v), and emergency spill failed (%v). Terminating.", ev.EventID, dlqErr, spillErr)
-						}
-
-						// Cancellation-aware bounded wait
-						timer := time.NewTimer(100 * time.Millisecond)
-						select {
-						case <-storeCtx.Done():
-							timer.Stop()
-							if storeCtx == ctx {
-								storeCtx = drainCtx
-								continue
-							}
-							log.Printf("ERROR: Event %s uncertain retry aborted due to global drain expiration.", ev.EventID)
-							// Do not break here directly, let it fall out or loop to evaluate context error
-						case <-timer.C:
-						}
-
-						if storeCtx.Err() != nil && storeCtx != ctx {
-							break
-						}
-						continue
-					}
-
-					// UNKNOWN ERROR
-					log.Printf("CRITICAL: Unknown storage error for event %s: %v", ev.EventID, storeErr)
-					break
-				}
-
-				// Forwarding Eligibility Boundary
-				if storeErr == nil {
-					fwd.Wakeup()
-				}
+				log.Printf("Internal pipeline received health signal: Type=%s", sig.Type)
 			}
 		}
 	}()

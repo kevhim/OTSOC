@@ -509,3 +509,36 @@ func TestStore_EventIDPreservation(t *testing.T) {
 		t.Errorf("EventID modified during retrieval. Expected %s, got %s", originalID, retrieved[0].EventID)
 	}
 }
+
+func TestStore_ErrorWrapping_PreservesUnderlyingCause(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	s := NewSQLiteStorage(dbPath, "", 1024*1024*10)
+	s.Init(context.Background())
+	defer s.Close()
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	ev := &events.CanonicalEvent{
+		EventID:  "canceled-test-1",
+		Severity: "INFO",
+		Source:   "cancellation",
+	}
+
+	err := s.Store(canceledCtx, ev)
+	if err == nil {
+		t.Fatalf("Expected Store to fail on canceled context")
+	}
+
+	// Invariant from Section 4:
+	// errors.Is(err, ErrStoreFailedBeforeCommit) must be true
+	// AND errors.Is(err, context.Canceled) must also be true
+	if !errors.Is(err, ErrStoreFailedBeforeCommit) {
+		t.Errorf("Expected errors.Is(err, ErrStoreFailedBeforeCommit) to be true, got %v", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Expected errors.Is(err, context.Canceled) to be true, got %v", err)
+	}
+}
+

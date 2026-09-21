@@ -211,14 +211,12 @@ func (s *SQLiteStorage) Store(ctx context.Context, event *events.CanonicalEvent)
 	defer s.mu.Unlock()
 
 	if s.db == nil {
-		return errors.New("DEGRADED_STORAGE: DB not initialized")
+		return fmt.Errorf("%w: DB not initialized", ErrStoreFailedBeforeCommit)
 	}
 
 	if event.EventID == "" {
 		return fmt.Errorf("%w: event_id must not be empty", ErrStoreFailedBeforeCommit)
 	}
-
-	isNewEventID := false
 
 	// Estimate payload size for quota enforcement
 	estBytes, _ := json.Marshal(event)
@@ -228,54 +226,53 @@ func (s *SQLiteStorage) Store(ctx context.Context, event *events.CanonicalEvent)
 		if event.Severity == "CRITICAL" || event.Severity == "FATAL" {
 			log.Printf("CRITICAL TELEMETRY LOSS: storage emergency, unable to persist event: %v", err)
 		}
-		return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
+		return fmt.Errorf("%w: %w", ErrStoreFailedBeforeCommit, err)
 	}
 
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
+		return fmt.Errorf("%w: %w", ErrStoreFailedBeforeCommit, err)
 	}
 	defer tx.Rollback()
 
-	if !isNewEventID {
-		var existingPayload string
-		var existingSeqNo int64
-		err := tx.QueryRowContext(ctx, "SELECT seq_no, payload FROM events WHERE event_id = ?", event.EventID).Scan(&existingSeqNo, &existingPayload)
-		if err == nil {
-			event.SeqNo = existingSeqNo
-			payloadBytes, _ := event.Serialize()
-			if existingPayload == string(payloadBytes) {
-				return nil // Idempotent success
-			}
-			return fmt.Errorf("%w: integrity error: event_id %s already exists with different payload", ErrStoreFailedBeforeCommit, event.EventID)
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
+	// Idempotency checks
+	var existingPayload string
+	var existingSeqNo int64
+	err = tx.QueryRowContext(ctx, "SELECT seq_no, payload FROM events WHERE event_id = ?", event.EventID).Scan(&existingSeqNo, &existingPayload)
+	if err == nil {
+		event.SeqNo = existingSeqNo
+		payloadBytes, _ := event.Serialize()
+		if existingPayload == string(payloadBytes) {
+			return nil // Idempotent success
 		}
+		return fmt.Errorf("%w: integrity error: event_id %s already exists with different payload", ErrStoreFailedBeforeCommit, event.EventID)
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %w", ErrStoreFailedBeforeCommit, err)
+	}
 
-		err = tx.QueryRowContext(ctx, "SELECT seq_no, payload FROM dead_letter_queue WHERE event_id = ?", event.EventID).Scan(&existingSeqNo, &existingPayload)
-		if err == nil {
-			event.SeqNo = existingSeqNo
-			payloadBytes, _ := event.Serialize()
-			if existingPayload == string(payloadBytes) {
-				return nil // Idempotent success
-			}
-			return fmt.Errorf("%w: integrity error: event_id %s already in DLQ with different payload", ErrStoreFailedBeforeCommit, event.EventID)
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
+	err = tx.QueryRowContext(ctx, "SELECT seq_no, payload FROM dead_letter_queue WHERE event_id = ?", event.EventID).Scan(&existingSeqNo, &existingPayload)
+	if err == nil {
+		event.SeqNo = existingSeqNo
+		payloadBytes, _ := event.Serialize()
+		if existingPayload == string(payloadBytes) {
+			return nil // Idempotent success
 		}
+		return fmt.Errorf("%w: integrity error: event_id %s already in DLQ with different payload", ErrStoreFailedBeforeCommit, event.EventID)
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %w", ErrStoreFailedBeforeCommit, err)
 	}
 
 	var nextSeqNo int64
 	err = tx.QueryRowContext(ctx, "SELECT next_seq_no FROM agent_state WHERE id = 1").Scan(&nextSeqNo)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
+		return fmt.Errorf("%w: %w", ErrStoreFailedBeforeCommit, err)
 	}
 
 	event.SeqNo = nextSeqNo
 
 	payloadBytes, err := event.Serialize()
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
+		return fmt.Errorf("%w: %w", ErrStoreFailedBeforeCommit, err)
 	}
 	payloadStr := string(payloadBytes)
 
@@ -284,22 +281,22 @@ func (s *SQLiteStorage) Store(ctx context.Context, event *events.CanonicalEvent)
 		VALUES (?, ?, ?, ?, ?, 'PENDING')
 	`, event.EventID, s.deviceID, event.SeqNo, event.Severity, payloadStr)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
+		return fmt.Errorf("%w: %w", ErrStoreFailedBeforeCommit, err)
 	}
 
 	_, err = tx.ExecContext(ctx, "UPDATE agent_state SET next_seq_no = next_seq_no + 1 WHERE id = 1")
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrStoreFailedBeforeCommit, err)
+		return fmt.Errorf("%w: %w", ErrStoreFailedBeforeCommit, err)
 	}
 
 	if s.testFaultInjectCommit != nil {
 		if err := s.testFaultInjectCommit(); err != nil {
-			return fmt.Errorf("%w: test injected fault: %v", ErrStoreUncertain, err)
+			return fmt.Errorf("%w: test injected fault: %w", ErrStoreUncertain, err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("%w: %v", ErrStoreUncertain, err)
+		return fmt.Errorf("%w: %w", ErrStoreUncertain, err)
 	}
 
 	return nil

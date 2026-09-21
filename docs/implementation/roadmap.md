@@ -12,21 +12,23 @@ This roadmap tracks the incremental delivery of the RedCyberFox OT SOC platform.
 - Free stack: Go, PostgreSQL, Valkey, React
 - Exit / proof: One test endpoint produces a visible alert end-to-end.
 
-## Phase 2 — Endpoint Alpha
+## Phase 2 — Endpoint Alpha: COMPLETE / FROZEN
 
-2A — Agent Foundation: COMPLETE
-2B — SQLite + Offline Sync: COMPLETE
-2C — Process Telemetry: COMPLETE
-2D — Filesystem Telemetry: COMPLETE
-2E.1 — Inventory: COMPLETE
-2E.2 — Network: COMPLETE
-2E.3.1 — Windows USB: COMPLETE
-2E.3.2 — Linux USB: COMPLETE
-2E.4 — Cross-source: NOT STARTED
+- **2A — Agent Foundation**: COMPLETE
+- **2B — SQLite + Offline Sync**: COMPLETE / FROZEN
+- **2C — Process Telemetry**: COMPLETE
+- **2D — Filesystem Telemetry**: COMPLETE
+- **2E.1 — Inventory**: COMPLETE
+- **2E.2 — Network**: COMPLETE
+- **2E.3.1 — Windows USB**: COMPLETE
+- **2E.3.2 — Linux USB**: COMPLETE
+- **2E.4 — Cross-source Regression & Data Integrity**: COMPLETE / FROZEN
 
-## Future Phases
-- **Phase 3:** Detection Core
-- **Phase 4:** Rural Hardening
+*Note*: The repository contains preparatory work for passive OT sensing (Phase 3.1A/3.1B) recorded as "out-of-sequence preparatory OT sensing work already present in the repository". It is preserved without extension and does not alter the official milestone sequence.
+
+## Future Phases (Authoritative Sequence)
+- **Phase 3:** Detection Core (Official next phase milestone)
+- **Phase 4:** Rural Hardening (Includes Resource Governor; no Phase 2F/2G/2H)
 - **Phase 5:** OT Lab
 - **Phase 6:** Passive OT Sensor
 - **Phase 7:** OT Context
@@ -39,7 +41,7 @@ This roadmap tracks the incremental delivery of the RedCyberFox OT SOC platform.
 
 ## GitHub Milestones / Phase Mapping
 
-GitHub Milestones should map directly to the Phases defined above:
+GitHub Milestones map directly to the Phases defined above:
 
 - Phase 0 — Bootstrap
 - Phase 1 — Vertical Slice
