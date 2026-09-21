@@ -13,8 +13,10 @@ Phase 2E.1 (Inventory) - COMPLETE
 Phase 2E.2 (Network) - COMPLETE
 Phase 2E.3.1 (Windows USB) - COMPLETE
 Phase 2E.3.2 (Linux USB) - COMPLETE
-Phase 2E.4 (Cross-source) - NOT STARTED
-Phase 3 - NOT STARTED
+Phase 2E.4 (Cross-source) - COMPLETE / FROZEN
+Phase 3.1A (Passive Observation Foundation) - IN PROGRESS (Foundation Validated)
+Phase 3.1B+ (Passive Protocol Decoders & Asset Discovery) - NOT STARTED
+Phase 3 (Overall) - IN PROGRESS
 
 ## Notes
 - Phase 2A provides the robust Agent-Server core.
@@ -24,3 +26,6 @@ Phase 3 - NOT STARTED
 - Phase 2C.2 implements the Linux `ProcessCollector` (via `/proc`), extracting process metadata and feeding it to the Lifecycle Engine.
 - Phase 2C.3 implements the Windows `ProcessCollector` (via Toolhelp32 snapshot/reconciliation), feeding the Lifecycle Engine.
 - Phase 2C.4 validates cross-platform semantic equivalence and implements real-host integration constraints.
+- Phase 2E.4 validates broad cross-source regression, SQLite WAL backpressure, bounded drain, and strict event_id provenance.
+- Phase 3.1A establishes the strictly passive network capture boundary, deterministic replay adapter, evidence-preserving normalizer, protocol hint extension points, and CanonicalEvent edge pipeline integration.
+

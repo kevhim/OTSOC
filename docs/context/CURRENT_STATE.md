@@ -108,19 +108,60 @@
 - **AC-5:** Events remaining after the global shutdown deadline enter an explicit, observable terminal state; no event is silently discarded.
 - **AC-6:** Uncertain recovery never fabricates a new event identity.
 
-## Final Status for Phase 2E.4
-- 2E.4 AUDIT: COMPLETE
-- 2E.4 BLOCKER FIXES: IMPLEMENTED
-- 2E.4 FOCUSED TESTS: IMPLEMENTED / VERIFIED
-- 2E.4 BROAD CROSS-SOURCE REGRESSION: COMPLETE
-- 2E.4 COMPLETE: YES
+## Current Development Phase
+**Phase 3.1A (OT-Safe Passive Capture & Observation Foundation)** - FOUNDATION VALIDATED (IN PROGRESS)
+
+- **Current Git Branch**: `feature/phase-3.1a-passive-observation`
+- **Current Commit Hash**: `HEAD`
+
+## Phase Status
+- **Phase 1**: COMPLETE
+- **Phase 2 (Overall)**: COMPLETE / FROZEN
+- **Phase 2E.4 (Cross-Source Regression & Data Integrity)**: COMPLETE
+- **Phase 3.1A (Passive Capture & Observation Foundation)**: IN PROGRESS / FOUNDATION VALIDATED
+- **Phase 3.1B+ (Protocol Decoders, Asset Graph, Discovery)**: PENDING / NOT STARTED
+
+## Phase 3.1A Implementation Record
+
+### 1. Purpose & Scope
+Phase 3.1A establishes the smallest safe foundation for passive OT network discovery:
+- **Boundary:** Replaceable `CaptureAdapter` interface isolating raw observation sources from agent logic.
+- **Offline Determinism:** `ReplayAdapter` feeding pre-recorded/mock raw observations without network sockets, root privileges, or cloud services.
+- **Normalization:** Passive decoding of Ethernet II, 802.1Q VLAN, ARP, IPv4, TCP, UDP, and ICMP metadata.
+- **Protocol Extension Points:** `ProtocolIdentifier` interface with `DefaultProtocolIdentifier` for Modbus (502), DNP3 (20000), EtherNet/IP (44818), and S7 (102).
+- **CanonicalEvent Integration:** Maps normalized observations to `events.CanonicalEvent` with `Category: "network"`, `Source: "passive_network"`, single provenance `event_id`, and bounded metadata.
+- **Durable Edge Pipeline Integration:** Verified end-to-end integration via `centralEvents` -> SQLite WAL storage -> forwarder.
+
+### 2. Non-Goals (Strictly Out of Scope for 3.1A)
+- Full Modbus, DNP3, EtherNet/IP, or S7 application-layer parsers.
+- Asset graph or device inventory persistence.
+- Behavioral baseline engine, risk engine, or cross-source correlation.
+- Active probing, port scanning, ARP scanning, pinging, TCP/UDP connect checks.
+- Packet crafting, injection, or PLC polling.
+- Automatic or disruptive OT response.
+
+### 3. Passive Safety Invariant
+The passive network observation component is **STRICTLY PASSIVE**:
+- No sockets configured with write/send capabilities (`net.Dial`, `os/exec`, etc. prohibited).
+- No discovery probes, pings, scans, or PLC queries.
+- Static reflection tests (`TestSafety_NoActiveTransmissionCapability`) and source inspections guarantee that no active network transmission capability exists in the package.
+
+### 4. Normalized Observation & Confidence Model
+- **Unknown values:** Preserved strictly as unknown/nil.
+- **No Fabricated Identity:** Port 502 / 20000 / 44818 / 102 yields `ConfidenceInferred` protocol hints ONLY. No asset identity, vendor, or device role (e.g. "PLC") is inferred without verifiable application-layer evidence.
+- **Malformed Frames:** Truncated or invalid frames are flagged explicitly (`QualityMalformedFrame`, `QualityTruncatedPacket`) with `ConfidenceUnsupported`, preventing silent reinterpretation.
+
+### 5. Resource Bounds & Lifecycle
+- **Bounded Buffering:** Internal raw channel bounded (default 100).
+- **Natural Backpressure:** Operates with `DropPolicyBlock` to avoid silent observation drops; bounded drop policy optionally available with explicit metric exposure.
+- **Zero Memory Amplification:** Raw packet byte payloads are inspected synchronously and discarded; only bounded scalar metadata is retained in CanonicalEvents.
+- **Goroutine Leak Proof:** Worker goroutines terminate cleanly on context cancellation; verified via `TestCollector_NoGoroutineLeak`.
+
+### 6. Test Evidence
+- 19 unit tests in `passivenetwork` covering adapter replay, cancellation, normalization, malformed frame flags, inferred confidence, identity preservation, burst behavior, goroutine leak checks, and transmission prevention.
+- Integration test in `passivenetwork_pipeline_test.go` confirming durable SQLite storage and forwarder dispatch.
+- Broad test suite (`go test ./...`) passing across all packages.
 
 ## Next Approved Task
-- Phase 3.1: OT-Safe Passive Discovery (PENDING)
+- Phase 3.1B: Focused Modbus Application-Layer Decoder & Evidence Validation (PENDING)
 
-## Forbidden Components (DO NOT implement until explicitly started)
-- Phase 2E.4 broad matrix (Do NOT start 2E.4 regression matrix yet)
-- API Gateway / Forwarder actual network upload.
-- Control mechanisms.
-- Service packaging
-- Detection engine
