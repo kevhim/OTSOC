@@ -42,8 +42,8 @@ type RawObservation struct {
 // Evidence-Preserving Invariant:
 // Unknown or unobserved values MUST remain nil or empty.
 // Values MUST NOT be fabricated. In particular:
-// - Asset identity, vendor, device role, or PLC classification MUST NOT be inferred
-//   merely from IP or port numbers.
+//   - Asset identity, vendor, device role, or PLC classification MUST NOT be inferred
+//     merely from IP or port numbers.
 type NormalizedObservation struct {
 	ObservedAt        time.Time              `json:"observed_at"`
 	Interface         string                 `json:"interface"`
@@ -55,7 +55,7 @@ type NormalizedObservation struct {
 	DstPort           uint16                 `json:"dst_port,omitempty"`
 	TransportProtocol string                 `json:"transport_protocol,omitempty"` // e.g. "TCP", "UDP", "ARP", "ICMP"
 	VLANID            *uint16                `json:"vlan_id,omitempty"`
-	ProtocolHint      string                 `json:"protocol_hint,omitempty"`      // e.g. "modbus", "dnp3", "unknown"
+	ProtocolHint      string                 `json:"protocol_hint,omitempty"` // e.g. "modbus", "dnp3", "unknown"
 	Confidence        ConfidenceLevel        `json:"confidence"`
 	PayloadLength     int                    `json:"payload_length"`
 	Metadata          map[string]interface{} `json:"metadata,omitempty"`

@@ -71,8 +71,8 @@ func buildARP(sha, tha net.HardwareAddr, spa, tpa net.IP, oper uint16) []byte {
 	arp := make([]byte, 28)
 	binary.BigEndian.PutUint16(arp[0:2], 1)      // Ethernet
 	binary.BigEndian.PutUint16(arp[2:4], 0x0800) // IPv4
-	arp[4] = 6                                  // HLEN
-	arp[5] = 4                                  // PLEN
+	arp[4] = 6                                   // HLEN
+	arp[5] = 4                                   // PLEN
 	binary.BigEndian.PutUint16(arp[6:8], oper)
 	copy(arp[8:14], sha)
 	copy(arp[14:18], spa.To4())

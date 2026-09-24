@@ -39,9 +39,9 @@ func buildTestModbusPacket() []byte {
 	copy(ip[16:20], net.ParseIP("192.168.1.100").To4())
 
 	tcp := make([]byte, 28)
-	binary.BigEndian.PutUint16(tcp[0:2], 12345) // Client port
-	binary.BigEndian.PutUint16(tcp[2:4], 502)   // Modbus port
-	tcp[12] = 0x50                              // 20 bytes offset
+	binary.BigEndian.PutUint16(tcp[0:2], 12345)                            // Client port
+	binary.BigEndian.PutUint16(tcp[2:4], 502)                              // Modbus port
+	tcp[12] = 0x50                                                         // 20 bytes offset
 	copy(tcp[20:], []byte{0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03}) // MBAP + read holding registers
 
 	res := append(eth, ip...)

@@ -541,4 +541,3 @@ func TestStore_ErrorWrapping_PreservesUnderlyingCause(t *testing.T) {
 		t.Errorf("Expected errors.Is(err, context.Canceled) to be true, got %v", err)
 	}
 }
-

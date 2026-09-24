@@ -10,11 +10,11 @@ import (
 // It also returns the application payload slice (if any) for protocol inspection.
 //
 // PASSIVE SAFETY & EVIDENCE-PRESERVING RULES:
-// 1. Unknown values MUST remain empty / nil.
-// 2. Malformed or truncated packets MUST NOT be reinterpreted as valid traffic.
-// 3. Asset identity, vendor, or role MUST NOT be fabricated.
-// 4. Memory ownership: The returned payload slice is a sub-slice of raw.Data and MUST NOT
-//    be stored into long-lived structures.
+//  1. Unknown values MUST remain empty / nil.
+//  2. Malformed or truncated packets MUST NOT be reinterpreted as valid traffic.
+//  3. Asset identity, vendor, or role MUST NOT be fabricated.
+//  4. Memory ownership: The returned payload slice is a sub-slice of raw.Data and MUST NOT
+//     be stored into long-lived structures.
 func NormalizeRawObservation(raw RawObservation) (*NormalizedObservation, []byte) {
 	obs := &NormalizedObservation{
 		ObservedAt:   raw.Timestamp,
