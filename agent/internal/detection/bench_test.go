@@ -3,6 +3,7 @@ package detection
 import (
 	"context"
 	"testing"
+	"time"
 
 	"redcyberfox/agent/internal/interfaces"
 	"redcyberfox/pkg/events"
@@ -27,6 +28,9 @@ func BenchmarkDetectionEngine(b *testing.B) {
 	ev := &events.CanonicalEvent{
 		EventID:       "bench-123",
 		TenantID:      "tenant-bench",
+		SiteID:        "site-bench",
+		Source:        "linux_process",
+		OccurredAt:    time.Now().UTC(),
 		Category:      "process_start",
 		SchemaVersion: events.CurrentSchemaVersion,
 		Metadata: map[string]interface{}{

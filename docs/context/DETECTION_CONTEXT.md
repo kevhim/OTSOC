@@ -41,7 +41,7 @@ The edge agent now implements a lightweight, deterministic, synchronous local de
 - The Canonical Event currently lacks a reliable hash field, so a hash-based rule (`LOCAL-IOC-HASH-001`) could not be implemented. This is a documented schema/input gap.
 
 ### Synchronous Execution
-- Benchmark evidence (~7.8 microseconds per evaluation) supports maintaining a purely synchronous evaluation pipeline for the current deterministic rule set. No async queues or worker pools are required yet.
+- Benchmark evidence (~8.35 microseconds or 8355 ns/op, 7194 B/op, 100 allocs/op on Windows/amd64 13th Gen Intel i7) supports maintaining a purely synchronous evaluation pipeline for the current deterministic rule set. No async queues or worker pools are required yet.
 
 ### Resource Model & Passive/Offline Guarantees
 - Bounded memory usage. No asynchronous workers or unbounded queues yet.

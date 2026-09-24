@@ -1,6 +1,6 @@
 # Current State
 
-- **Current Git Branch**: `feature/phase-2e-4-final-closure`
+- **Current Git Branch**: `feature/phase-3-gate-4-yara-x`
 - **Current Commit Hash**: `HEAD`
 
 ## Phase Status
@@ -97,4 +97,4 @@
 - **AC-6 (No Fabricated DLQ Identity)**: PASS. DLQ recovery strictly preserves original `event_id`.
 
 ## Known Platform Limitations
-- **Race Detector Toolchain**: `go test -race ./...` on local Windows MinGW fails due to toolchain limitation (`cc1.exe: sorry, unimplemented: 64-bit mode not compiled in`). Verified passing in standard 64-bit Linux CI.
+- **Race Detector Toolchain**: `go test -race ./...` on local Windows MinGW fails due to toolchain limitation (`cc1.exe: sorry, unimplemented: 64-bit mode not compiled in`). Linux CI race validation added to CI workflow and pending verification.

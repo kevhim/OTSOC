@@ -23,9 +23,9 @@ func TestPhase3_DetectionPipeline_PositiveAndNegative(t *testing.T) {
 	}
 
 	detEngine := detection.NewEngine(db, []detection.Rule{
-		&detection.TestIOCRule{},
+		&TestIOCRule{},
 		&detection.RealIOCExecRule{},
-		&detection.PanicTestRule{},
+		&PanicTestRule{},
 	})
 
 	ingestEngine := ingestion.NewEngine(db, ingestion.Config{
@@ -43,7 +43,9 @@ func TestPhase3_DetectionPipeline_PositiveAndNegative(t *testing.T) {
 
 	// 1. Positive Malicious Event
 	maliciousEvent := &events.CanonicalEvent{
-		EventID:       "malicious-123",
+		EventID:       "11111111-1111-1111-1111-111111111111",
+		TenantID:      "tenant-det",
+		SiteID:        "site-det",
 		Source:        "process",
 		Category:      "process_start",
 		OccurredAt:    time.Now().UTC(),
@@ -60,7 +62,9 @@ func TestPhase3_DetectionPipeline_PositiveAndNegative(t *testing.T) {
 
 	// 2. Negative Benign Event
 	benignEvent := &events.CanonicalEvent{
-		EventID:       "benign-456",
+		EventID:       "22222222-2222-2222-2222-222222222222",
+		TenantID:      "tenant-det",
+		SiteID:        "site-det",
 		Source:        "process",
 		Category:      "process_start",
 		OccurredAt:    time.Now().UTC(),
@@ -82,9 +86,9 @@ func TestPhase3_DetectionPipeline_PositiveAndNegative(t *testing.T) {
 	}
 
 	// We expect 3 total durable events:
-	// 1. malicious-123 (original telemetry)
-	// 2. benign-456 (original telemetry)
-	// 3. The detection finding derived from malicious-123
+	// 1. 11111111-1111-1111-1111-111111111111 (original telemetry)
+	// 2. 22222222-2222-2222-2222-222222222222 (original telemetry)
+	// 3. The detection finding derived from 11111111-1111-1111-1111-111111111111
 	if len(pending) != 3 {
 		t.Fatalf("Expected 3 durable events, got %d", len(pending))
 	}
@@ -94,9 +98,9 @@ func TestPhase3_DetectionPipeline_PositiveAndNegative(t *testing.T) {
 	var foundBenign bool
 
 	for _, ev := range pending {
-		if ev.EventID == "malicious-123" {
+		if ev.EventID == "11111111-1111-1111-1111-111111111111" {
 			foundMalicious = true
-		} else if ev.EventID == "benign-456" {
+		} else if ev.EventID == "22222222-2222-2222-2222-222222222222" {
 			foundBenign = true
 		} else if ev.Category == "detection/finding" {
 			foundFinding = true
@@ -104,7 +108,7 @@ func TestPhase3_DetectionPipeline_PositiveAndNegative(t *testing.T) {
 				t.Errorf("Unexpected rule ID: %s", ev.RuleID)
 			}
 			evidenceIDs, ok := ev.Metadata["evidence_event_ids"].([]interface{})
-			if !ok || len(evidenceIDs) != 1 || evidenceIDs[0] != "malicious-123" {
+			if !ok || len(evidenceIDs) != 1 || evidenceIDs[0] != "11111111-1111-1111-1111-111111111111" {
 				t.Errorf("Finding evidence does not match expected original event ID: %v", ev.Metadata["evidence_event_ids"])
 			}
 		}
@@ -130,7 +134,7 @@ func TestPhase3_DetectionPipeline_Deduplication(t *testing.T) {
 	}
 
 	detEngine := detection.NewEngine(db, []detection.Rule{
-		&detection.TestIOCRule{},
+		&TestIOCRule{},
 	})
 
 	ingestEngine := ingestion.NewEngine(db, ingestion.Config{
@@ -147,7 +151,9 @@ func TestPhase3_DetectionPipeline_Deduplication(t *testing.T) {
 	defer cancel()
 
 	maliciousEvent := &events.CanonicalEvent{
-		EventID:       "malicious-123",
+		EventID:       "11111111-1111-1111-1111-111111111111",
+		TenantID:      "tenant-det",
+		SiteID:        "site-det",
 		Source:        "process",
 		Category:      "process_start",
 		OccurredAt:    time.Now().UTC(),
@@ -186,8 +192,8 @@ func TestPhase3_DetectionPipeline_FailureIsolation(t *testing.T) {
 	}
 
 	detEngine := detection.NewEngine(db, []detection.Rule{
-		&detection.PanicTestRule{},
-		&detection.TestIOCRule{}, // Executes after panic
+		&PanicTestRule{},
+		&TestIOCRule{}, // Executes after panic
 	})
 
 	ingestEngine := ingestion.NewEngine(db, ingestion.Config{
@@ -205,6 +211,8 @@ func TestPhase3_DetectionPipeline_FailureIsolation(t *testing.T) {
 
 	panicEvent := &events.CanonicalEvent{
 		EventID:       "panic-trigger-123",
+		TenantID:      "tenant-det",
+		SiteID:        "site-det",
 		Source:        "process",
 		Category:      "process_start",
 		OccurredAt:    time.Now().UTC(),
@@ -223,6 +231,8 @@ func TestPhase3_DetectionPipeline_FailureIsolation(t *testing.T) {
 	// Submit a second event to prove the engine remains usable
 	subsequentEvent := &events.CanonicalEvent{
 		EventID:       "subsequent-event-456",
+		TenantID:      "tenant-det",
+		SiteID:        "site-det",
 		Source:        "process",
 		Category:      "process_start",
 		OccurredAt:    time.Now().UTC(),
@@ -280,6 +290,8 @@ func TestPhase3_DetectionPipeline_RealIOCExec(t *testing.T) {
 
 	maliciousEvent := &events.CanonicalEvent{
 		EventID:       "realioc-123",
+		TenantID:      "tenant-det",
+		SiteID:        "site-det",
 		Source:        "process",
 		Category:      "process_start",
 		OccurredAt:    time.Now().UTC(),
@@ -321,11 +333,13 @@ func TestPhase3_DetectionPipeline_RuleErrorIsolation(t *testing.T) {
 	tempDir := t.TempDir()
 	db := storage.NewSQLiteStorage(tempDir+"/detection_err.db", tempDir+"/id.json", 1024*1024*10)
 	defer db.Close()
-	_ = db.Init(context.Background())
+	if err := db.Init(context.Background()); err != nil {
+		t.Fatalf("Failed to init db: %v", err)
+	}
 
 	detEngine := detection.NewEngine(db, []detection.Rule{
-		&detection.ErrorTestRule{},
-		&detection.TestIOCRule{}, // Executes after error
+		&ErrorTestRule{},
+		&TestIOCRule{}, // Executes after error
 	})
 
 	ingestEngine := ingestion.NewEngine(db, ingestion.Config{
@@ -342,6 +356,8 @@ func TestPhase3_DetectionPipeline_RuleErrorIsolation(t *testing.T) {
 
 	ev := &events.CanonicalEvent{
 		EventID:       "error-trigger-123",
+		TenantID:      "tenant-det",
+		SiteID:        "site-det",
 		Source:        "process",
 		Category:      "process_start",
 		OccurredAt:    time.Now().UTC(),
@@ -354,7 +370,10 @@ func TestPhase3_DetectionPipeline_RuleErrorIsolation(t *testing.T) {
 
 	ingestEngine.ProcessEvent(ctx, ctx, ev)
 
-	pending, _ := db.GetPendingEvents(ctx, 10)
+	pending, err := db.GetPendingEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("Failed to get pending events: %v", err)
+	}
 	if len(pending) != 2 {
 		t.Fatalf("Expected 2 durable events (telemetry + test ioc finding), got %d", len(pending))
 	}
@@ -365,10 +384,12 @@ func TestPhase3_DetectionPipeline_MultipleFindings(t *testing.T) {
 	tempDir := t.TempDir()
 	db := storage.NewSQLiteStorage(tempDir+"/detection_multi.db", tempDir+"/id.json", 1024*1024*10)
 	defer db.Close()
-	_ = db.Init(context.Background())
+	if err := db.Init(context.Background()); err != nil {
+		t.Fatalf("Failed to init db: %v", err)
+	}
 
 	detEngine := detection.NewEngine(db, []detection.Rule{
-		&detection.TestIOCRule{},
+		&TestIOCRule{},
 		&detection.RealIOCExecRule{},
 	})
 
@@ -386,6 +407,8 @@ func TestPhase3_DetectionPipeline_MultipleFindings(t *testing.T) {
 
 	ev := &events.CanonicalEvent{
 		EventID:       "multi-123",
+		TenantID:      "tenant-det",
+		SiteID:        "site-det",
 		Source:        "process",
 		Category:      "process_start",
 		OccurredAt:    time.Now().UTC(),
@@ -398,7 +421,10 @@ func TestPhase3_DetectionPipeline_MultipleFindings(t *testing.T) {
 
 	ingestEngine.ProcessEvent(ctx, ctx, ev)
 
-	pending, _ := db.GetPendingEvents(ctx, 10)
+	pending, err := db.GetPendingEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("Failed to get pending events: %v", err)
+	}
 	// Expect 1 telemetry + 2 independent findings = 3 total
 	if len(pending) != 3 {
 		t.Fatalf("Expected 3 durable events (1 telemetry + 2 findings), got %d", len(pending))
@@ -422,10 +448,12 @@ func TestPhase3_DetectionPipeline_UntrustedMetadata(t *testing.T) {
 	tempDir := t.TempDir()
 	db := storage.NewSQLiteStorage(tempDir+"/detection_untrusted.db", tempDir+"/id.json", 1024*1024*50)
 	defer db.Close()
-	_ = db.Init(context.Background())
+	if err := db.Init(context.Background()); err != nil {
+		t.Fatalf("Failed to init db: %v", err)
+	}
 
 	detEngine := detection.NewEngine(db, []detection.Rule{
-		&detection.TestIOCRule{},
+		&TestIOCRule{},
 	})
 
 	ingestEngine := ingestion.NewEngine(db, ingestion.Config{
@@ -443,6 +471,8 @@ func TestPhase3_DetectionPipeline_UntrustedMetadata(t *testing.T) {
 	// Missing metadata
 	evMissing := &events.CanonicalEvent{
 		EventID:       "untrusted-1",
+		TenantID:      "tenant-det",
+		SiteID:        "site-det",
 		Source:        "process",
 		Category:      "process_start",
 		OccurredAt:    time.Now().UTC(),
@@ -452,6 +482,8 @@ func TestPhase3_DetectionPipeline_UntrustedMetadata(t *testing.T) {
 	// Wrong type
 	evWrongType := &events.CanonicalEvent{
 		EventID:       "untrusted-2",
+		TenantID:      "tenant-det",
+		SiteID:        "site-det",
 		Source:        "process",
 		Category:      "process_start",
 		OccurredAt:    time.Now().UTC(),
@@ -464,6 +496,8 @@ func TestPhase3_DetectionPipeline_UntrustedMetadata(t *testing.T) {
 	// Empty string
 	evEmptyStr := &events.CanonicalEvent{
 		EventID:       "untrusted-3",
+		TenantID:      "tenant-det",
+		SiteID:        "site-det",
 		Source:        "process",
 		Category:      "process_start",
 		OccurredAt:    time.Now().UTC(),
@@ -476,6 +510,8 @@ func TestPhase3_DetectionPipeline_UntrustedMetadata(t *testing.T) {
 	// Embedded NUL bytes
 	evNulBytes := &events.CanonicalEvent{
 		EventID:       "untrusted-4",
+		TenantID:      "tenant-det",
+		SiteID:        "site-det",
 		Source:        "process",
 		Category:      "process_start",
 		OccurredAt:    time.Now().UTC(),
@@ -489,6 +525,8 @@ func TestPhase3_DetectionPipeline_UntrustedMetadata(t *testing.T) {
 	longStr := string(make([]byte, 10*1024)) // 10KB string
 	evLongStr := &events.CanonicalEvent{
 		EventID:       "untrusted-5",
+		TenantID:      "tenant-det",
+		SiteID:        "site-det",
 		Source:        "process",
 		Category:      "process_start",
 		OccurredAt:    time.Now().UTC(),
@@ -501,6 +539,8 @@ func TestPhase3_DetectionPipeline_UntrustedMetadata(t *testing.T) {
 	// Unexpected metadata structures (map instead of string)
 	evUnexpectedMap := &events.CanonicalEvent{
 		EventID:       "untrusted-6",
+		TenantID:      "tenant-det",
+		SiteID:        "site-det",
 		Source:        "process",
 		Category:      "process_start",
 		OccurredAt:    time.Now().UTC(),
@@ -517,7 +557,10 @@ func TestPhase3_DetectionPipeline_UntrustedMetadata(t *testing.T) {
 	ingestEngine.ProcessEvent(ctx, ctx, evLongStr)
 	ingestEngine.ProcessEvent(ctx, ctx, evUnexpectedMap)
 
-	pending, _ := db.GetPendingEvents(ctx, 10)
+	pending, err := db.GetPendingEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("Failed to get pending events: %v", err)
+	}
 	if len(pending) != 6 {
 		t.Fatalf("Expected exactly 6 telemetry events, no crashes, no findings. Got %d", len(pending))
 	}
@@ -544,7 +587,7 @@ func TestPhase3_DetectionPipeline_FindingPersistenceFailure(t *testing.T) {
 	failDB := &mockFailingStorage{Storage: realDB}
 
 	detEngine := detection.NewEngine(failDB, []detection.Rule{
-		&detection.TestIOCRule{},
+		&TestIOCRule{},
 	})
 
 	ingestEngine := ingestion.NewEngine(realDB, ingestion.Config{ // Ingest engine uses real DB to store telemetry
@@ -560,6 +603,8 @@ func TestPhase3_DetectionPipeline_FindingPersistenceFailure(t *testing.T) {
 	ctx := context.Background()
 	ev := &events.CanonicalEvent{
 		EventID:       "persistence-fail-123",
+		TenantID:      "tenant-det",
+		SiteID:        "site-det",
 		Source:        "process",
 		Category:      "process_start",
 		OccurredAt:    time.Now().UTC(),
@@ -585,10 +630,12 @@ func TestPhase3_DetectionPipeline_Stress(t *testing.T) {
 	tempDir := t.TempDir()
 	db := storage.NewSQLiteStorage(tempDir+"/detection_stress.db", tempDir+"/id.json", 1024*1024*50) // 50MB DB limit
 	defer db.Close()
-	_ = db.Init(context.Background())
+	if err := db.Init(context.Background()); err != nil {
+		t.Fatalf("Failed to init db: %v", err)
+	}
 
 	detEngine := detection.NewEngine(db, []detection.Rule{
-		&detection.TestIOCRule{},
+		&TestIOCRule{},
 		&detection.RealIOCExecRule{},
 	})
 
@@ -612,6 +659,8 @@ func TestPhase3_DetectionPipeline_Stress(t *testing.T) {
 	for i := 0; i < eventCount; i++ {
 		ev := &events.CanonicalEvent{
 			EventID:       uuid.New().String(), // Use valid UUIDs
+			TenantID:      "tenant-det",
+			SiteID:        "site-det",
 			Source:        "process",
 			Category:      "process_start",
 			OccurredAt:    time.Now().UTC(),

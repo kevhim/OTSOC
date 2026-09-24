@@ -2,6 +2,7 @@ package detection
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -55,7 +56,7 @@ func TestDetectionEngine_PositiveMatch(t *testing.T) {
 	engine := NewEngine(store, []Rule{&TestIOCRule{}})
 
 	telemetryEvent := &events.CanonicalEvent{
-		EventID:       "telemetry-123",
+		EventID:       "33333333-3333-3333-3333-333333333333",
 		TenantID:      "tenant-1",
 		SiteID:        "site-1",
 		Category:      "process",
@@ -88,7 +89,7 @@ func TestDetectionEngine_PositiveMatch(t *testing.T) {
 	}
 
 	evidence, ok := finding.Metadata["evidence_event_ids"].([]string)
-	if !ok || len(evidence) != 1 || evidence[0] != "telemetry-123" {
+	if !ok || len(evidence) != 1 || evidence[0] != "33333333-3333-3333-3333-333333333333" {
 		t.Errorf("Finding must reference the original telemetry event ID")
 	}
 }
@@ -98,7 +99,12 @@ func TestDetectionEngine_NegativeMatch(t *testing.T) {
 	engine := NewEngine(store, []Rule{&TestIOCRule{}})
 
 	telemetryEvent := &events.CanonicalEvent{
-		EventID: "telemetry-123",
+		EventID: "33333333-3333-3333-3333-333333333333",
+		TenantID:      "tenant-1",
+		SiteID:        "site-1",
+		Category:      "process",
+		Source:        "linux_process",
+		OccurredAt: time.Now().UTC(),
 		Metadata: map[string]interface{}{
 			"test_ioc": "BENIGN-STRING",
 		},
@@ -116,8 +122,12 @@ func TestDetectionEngine_DeduplicationIdentity(t *testing.T) {
 	engine := NewEngine(store, []Rule{&TestIOCRule{}})
 
 	telemetryEvent := &events.CanonicalEvent{
-		EventID:  "telemetry-123",
+		EventID:  "33333333-3333-3333-3333-333333333333",
 		TenantID: "tenant-1",
+		SiteID:        "site-1",
+		Category:      "process",
+		Source:        "linux_process",
+		OccurredAt: time.Now().UTC(),
 		Metadata: map[string]interface{}{
 			"test_ioc": "RF-TEST-MALICIOUS",
 		},
@@ -140,24 +150,36 @@ func TestDetectionEngine_FindingIdentityChange(t *testing.T) {
 	engine := NewEngine(store, []Rule{&TestIOCRule{}})
 
 	ev1 := &events.CanonicalEvent{
-		EventID:  "telemetry-1",
+		EventID:  "44444444-4444-4444-4444-444444444444",
 		TenantID: "tenant-1",
+		SiteID:        "site-1",
+		Category:      "process",
+		Source:        "linux_process",
+		OccurredAt: time.Now().UTC(),
 		Metadata: map[string]interface{}{
 			"test_ioc": "RF-TEST-MALICIOUS",
 		},
 	}
 
 	ev2 := &events.CanonicalEvent{
-		EventID:  "telemetry-2", // Changed EventID
+		EventID:  "55555555-5555-5555-5555-555555555555", // Changed EventID
 		TenantID: "tenant-1",
+		SiteID:        "site-1",
+		Category:      "process",
+		Source:        "linux_process",
+		OccurredAt: time.Now().UTC(),
 		Metadata: map[string]interface{}{
 			"test_ioc": "RF-TEST-MALICIOUS",
 		},
 	}
 
 	ev3 := &events.CanonicalEvent{
-		EventID:  "telemetry-1",
+		EventID:  "44444444-4444-4444-4444-444444444444",
 		TenantID: "tenant-2", // Changed TenantID
+		SiteID:        "site-1",
+		Category:      "process",
+		Source:        "linux_process",
+		OccurredAt: time.Now().UTC(),
 		Metadata: map[string]interface{}{
 			"test_ioc": "RF-TEST-MALICIOUS",
 		},
@@ -211,7 +233,14 @@ func TestDetectionEngine_RuleOrder(t *testing.T) {
 		&orderedMockRule{id: "RULE-C", traces: &traces},
 	})
 
-	ev := &events.CanonicalEvent{EventID: "test"}
+	ev := &events.CanonicalEvent{
+		EventID: "test-uuid-1111-2222-3333",
+		TenantID:      "tenant-1",
+		SiteID:        "site-1",
+		Category:      "process",
+		Source:        "linux_process",
+		OccurredAt: time.Now().UTC(),
+	}
 	engine.Evaluate(context.Background(), ev)
 
 	if len(traces) != 3 {
@@ -220,5 +249,84 @@ func TestDetectionEngine_RuleOrder(t *testing.T) {
 
 	if traces[0] != "RULE-A" || traces[1] != "RULE-B" || traces[2] != "RULE-C" {
 		t.Errorf("Rule evaluation order is not deterministic. Got: %v", traces)
+	}
+}
+
+type invalidSeverityRule struct{}
+func (r *invalidSeverityRule) ID() string { return "INV-001" }
+func (r *invalidSeverityRule) Version() string { return "1.0" }
+func (r *invalidSeverityRule) Severity() string { return "SUPER_HIGH" }
+func (r *invalidSeverityRule) Confidence() float64 { return 100.0 }
+func (r *invalidSeverityRule) Reason() string { return "Invalid severity" }
+func (r *invalidSeverityRule) AttckEnterprise() []string { return nil }
+func (r *invalidSeverityRule) AttckICS() []string { return nil }
+func (r *invalidSeverityRule) Evaluate(ev *events.CanonicalEvent) (bool, error) { return true, nil }
+
+func TestDetectionEngine_InvalidSeverityValidation(t *testing.T) {
+	store := &mockStorage{}
+	engine := NewEngine(store, []Rule{&invalidSeverityRule{}})
+	
+	telemetryEvent := &events.CanonicalEvent{
+		EventID: "33333333-3333-3333-3333-333333333333",
+		TenantID:      "tenant-1",
+		SiteID:        "site-1",
+		Category:      "process",
+		Source:        "linux_process",
+		OccurredAt: time.Now().UTC(),
+	}
+	
+	engine.Evaluate(context.Background(), telemetryEvent)
+	
+	if len(store.stored) != 0 {
+		t.Fatalf("Expected 0 findings due to validation failure, got %d", len(store.stored))
+	}
+}
+
+type mockFailingStore struct {
+	*mockStorage
+	findingFailures int
+}
+
+func (m *mockFailingStore) Store(ctx context.Context, ev *events.CanonicalEvent) error {
+	if ev.Category == "detection/finding" {
+		m.findingFailures++
+		return fmt.Errorf("simulated finding persistence failure")
+	}
+	return m.mockStorage.Store(ctx, ev)
+}
+
+func TestDetectionEngine_PersistenceFailureObservable(t *testing.T) {
+	baseStore := &mockStorage{}
+	store := &mockFailingStore{mockStorage: baseStore}
+	engine := NewEngine(store, []Rule{&TestIOCRule{}})
+	
+	telemetryEvent := &events.CanonicalEvent{
+		EventID: "33333333-3333-3333-3333-333333333333",
+		TenantID:      "tenant-1",
+		SiteID:        "site-1",
+		Category:      "process",
+		Source:        "linux_process",
+		OccurredAt: time.Now().UTC(),
+		Metadata: map[string]interface{}{
+			"test_ioc": "RF-TEST-MALICIOUS",
+		},
+	}
+	
+	// Simulate telemetry being successfully stored first
+	_ = store.Store(context.Background(), telemetryEvent)
+	
+	engine.Evaluate(context.Background(), telemetryEvent)
+	
+	if store.findingFailures != 1 {
+		t.Fatalf("Expected 1 finding persistence failure, got %d", store.findingFailures)
+	}
+	
+	// Original telemetry remains durable
+	if len(store.mockStorage.stored) != 1 {
+		t.Fatalf("Expected 1 durable telemetry event, got %d", len(store.mockStorage.stored))
+	}
+	
+	if store.mockStorage.stored[0].EventID != "33333333-3333-3333-3333-333333333333" {
+		t.Errorf("Telemetry was lost or modified")
 	}
 }

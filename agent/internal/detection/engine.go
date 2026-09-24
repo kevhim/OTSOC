@@ -77,7 +77,16 @@ func (e *Engine) evaluateRuleSafe(ctx context.Context, ev *events.CanonicalEvent
 		if err != nil {
 			return
 		}
-		_ = e.db.Store(ctx, finding)
+
+		if err := finding.Validate(); err != nil {
+			log.Printf("[Detection Engine] Explicit finding validation error (rule: %s, event: %s): %v", rule.ID(), ev.EventID, err)
+			return
+		}
+
+		err = e.db.Store(ctx, finding)
+		if err != nil {
+			log.Printf("[Detection Engine] Explicit persistence error (rule: %s, event: %s): failed to store finding: %v", rule.ID(), ev.EventID, err)
+		}
 	}
 }
 

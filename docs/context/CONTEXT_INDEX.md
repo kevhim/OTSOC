@@ -13,6 +13,6 @@ This directory contains crucial architectural and domain context for AI coding a
 - **DEVELOPMENT_CONTEXT.md**: Setup instructions, coding standards, and commit guidelines.
 - **API_CONTEXT.md**: Contracts between the edge agent and central server.
 - **OT_SENSOR_CONTEXT.md**: OT-specific constraints (e.g. passive monitoring, safety criticality).
-- **DETECTION_CONTEXT.md**: Future detection engine rules and schemas (currently forbidden).
+- **DETECTION_CONTEXT.md**: Detection engine rules, findings representation, and evaluation semantics.
 - **DEPLOYMENT_CONTEXT.md**: Packaging and deployment strategies.
 - **ROADMAP_CONTEXT.md**: Long-term vision and phase definitions.
