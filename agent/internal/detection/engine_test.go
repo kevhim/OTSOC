@@ -99,11 +99,11 @@ func TestDetectionEngine_NegativeMatch(t *testing.T) {
 	engine := NewEngine(store, []Rule{&TestIOCRule{}})
 
 	telemetryEvent := &events.CanonicalEvent{
-		EventID: "33333333-3333-3333-3333-333333333333",
-		TenantID:      "tenant-1",
-		SiteID:        "site-1",
-		Category:      "process",
-		Source:        "linux_process",
+		EventID:    "33333333-3333-3333-3333-333333333333",
+		TenantID:   "tenant-1",
+		SiteID:     "site-1",
+		Category:   "process",
+		Source:     "linux_process",
 		OccurredAt: time.Now().UTC(),
 		Metadata: map[string]interface{}{
 			"test_ioc": "BENIGN-STRING",
@@ -122,11 +122,11 @@ func TestDetectionEngine_DeduplicationIdentity(t *testing.T) {
 	engine := NewEngine(store, []Rule{&TestIOCRule{}})
 
 	telemetryEvent := &events.CanonicalEvent{
-		EventID:  "33333333-3333-3333-3333-333333333333",
-		TenantID: "tenant-1",
-		SiteID:        "site-1",
-		Category:      "process",
-		Source:        "linux_process",
+		EventID:    "33333333-3333-3333-3333-333333333333",
+		TenantID:   "tenant-1",
+		SiteID:     "site-1",
+		Category:   "process",
+		Source:     "linux_process",
 		OccurredAt: time.Now().UTC(),
 		Metadata: map[string]interface{}{
 			"test_ioc": "RF-TEST-MALICIOUS",
@@ -150,11 +150,11 @@ func TestDetectionEngine_FindingIdentityChange(t *testing.T) {
 	engine := NewEngine(store, []Rule{&TestIOCRule{}})
 
 	ev1 := &events.CanonicalEvent{
-		EventID:  "44444444-4444-4444-4444-444444444444",
-		TenantID: "tenant-1",
-		SiteID:        "site-1",
-		Category:      "process",
-		Source:        "linux_process",
+		EventID:    "44444444-4444-4444-4444-444444444444",
+		TenantID:   "tenant-1",
+		SiteID:     "site-1",
+		Category:   "process",
+		Source:     "linux_process",
 		OccurredAt: time.Now().UTC(),
 		Metadata: map[string]interface{}{
 			"test_ioc": "RF-TEST-MALICIOUS",
@@ -162,11 +162,11 @@ func TestDetectionEngine_FindingIdentityChange(t *testing.T) {
 	}
 
 	ev2 := &events.CanonicalEvent{
-		EventID:  "55555555-5555-5555-5555-555555555555", // Changed EventID
-		TenantID: "tenant-1",
-		SiteID:        "site-1",
-		Category:      "process",
-		Source:        "linux_process",
+		EventID:    "55555555-5555-5555-5555-555555555555", // Changed EventID
+		TenantID:   "tenant-1",
+		SiteID:     "site-1",
+		Category:   "process",
+		Source:     "linux_process",
 		OccurredAt: time.Now().UTC(),
 		Metadata: map[string]interface{}{
 			"test_ioc": "RF-TEST-MALICIOUS",
@@ -174,11 +174,11 @@ func TestDetectionEngine_FindingIdentityChange(t *testing.T) {
 	}
 
 	ev3 := &events.CanonicalEvent{
-		EventID:  "44444444-4444-4444-4444-444444444444",
-		TenantID: "tenant-2", // Changed TenantID
-		SiteID:        "site-1",
-		Category:      "process",
-		Source:        "linux_process",
+		EventID:    "44444444-4444-4444-4444-444444444444",
+		TenantID:   "tenant-2", // Changed TenantID
+		SiteID:     "site-1",
+		Category:   "process",
+		Source:     "linux_process",
 		OccurredAt: time.Now().UTC(),
 		Metadata: map[string]interface{}{
 			"test_ioc": "RF-TEST-MALICIOUS",
@@ -234,11 +234,11 @@ func TestDetectionEngine_RuleOrder(t *testing.T) {
 	})
 
 	ev := &events.CanonicalEvent{
-		EventID: "test-uuid-1111-2222-3333",
-		TenantID:      "tenant-1",
-		SiteID:        "site-1",
-		Category:      "process",
-		Source:        "linux_process",
+		EventID:    "test-uuid-1111-2222-3333",
+		TenantID:   "tenant-1",
+		SiteID:     "site-1",
+		Category:   "process",
+		Source:     "linux_process",
 		OccurredAt: time.Now().UTC(),
 	}
 	engine.Evaluate(context.Background(), ev)
@@ -253,30 +253,31 @@ func TestDetectionEngine_RuleOrder(t *testing.T) {
 }
 
 type invalidSeverityRule struct{}
-func (r *invalidSeverityRule) ID() string { return "INV-001" }
-func (r *invalidSeverityRule) Version() string { return "1.0" }
-func (r *invalidSeverityRule) Severity() string { return "SUPER_HIGH" }
-func (r *invalidSeverityRule) Confidence() float64 { return 100.0 }
-func (r *invalidSeverityRule) Reason() string { return "Invalid severity" }
-func (r *invalidSeverityRule) AttckEnterprise() []string { return nil }
-func (r *invalidSeverityRule) AttckICS() []string { return nil }
+
+func (r *invalidSeverityRule) ID() string                                       { return "INV-001" }
+func (r *invalidSeverityRule) Version() string                                  { return "1.0" }
+func (r *invalidSeverityRule) Severity() string                                 { return "SUPER_HIGH" }
+func (r *invalidSeverityRule) Confidence() float64                              { return 100.0 }
+func (r *invalidSeverityRule) Reason() string                                   { return "Invalid severity" }
+func (r *invalidSeverityRule) AttckEnterprise() []string                        { return nil }
+func (r *invalidSeverityRule) AttckICS() []string                               { return nil }
 func (r *invalidSeverityRule) Evaluate(ev *events.CanonicalEvent) (bool, error) { return true, nil }
 
 func TestDetectionEngine_InvalidSeverityValidation(t *testing.T) {
 	store := &mockStorage{}
 	engine := NewEngine(store, []Rule{&invalidSeverityRule{}})
-	
+
 	telemetryEvent := &events.CanonicalEvent{
-		EventID: "33333333-3333-3333-3333-333333333333",
-		TenantID:      "tenant-1",
-		SiteID:        "site-1",
-		Category:      "process",
-		Source:        "linux_process",
+		EventID:    "33333333-3333-3333-3333-333333333333",
+		TenantID:   "tenant-1",
+		SiteID:     "site-1",
+		Category:   "process",
+		Source:     "linux_process",
 		OccurredAt: time.Now().UTC(),
 	}
-	
+
 	engine.Evaluate(context.Background(), telemetryEvent)
-	
+
 	if len(store.stored) != 0 {
 		t.Fatalf("Expected 0 findings due to validation failure, got %d", len(store.stored))
 	}
@@ -299,33 +300,33 @@ func TestDetectionEngine_PersistenceFailureObservable(t *testing.T) {
 	baseStore := &mockStorage{}
 	store := &mockFailingStore{mockStorage: baseStore}
 	engine := NewEngine(store, []Rule{&TestIOCRule{}})
-	
+
 	telemetryEvent := &events.CanonicalEvent{
-		EventID: "33333333-3333-3333-3333-333333333333",
-		TenantID:      "tenant-1",
-		SiteID:        "site-1",
-		Category:      "process",
-		Source:        "linux_process",
+		EventID:    "33333333-3333-3333-3333-333333333333",
+		TenantID:   "tenant-1",
+		SiteID:     "site-1",
+		Category:   "process",
+		Source:     "linux_process",
 		OccurredAt: time.Now().UTC(),
 		Metadata: map[string]interface{}{
 			"test_ioc": "RF-TEST-MALICIOUS",
 		},
 	}
-	
+
 	// Simulate telemetry being successfully stored first
 	_ = store.Store(context.Background(), telemetryEvent)
-	
+
 	engine.Evaluate(context.Background(), telemetryEvent)
-	
+
 	if store.findingFailures != 1 {
 		t.Fatalf("Expected 1 finding persistence failure, got %d", store.findingFailures)
 	}
-	
+
 	// Original telemetry remains durable
 	if len(store.mockStorage.stored) != 1 {
 		t.Fatalf("Expected 1 durable telemetry event, got %d", len(store.mockStorage.stored))
 	}
-	
+
 	if store.mockStorage.stored[0].EventID != "33333333-3333-3333-3333-333333333333" {
 		t.Errorf("Telemetry was lost or modified")
 	}
