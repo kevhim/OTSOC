@@ -114,7 +114,7 @@ func TestFocusedIngestion_ShutdownSemantics(t *testing.T) {
 
 	engine := ingestion.NewEngine(db, ingestion.Config{
 		RetryDelay: 10 * time.Millisecond,
-		OnCommitted: func(e *events.CanonicalEvent) {
+		OnCommitted: func(ctx context.Context, e *events.CanonicalEvent) {
 			mu.Lock()
 			committed = true
 			mu.Unlock()

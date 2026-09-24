@@ -62,6 +62,7 @@ temp/
 coverage/
 logs/
 *.log
+test*.zip
 
 # Sensitive OT
 *.pcap

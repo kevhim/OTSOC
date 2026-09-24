@@ -31,7 +31,7 @@ type Config struct {
 	AssetID            string
 	RetryDelay         time.Duration
 	EmergencySpillPath string
-	OnCommitted        func(ev *events.CanonicalEvent)
+	OnCommitted        func(ctx context.Context, ev *events.CanonicalEvent)
 	OnDropped          func(ev *events.CanonicalEvent, reason string, err error)
 	OnDLQ              func(ev *events.CanonicalEvent, reason string)
 	OnFatal            func(ev *events.CanonicalEvent, err error)
@@ -105,7 +105,7 @@ func (e *Engine) ProcessEvent(ctx, drainCtx context.Context, ev *events.Canonica
 		// CASE 1: COMMITTED (Success)
 		if storeErr == nil {
 			if e.cfg.OnCommitted != nil {
-				e.cfg.OnCommitted(ev)
+				e.cfg.OnCommitted(storeCtx, ev)
 			}
 			return OutcomeCommitted
 		}

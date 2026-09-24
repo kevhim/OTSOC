@@ -16,6 +16,7 @@ import (
 	"redcyberfox/agent/internal/collectors/process"
 	"redcyberfox/agent/internal/collectors/usb"
 	"redcyberfox/agent/internal/config"
+	"redcyberfox/agent/internal/detection"
 	"redcyberfox/agent/internal/forwarder"
 	"redcyberfox/agent/internal/health"
 	"redcyberfox/agent/internal/identity"
@@ -29,7 +30,7 @@ func main() {
 	identityPath := flag.String("identity", "identity.json", "path to identity file")
 	flag.Parse()
 
-	log.Println("Starting Endpoint Agent Alpha Phase 2C.5 Integration...")
+	log.Println("Starting Endpoint Agent Alpha...")
 
 	// 1. Config Loading & Validation
 	cfg, err := config.Load(*configPath)
@@ -125,12 +126,17 @@ func main() {
 		}
 	}()
 
+	// 7.5 Phase 3 Detection Core
+	log.Println("Production detection rule set pending real IOC/rule gate")
+	detEngine := detection.NewEngine(db, []detection.Rule{})
+
 	// 8. Central Event Ingestion Loop (uses shared production Ingestion Engine)
 	ingestEngine := ingestion.NewEngine(db, ingestion.Config{
 		TenantID: cfg.TenantID,
 		SiteID:   cfg.SiteID,
 		AssetID:  id.DeviceID,
-		OnCommitted: func(ev *events.CanonicalEvent) {
+		OnCommitted: func(ctx context.Context, ev *events.CanonicalEvent) {
+			detEngine.Evaluate(ctx, ev)
 			fwd.Wakeup()
 		},
 	})

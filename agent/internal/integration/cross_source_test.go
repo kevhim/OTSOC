@@ -92,7 +92,7 @@ func TestPhase2E4_BroadCrossSourceRegression(t *testing.T) {
 		SiteID:     cfg.SiteID,
 		AssetID:    "asset-test-device",
 		RetryDelay: 10 * time.Millisecond,
-		OnCommitted: func(ev *events.CanonicalEvent) {
+		OnCommitted: func(ctx context.Context, ev *events.CanonicalEvent) {
 			if ev.EventID == "" {
 				t.Errorf("Fabricated identity: empty event_id committed")
 			}
@@ -205,7 +205,8 @@ func TestPhase2E4_CentralEventsPressure(t *testing.T) {
 		TenantID:   "pressure-tenant",
 		SiteID:     "pressure-site",
 		RetryDelay: 5 * time.Millisecond,
-		OnCommitted: func(ev *events.CanonicalEvent) {
+		AssetID:    "DEVICE-1234",
+		OnCommitted: func(ctx context.Context, ev *events.CanonicalEvent) {
 			committedCount.Add(1)
 		},
 	})

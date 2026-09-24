@@ -20,6 +20,11 @@
 - **Phase 2E.4 (Cross-Source Regression & Data Integrity)**: COMPLETE / FROZEN
 - **Phase 2 (Overall)**: COMPLETE / FROZEN
 
+## Phase 3 Status
+- **Phase 3 (Detection Core)**: IN PROGRESS
+  - **Gate 1 (Boundary Setup)**: CLOSED
+  - **Gate 2 (Foundation Hardening)**: CLOSED
+  - **Gate 3 (Detection Engine Robustness)**: CLOSED
 ## Out-of-Sequence Preparatory OT Work
 - **Phase 3.1A / Phase 3.1B**: Recorded as "out-of-sequence preparatory OT sensing work already present in the repository". Preserved without extension. Does not automatically alter the official milestone sequence.
 
