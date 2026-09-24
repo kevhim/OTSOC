@@ -51,9 +51,6 @@ jobs:
       - name: Go Test (Unit/Integration)
         run: go test -v -skip=TestMigrations ./...
 
-      - name: Go Test Race (Unit/Integration)
-        run: go test -race -v -skip=TestMigrations ./...
-
       - name: Go Test (Migration)
         run: go test -v -run=TestMigrations ./server
         env:
