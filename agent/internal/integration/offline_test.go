@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -169,14 +170,14 @@ func TestLostResponse_Integration(t *testing.T) {
 		t.Fatalf("Store failed: %v", err)
 	}
 
-	requestCount := 0
+	var requestCount atomic.Int64
 	logicalAcceptCount := 0
 	acceptedEvents := make(map[string]bool)
 	var capturedID string
 
 	// Server that intentionally drops connection on first request
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
+		requestCount.Add(1)
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -193,7 +194,7 @@ func TestLostResponse_Integration(t *testing.T) {
 		}
 		capturedID = inc.EventID
 
-		if requestCount == 1 {
+		if requestCount.Load() == 1 {
 			// Simulate connection dropped before 202 is sent
 			hj, ok := w.(http.Hijacker)
 			if ok {
@@ -219,7 +220,7 @@ func TestLostResponse_Integration(t *testing.T) {
 	// First wakeup triggers the first request
 	fwd.Wakeup()
 	assertEventually(t, func() bool {
-		return requestCount == 1
+		return requestCount.Load() == 1
 	}, 2*time.Second)
 
 	// Since we got 502, it should be marked as failed and retry backoff set
@@ -231,7 +232,7 @@ func TestLostResponse_Integration(t *testing.T) {
 	// Trigger second request
 	fwd.Wakeup()
 	assertEventually(t, func() bool {
-		return requestCount == 2
+		return requestCount.Load() == 2
 	}, 2*time.Second)
 
 	// Event should be removed after the second request gets 202
@@ -244,8 +245,8 @@ func TestLostResponse_Integration(t *testing.T) {
 	cancel()
 	fwd.Stop()
 
-	if requestCount != 2 {
-		t.Errorf("Expected exactly 2 HTTP requests, got %d", requestCount)
+	if requestCount.Load() != 2 {
+		t.Errorf("Expected exactly 2 HTTP requests, got %d", requestCount.Load())
 	}
 	if logicalAcceptCount != 1 {
 		t.Errorf("Expected exactly 1 logical acceptance, got %d", logicalAcceptCount)
