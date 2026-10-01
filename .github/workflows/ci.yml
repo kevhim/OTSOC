@@ -49,10 +49,12 @@ jobs:
         run: |
           git clone --depth 1 -b v1.20.0 https://github.com/VirusTotal/yara-x.git yara-x-src
           cd yara-x-src
-          cargo cinstall -p yara-x-capi --release --prefix=$HOME/yara-x-env
-          echo "PKG_CONFIG_PATH=$HOME/yara-x-env/lib/pkgconfig" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=$HOME/yara-x-env/lib" >> $GITHUB_ENV
-          echo "CGO_ENABLED=1" >> $GITHUB_ENV
+          cargo cinstall -p yara-x-capi --release --prefix="$HOME/yara-x-env"
+          {
+            echo "PKG_CONFIG_PATH=$HOME/yara-x-env/lib/pkgconfig"
+            echo "LD_LIBRARY_PATH=$HOME/yara-x-env/lib"
+            echo "CGO_ENABLED=1"
+          } >> "$GITHUB_ENV"
 
       - name: Check Gofmt
         run: test -z "$(gofmt -l .)"
