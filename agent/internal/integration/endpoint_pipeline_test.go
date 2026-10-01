@@ -14,9 +14,53 @@ import (
 	"redcyberfox/agent/internal/collectors/process"
 	"redcyberfox/agent/internal/config"
 	"redcyberfox/agent/internal/forwarder"
+	"redcyberfox/agent/internal/interfaces"
 	"redcyberfox/agent/internal/storage"
 	"redcyberfox/pkg/events"
 )
+
+type observableStorage struct {
+	interfaces.Storage
+	removed chan string
+	dlq     chan string
+	failed  chan string
+}
+
+func (s *observableStorage) RemoveEvent(ctx context.Context, eventID string) error {
+	err := s.Storage.RemoveEvent(ctx, eventID)
+	if err != nil {
+		return err
+	}
+	select {
+	case s.removed <- eventID:
+	default:
+	}
+	return nil
+}
+
+func (s *observableStorage) MoveToDLQ(ctx context.Context, event *events.CanonicalEvent, failureType, failureReason string) error {
+	err := s.Storage.MoveToDLQ(ctx, event, failureType, failureReason)
+	if err != nil {
+		return err
+	}
+	select {
+	case s.dlq <- event.EventID:
+	default:
+	}
+	return nil
+}
+
+func (s *observableStorage) MarkFailed(ctx context.Context, eventID string, retryAfter int, failErr error) error {
+	err := s.Storage.MarkFailed(ctx, eventID, retryAfter, failErr)
+	if err != nil {
+		return err
+	}
+	select {
+	case s.failed <- eventID:
+	default:
+	}
+	return nil
+}
 
 func TestEndpointPipeline_Integration(t *testing.T) {
 	// Start an httptest.Server
@@ -72,8 +116,15 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 	}
 	defer db.Close()
 
+	obsDb := &observableStorage{
+		Storage: db,
+		removed: make(chan string, 10),
+		dlq:     make(chan string, 10),
+		failed:  make(chan string, 10),
+	}
+
 	// 2. Forwarder
-	fwd := forwarder.NewForwarder(cfg.APIAddr, cfg.TenantID, db)
+	fwd := forwarder.NewForwarder(cfg.APIAddr, cfg.TenantID, obsDb)
 	if err := fwd.Start(ctx); err != nil {
 		t.Fatalf("Forwarder start failed: %v", err)
 	}
@@ -117,6 +168,14 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 		}
 	}()
 
+	// Register teardown defers in correct LIFO order:
+	// 3. Wait for ingestion loop to finish draining
+	defer ingestWg.Wait()
+	// 2. Close channel to signal ingestion loop to drain and exit
+	defer close(processEvents)
+	// 1. Stop the process collector from emitting more events
+	defer procCol.Stop()
+
 	// Wait for the collector to establish its initial OS baseline
 	readyCtx, readyCancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	err := procCol.WaitReady(readyCtx)
@@ -124,6 +183,10 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 	if err != nil {
 		procCol.Reconcile(ctx, &process.Snapshot{})
 	}
+
+	// STOP the process collector to prevent background OS events from polluting
+	// the integration test assertions. We will manually inject events for the test.
+	procCol.Stop()
 
 	// Helper to inject a process event
 	injectProcessEvent := func(pid int, name string) {
@@ -143,6 +206,8 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 		}
 	}
 
+
+
 	// ==========================================
 	// Test 1: Successful Ingestion (HTTP 202) -> Event Removed
 	// ==========================================
@@ -152,16 +217,10 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 
 	injectProcessEvent(1234, "test_202.exe")
 
-	// Wait for the forwarder to process it
-	time.Sleep(1 * time.Second)
-
-	// Verify persistence: should be 0 PENDING because it was removed
-	var count int
-	if err := db.GetDB().QueryRow("SELECT COUNT(*) FROM events WHERE state = 'PENDING'").Scan(&count); err != nil {
-		t.Fatalf("QueryRow failed: %v", err)
-	}
-	if count != 0 {
-		t.Fatalf("Expected 0 pending events after 202, got %d", count)
+	select {
+	case <-obsDb.removed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for event to be removed")
 	}
 
 	mu.Lock()
@@ -187,14 +246,10 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 
 	injectProcessEvent(1235, "test_400.exe")
 
-	// Wait for the forwarder to process it
-	time.Sleep(1 * time.Second)
-
-	if err := db.GetDB().QueryRow("SELECT COUNT(*) FROM dead_letter_queue").Scan(&count); err != nil {
-		t.Fatalf("QueryRow failed: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("Expected 1 DLQ event after 400, got %d", count)
+	select {
+	case <-obsDb.dlq:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for event to move to DLQ")
 	}
 
 	// ==========================================
@@ -206,19 +261,9 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 
 	injectProcessEvent(1236, "test_429.exe")
 
-	// Wait for the forwarder to process it
-	time.Sleep(1 * time.Second)
-
-	if err := db.GetDB().QueryRow("SELECT COUNT(*) FROM events WHERE state = 'FAILED' OR state = 'PENDING'").Scan(&count); err != nil {
-		t.Fatalf("QueryRow failed: %v", err)
+	select {
+	case <-obsDb.failed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for event to be marked failed")
 	}
-	if count != 1 {
-		t.Fatalf("Expected 1 failed/pending event after 429, got %d", count)
-	}
-
-	// Shutdown Sequence verification
-	cancel()             // Cancel global context
-	procCol.Stop()       // 1. Stop collector
-	close(processEvents) // 2. Close channel, draining loop
-	ingestWg.Wait()      // 3. Wait for loop to exit
 }

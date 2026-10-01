@@ -3,6 +3,8 @@ package detection
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -329,5 +331,56 @@ func TestDetectionEngine_PersistenceFailureObservable(t *testing.T) {
 
 	if store.mockStorage.stored[0].EventID != "33333333-3333-3333-3333-333333333333" {
 		t.Errorf("Telemetry was lost or modified")
+	}
+}
+
+func TestDetectionEngine_YaraIntegration(t *testing.T) {
+	tempDir := t.TempDir()
+	malwarePath := filepath.Join(tempDir, "malware.exe")
+	if err := os.WriteFile(malwarePath, []byte("mimikatz_payload"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ruleSource := `
+rule test_mimikatz {
+	strings:
+		$a = "mimikatz"
+	condition:
+		$a
+}
+`
+	yaraRule, err := NewYaraRule("YARA-MIMIKATZ", "1.0", "CRITICAL", 100.0, "Mimikatz detected", nil, nil, ruleSource)
+	if err != nil {
+		t.Fatalf("Failed to create YARA rule: %v", err)
+	}
+
+	store := &mockStorage{}
+	engine := NewEngine(store, []Rule{yaraRule})
+
+	telemetryEvent := &events.CanonicalEvent{
+		EventID:       "99999999-9999-9999-9999-999999999999",
+		TenantID:      "tenant-1",
+		SiteID:        "site-1",
+		Category:      "process",
+		Source:        "windows_process",
+		OccurredAt:    time.Now().UTC(),
+		SchemaVersion: events.CurrentSchemaVersion,
+		Metadata: map[string]interface{}{
+			"file_path": malwarePath,
+		},
+	}
+
+	engine.Evaluate(context.Background(), telemetryEvent)
+
+	if len(store.stored) != 1 {
+		t.Fatalf("Expected 1 YARA finding, got %d", len(store.stored))
+	}
+
+	finding := store.stored[0]
+	if finding.RuleID != "YARA-MIMIKATZ" {
+		t.Errorf("Expected YARA-MIMIKATZ, got %s", finding.RuleID)
+	}
+	if finding.Category != "detection/finding" {
+		t.Errorf("Expected category 'detection/finding', got %s", finding.Category)
 	}
 }

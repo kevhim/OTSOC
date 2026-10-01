@@ -97,4 +97,12 @@
 - **AC-6 (No Fabricated DLQ Identity)**: PASS. DLQ recovery strictly preserves original `event_id`.
 
 ## Known Platform Limitations
-- **Race Detector Toolchain**: `go test -race ./...` on local Windows MinGW fails due to toolchain limitation (`cc1.exe: sorry, unimplemented: 64-bit mode not compiled in`). Linux CI race validation added to CI workflow and pending verification.
+- **Race Detector Toolchain**: `go test -race ./...` on local Windows MinGW fails due to toolchain limitation (`cc1.exe: sorry, unimplemented: 64-bit mode not compiled in`). Linux CI race validation added to CI workflow and is configured but not yet verified.
+
+## Phase 3 Gate 4 Memory Status
+- Gate 4 artifact input: PROVISIONAL 50 MB
+- Low-spec hardware validation: NOT YET VERIFIED / Phase 4
+- Total native + Go memory bound: NOT CLAIMED
+- Peak process memory: NOT VERIFIED unless directly measured
+- CI build: NOT YET VERIFIED
+- Linux race: configured but not yet verified
