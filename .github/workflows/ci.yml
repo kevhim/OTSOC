@@ -58,8 +58,8 @@ jobs:
           echo "=== LIBRARY FILES ==="
           find "$HOME/yara-x-env" -type f \( -name "*.so" -o -name "*.a" -o -name "*.dylib" \) -print
           
-          ACTUAL_PKGCONFIG_DIR=$(dirname $(find "$HOME/yara-x-env" -name "yara_x_capi.pc" | head -n 1))
-          ACTUAL_LIB_DIR=$(dirname $(find "$HOME/yara-x-env" \( -name "libyara_x_capi.so" -o -name "libyara_x_capi.a" \) | head -n 1))
+          ACTUAL_PKGCONFIG_DIR="$(dirname "$(find "$HOME/yara-x-env" -name "yara_x_capi.pc" | head -n 1)")"
+          ACTUAL_LIB_DIR="$(dirname "$(find "$HOME/yara-x-env" \( -name "libyara_x_capi.so" -o -name "libyara_x_capi.a" \) | head -n 1)")"
           
           echo "=== VERIFY PACKAGE NAME ==="
           cat "$ACTUAL_PKGCONFIG_DIR/yara_x_capi.pc" || true
