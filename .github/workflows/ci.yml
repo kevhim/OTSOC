@@ -51,13 +51,20 @@ jobs:
           cd yara-x-src
           cargo cinstall -p yara-x-capi --release --prefix="$HOME/yara-x-env"
           {
-            echo "PKG_CONFIG_PATH=$HOME/yara-x-env/lib/pkgconfig"
-            echo "LD_LIBRARY_PATH=$HOME/yara-x-env/lib"
+            echo "PKG_CONFIG_PATH=$HOME/yara-x-env/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+            echo "LD_LIBRARY_PATH=$HOME/yara-x-env/lib:${LD_LIBRARY_PATH:-}"
             echo "CGO_ENABLED=1"
           } >> "$GITHUB_ENV"
 
       - name: Check Gofmt
         run: test -z "$(gofmt -l .)"
+
+      - name: Verify pkg-config
+        run: |
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+          pkg-config --modversion yara_x_capi
+          pkg-config --cflags yara_x_capi
+          pkg-config --libs yara_x_capi
 
       - name: Go Vet
         run: go vet ./...
