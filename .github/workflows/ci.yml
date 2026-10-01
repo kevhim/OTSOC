@@ -50,9 +50,23 @@ jobs:
           git clone --depth 1 -b v1.20.0 https://github.com/VirusTotal/yara-x.git yara-x-src
           cd yara-x-src
           cargo cinstall -p yara-x-capi --release --prefix="$HOME/yara-x-env"
+          
+          echo "=== YARA-X INSTALL TREE ==="
+          find "$HOME/yara-x-env" -maxdepth 5 -type f | sort
+          echo "=== PKG-CONFIG FILES ==="
+          find "$HOME/yara-x-env" -type f \( -name "*.pc" -o -name "yara_x_capi.pc" \) -print
+          echo "=== LIBRARY FILES ==="
+          find "$HOME/yara-x-env" -type f \( -name "*.so" -o -name "*.a" -o -name "*.dylib" \) -print
+          
+          ACTUAL_PKGCONFIG_DIR=$(dirname $(find "$HOME/yara-x-env" -name "yara_x_capi.pc" | head -n 1))
+          ACTUAL_LIB_DIR=$(dirname $(find "$HOME/yara-x-env" \( -name "libyara_x_capi.so" -o -name "libyara_x_capi.a" \) | head -n 1))
+          
+          echo "=== VERIFY PACKAGE NAME ==="
+          cat "$ACTUAL_PKGCONFIG_DIR/yara_x_capi.pc" || true
+          
           {
-            echo "PKG_CONFIG_PATH=$HOME/yara-x-env/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-            echo "LD_LIBRARY_PATH=$HOME/yara-x-env/lib:${LD_LIBRARY_PATH:-}"
+            echo "PKG_CONFIG_PATH=$ACTUAL_PKGCONFIG_DIR:${PKG_CONFIG_PATH:-}"
+            echo "LD_LIBRARY_PATH=$ACTUAL_LIB_DIR:${LD_LIBRARY_PATH:-}"
             echo "CGO_ENABLED=1"
           } >> "$GITHUB_ENV"
 
