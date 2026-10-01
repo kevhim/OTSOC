@@ -174,13 +174,13 @@ func TestYaraRule_Evaluate_Determinism(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "file.bin")
 	os.WriteFile(filePath, []byte("file_data"), 0644)
-	
+
 	execPath := filepath.Join(tempDir, "exec.bin")
 	os.WriteFile(execPath, []byte("exec_data"), 0644)
-	
+
 	ruleSourceFile := `rule test_rule { strings: $a = "file_data" condition: $a }`
 	ruleFile, _ := NewYaraRule("ID_F", "1.0", "LOW", 50.0, "Reason", nil, nil, ruleSourceFile)
-	
+
 	ruleSourceExec := `rule test_rule { strings: $a = "exec_data" condition: $a }`
 	ruleExec, _ := NewYaraRule("ID_E", "1.0", "LOW", 50.0, "Reason", nil, nil, ruleSourceExec)
 
@@ -191,8 +191,10 @@ func TestYaraRule_Evaluate_Determinism(t *testing.T) {
 		},
 	}
 	matched1, _ := ruleFile.Evaluate(ev1)
-	if !matched1 { t.Errorf("expected matched1=true") }
-	
+	if !matched1 {
+		t.Errorf("expected matched1=true")
+	}
+
 	// 2. executable_path only
 	ev2 := &events.CanonicalEvent{
 		Metadata: map[string]interface{}{
@@ -200,32 +202,40 @@ func TestYaraRule_Evaluate_Determinism(t *testing.T) {
 		},
 	}
 	matched2, _ := ruleExec.Evaluate(ev2)
-	if !matched2 { t.Errorf("expected matched2=true") }
-	
+	if !matched2 {
+		t.Errorf("expected matched2=true")
+	}
+
 	// 3. both (file_path should take precedence)
 	ev3 := &events.CanonicalEvent{
 		Metadata: map[string]interface{}{
-			"file_path": filePath,
+			"file_path":       filePath,
 			"executable_path": execPath,
 		},
 	}
 	matched3File, _ := ruleFile.Evaluate(ev3)
-	if !matched3File { t.Errorf("expected file_path to take precedence") }
+	if !matched3File {
+		t.Errorf("expected file_path to take precedence")
+	}
 	matched3Exec, _ := ruleExec.Evaluate(ev3)
-	if matched3Exec { t.Errorf("expected executable_path to be ignored") }
-	
+	if matched3Exec {
+		t.Errorf("expected executable_path to be ignored")
+	}
+
 	// 4. neither
 	ev4 := &events.CanonicalEvent{
 		Metadata: map[string]interface{}{},
 	}
 	matched4, _ := ruleFile.Evaluate(ev4)
-	if matched4 { t.Errorf("expected no match") }
+	if matched4 {
+		t.Errorf("expected no match")
+	}
 }
 
 func benchmarkYaraRuleSize(b *testing.B, size int) {
 	tempDir := b.TempDir()
 	posPath := filepath.Join(tempDir, "malware.bin")
-	
+
 	data := make([]byte, size)
 	copy(data, []byte("evil_payload_here"))
 	if err := os.WriteFile(posPath, data, 0644); err != nil {

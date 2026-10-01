@@ -206,8 +206,6 @@ func TestEndpointPipeline_Integration(t *testing.T) {
 		}
 	}
 
-
-
 	// ==========================================
 	// Test 1: Successful Ingestion (HTTP 202) -> Event Removed
 	// ==========================================
