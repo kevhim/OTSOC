@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -171,6 +172,7 @@ func TestLostResponse_Integration(t *testing.T) {
 	}
 
 	var requestCount atomic.Int64
+	var mu sync.Mutex
 	logicalAcceptCount := 0
 	acceptedEvents := make(map[string]bool)
 	var capturedID string
@@ -188,11 +190,13 @@ func TestLostResponse_Integration(t *testing.T) {
 			t.Errorf("failed to unmarshal: %v", err)
 		}
 
+		mu.Lock()
 		if !acceptedEvents[inc.EventID] {
 			acceptedEvents[inc.EventID] = true
 			logicalAcceptCount++
 		}
 		capturedID = inc.EventID
+		mu.Unlock()
 
 		if requestCount.Load() == 1 {
 			// Simulate connection dropped before 202 is sent
@@ -248,12 +252,18 @@ func TestLostResponse_Integration(t *testing.T) {
 	if requestCount.Load() != 2 {
 		t.Errorf("Expected exactly 2 HTTP requests, got %d", requestCount.Load())
 	}
-	if logicalAcceptCount != 1 {
-		t.Errorf("Expected exactly 1 logical acceptance, got %d", logicalAcceptCount)
+
+	mu.Lock()
+	lCount := logicalAcceptCount
+	cID := capturedID
+	mu.Unlock()
+
+	if lCount != 1 {
+		t.Errorf("Expected exactly 1 logical acceptance, got %d", lCount)
 	}
 
-	if capturedID != ev.EventID {
-		t.Errorf("EventID changed or mismatch, expected %s got %s", ev.EventID, capturedID)
+	if cID != ev.EventID {
+		t.Errorf("EventID changed or mismatch, expected %s got %s", ev.EventID, cID)
 	}
 }
 
