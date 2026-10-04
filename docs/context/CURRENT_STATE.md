@@ -1,6 +1,6 @@
 # Current State
 
-- **Current Git Branch**: `feature/phase-3-gate-4-yara-x`
+- **Current Git Branch**: `main`
 - **Current Commit Hash**: `HEAD`
 
 ## Phase Status
@@ -24,7 +24,7 @@
 - **Phase 2 (Overall)**: COMPLETE / FROZEN
 
 ## Phase 3 Status
-- **Phase 3 (Detection Core)**: IN PROGRESS
+- **Phase 3 (Detection Core)**: COMPLETE
   - **Gate 1 (Boundary Setup)**: CLOSED
   - **Gate 2 (Foundation Hardening)**: CLOSED
   - **Gate 3 (Detection Engine Robustness)**: CLOSED
@@ -33,7 +33,7 @@
 - **Phase 3.1A / Phase 3.1B (Passive Capture & Modbus/TCP Foundation)**: OUT-OF-SEQUENCE PREPARATORY WORK / FROZEN. Recorded as "out-of-sequence preparatory OT sensing work already present in the repository". It is preserved without extension. It does not alter the official phase sequence automatically.
 
 ## Official Next Phase
-- **Phase 3 (Detection Core)**: The official next milestone per `docs/implementation/roadmap.md` and master prompts.
+- **Phase 4 (Rural Hardening)**: The official next milestone per `docs/implementation/roadmap.md` and master prompts.
 - *Note*: No Phase 2F, 2G, or 2H exist. Resource governor belongs to Phase 4 (Rural Hardening).
 
 ---
@@ -97,7 +97,7 @@
 - **AC-6 (No Fabricated DLQ Identity)**: PASS. DLQ recovery strictly preserves original `event_id`.
 
 ## Known Platform Limitations
-- **Race Detector Toolchain**: `go test -race ./...` on local Windows MinGW fails due to toolchain limitation (`cc1.exe: sorry, unimplemented: 64-bit mode not compiled in`). Linux CI race validation added to CI workflow and is configured but not yet verified.
+- **Race Detector Toolchain**: `go test -race ./...` on local Windows MinGW fails due to toolchain limitation (`cc1.exe: sorry, unimplemented: 64-bit mode not compiled in`). Linux CI race validation is configured in the CI workflow and has been verified.
 
 ## Phase 3 Gate 4 Status
 - Gate 4: CLOSED

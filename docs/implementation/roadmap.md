@@ -27,8 +27,8 @@ This roadmap tracks the incremental delivery of the RedCyberFox OT SOC platform.
 *Note*: The repository contains preparatory work for passive OT sensing (Phase 3.1A/3.1B) recorded as "out-of-sequence preparatory OT sensing work already present in the repository". It is preserved without extension and does not alter the official milestone sequence.
 
 ## Future Phases (Authoritative Sequence)
-- **Phase 3:** Detection Core (Official next phase milestone)
-- **Phase 4:** Rural Hardening (Includes Resource Governor; no Phase 2F/2G/2H)
+- **Phase 3:** Detection Core
+- **Phase 4:** Rural Hardening (Official next phase milestone)
 - **Phase 5:** OT Lab
 - **Phase 6:** Passive OT Sensor
 - **Phase 7:** OT Context

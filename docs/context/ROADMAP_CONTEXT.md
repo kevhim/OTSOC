@@ -21,7 +21,7 @@
 - **Phase 2 (Overall)**: COMPLETE / FROZEN
 
 ## Phase 3 Status
-- **Phase 3 (Detection Core)**: IN PROGRESS
+- **Phase 3 (Detection Core)**: COMPLETE
   - **Gate 1 (Boundary Setup)**: CLOSED
   - **Gate 2 (Foundation Hardening)**: CLOSED
   - **Gate 3 (Detection Engine Robustness)**: CLOSED
@@ -29,8 +29,8 @@
 - **Phase 3.1A / Phase 3.1B**: Recorded as "out-of-sequence preparatory OT sensing work already present in the repository". Preserved without extension. Does not automatically alter the official milestone sequence.
 
 ## Official Roadmap Workflow
-- **Phase 3**: Detection Core (Official next phase milestone)
-- **Phase 4**: Rural Hardening (Includes Resource Governor; no Phase 2F/2G/2H)
+- **Phase 3**: Detection Core
+- **Phase 4**: Rural Hardening (Official next phase milestone)
 - **Phase 5**: OT Lab
 - **Phase 6**: Passive OT Sensor
 - **Phase 7**: OT Context
