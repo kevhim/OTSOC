@@ -23,7 +23,7 @@ const (
 type ResourceSignals struct {
 	CPUUtilizationPercent float64
 	MemoryRSSBytes        uint64
-	StoragePressure       float64 // 0.0 to 1.0 (or percent) representing budget used
+	StoragePressure       float64 // 0.0 to 1.0 representing budget used
 	QueueSaturation       float64 // 0.0 to 1.0 representing fill ratio
 	NetworkState          NetworkState
 }

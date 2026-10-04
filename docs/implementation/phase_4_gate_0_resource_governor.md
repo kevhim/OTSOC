@@ -21,6 +21,9 @@ State transitions are triggered by observable, measurable signals.
 - **Queue Saturation (Backpressure)**: Fill percentage of internal bounded memory queues. *Threshold: PROVISIONAL.*
 - **Network Pressure**: Latency or consecutive send failures indicating offline status or saturation.
 
+**Important - Signal Validity Rule:**
+The caller MUST NOT pass unavailable measurements as `0`. A `0` value architecturally means "zero usage" or "perfectly healthy," which is dangerous if the collector simply failed to obtain a measurement. In the next slice (Phase 4.2), signal presence and measurement validity will be explicitly designed and represented (e.g., via `NaN`, pointer indirection, or validity booleans) to prevent silent fallback to healthy states during collector failure.
+
 ## 3. Priority Policy
 All generated events must be tagged with a priority level that dictates retention, sampling, and transmission order:
 - **P0**: Active safety/control manipulation or equivalent catastrophic-risk telemetry.
