@@ -53,3 +53,17 @@ type Config struct {
 	// Time required to remain below recovery threshold to transition down
 	RecoveryDuration time.Duration
 }
+
+// ValidFloat64 represents a nullable/optional float64 value.
+// Valid is false if the signal is unavailable or could not be measured.
+type ValidFloat64 struct {
+	Value float64
+	Valid bool
+}
+
+// ValidUint64 represents a nullable/optional uint64 value.
+// Valid is false if the signal is unavailable or could not be measured.
+type ValidUint64 struct {
+	Value uint64
+	Valid bool
+}
