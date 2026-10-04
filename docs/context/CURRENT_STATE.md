@@ -105,4 +105,7 @@
 - Real YARA-X Linux CI: VERIFIED
 
 ## Official Next Phase
-- Phase 4: NEXT OFFICIAL PHASE
+Phase 4: ACTIVE
+Phase 4.1 / Gate 1: CLOSED
+Phase 4.2: CLOSED
+Next official slice: Phase 4.3 — Real Resource Signal Collection
