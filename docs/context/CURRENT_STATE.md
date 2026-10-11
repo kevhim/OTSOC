@@ -108,4 +108,8 @@
 Phase 4: ACTIVE
 Phase 4.1 / Gate 1: CLOSED
 Phase 4.2: CLOSED
-Next official slice: Phase 4.3 — Real Resource Signal Collection
+Phase 4.3 — Real Resource Signal Collection: ACTIVE
+- **Phase 4.3.1 (OS Provider Contract & Mock Verification)**: CLOSED
+- **Phase 4.3.2 (Windows OS Resource Provider)**: CLOSED (cumulative source review approved; CPU continuity, overflow guards, storage configuration integrity, and checked storage accumulation verified under Windows UCRT64/CGO)
+- **Phase 4.3.3 (Linux OS Resource Provider)**: CLOSED (cumulative source review approved; CPU continuity, overflow guards, RSS estimate/overflow guards, regular-file storage checks, storage configuration integrity/defensive copy, real Linux-source smoke test, sleep-free deterministic clock advancement, and checked storage accumulation verified under Ubuntu Go 1.26)
+- **Phase 4.3.4 (Resource Signal Wiring & Integration)**: NEXT / NOT STARTED
