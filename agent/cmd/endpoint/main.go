@@ -18,11 +18,17 @@ import (
 	"redcyberfox/agent/internal/config"
 	"redcyberfox/agent/internal/detection"
 	"redcyberfox/agent/internal/forwarder"
+	"redcyberfox/agent/internal/governor"
 	"redcyberfox/agent/internal/health"
 	"redcyberfox/agent/internal/identity"
 	"redcyberfox/agent/internal/ingestion"
 	"redcyberfox/agent/internal/storage"
 	"redcyberfox/pkg/events"
+)
+
+const (
+	agentDBPath       = "agent.db"
+	storageQuotaBytes = int64(50 * 1024 * 1024)
 )
 
 func main() {
@@ -73,7 +79,7 @@ func main() {
 	}()
 
 	// 4. Storage Initialization
-	db := storage.NewSQLiteStorage("agent.db", *identityPath, 50*1024*1024)
+	db := storage.NewSQLiteStorage(agentDBPath, *identityPath, storageQuotaBytes)
 	if err := db.Init(ctx); err != nil {
 		log.Fatalf("Failed to initialize storage: %v", err)
 	}
@@ -86,6 +92,77 @@ func main() {
 
 	// 6. Collector Initialization
 	centralEvents := make(chan *events.CanonicalEvent, 200)
+
+	// Phase 4.3.4: sample real process resources and the bounded ingress queue.
+	// These thresholds are provisional observations until low-spec benchmarks
+	// calibrate enforcement policy in a later Phase 4 slice.
+	var monitorWg sync.WaitGroup
+	resourceProvider, err := governor.NewSQLiteResourceProvider(agentDBPath, time.Now)
+	if err != nil {
+		log.Printf("Resource monitoring unavailable: %v", err)
+	} else {
+		resourceMetrics := governor.NewGovernorMetrics(time.Now)
+		resourceGovernor, governorErr := governor.NewGovernor(governor.Config{
+			CPUSaverThreshold: 80, CPUEmergencyThreshold: 90, CPURecoveryMargin: 5,
+			MemorySaverBytes: 200 * 1024 * 1024, MemoryEmergencyBytes: 300 * 1024 * 1024, MemoryRecoveryMarginBytes: 10 * 1024 * 1024,
+			StorageSaverRatio: 0.7, StorageEmergencyRatio: 0.9, StorageRecoveryMarginRatio: 0.05,
+			QueueSaverRatio: 0.7, QueueEmergencyRatio: 0.9, QueueRecoveryMarginRatio: 0.05,
+			RecoveryDuration: 30 * time.Second,
+		}, time.Now, func(tr governor.Transition) {
+			resourceMetrics.RecordTransition(tr)
+			log.Printf("Resource state %s -> %s: %s", tr.PreviousState, tr.NewState, tr.Reason)
+		})
+		if governorErr != nil {
+			log.Printf("Resource governor unavailable: %v", governorErr)
+		} else {
+			coordinator, coordinatorErr := governor.NewCoordinator(resourceProvider, resourceGovernor, resourceMetrics,
+				governor.CoordinatorConfig{StorageBudgetBytes: uint64(storageQuotaBytes)}, time.Now)
+			if coordinatorErr != nil {
+				log.Printf("Resource coordination unavailable: %v", coordinatorErr)
+			} else {
+				monitorWg.Add(1)
+				go func() {
+					defer monitorWg.Done()
+					ticker := time.NewTicker(5 * time.Second)
+					defer ticker.Stop()
+					var lastError string
+					var samples uint64
+					_ = governor.RunSampling(ctx, ticker.C, coordinator, func() governor.RuntimeSignals {
+						return governor.RuntimeSignals{
+							QueueDepth:    governor.ValidUint64{Value: uint64(len(centralEvents)), Valid: true},
+							QueueCapacity: governor.ValidUint64{Value: uint64(cap(centralEvents)), Valid: true},
+							// The channel cannot reveal its oldest element without consuming it.
+							QueueOldestAgeSec: governor.ValidFloat64{Valid: false},
+							NetworkState:      fwd.NetworkState(),
+						}
+					}, func(result governor.StepResult, stepErr error) {
+						if ctx.Err() != nil {
+							return
+						}
+						currentError := ""
+						if stepErr != nil {
+							currentError = stepErr.Error()
+						}
+						if currentError != lastError {
+							if currentError == "" {
+								log.Println("Resource sampling recovered")
+							} else {
+								log.Printf("Resource sampling degraded: %s", currentError)
+							}
+							lastError = currentError
+						}
+						samples++
+						if samples%12 == 0 && result.Ready {
+							snapshot := resourceMetrics.Snapshot()
+							log.Printf("Resource sample: state=%s cpu=%v rss=%v storage=%v queue=%v network=%s",
+								snapshot.GovernorState, snapshot.AgentCPUPercent, snapshot.AgentRSSBytes,
+								snapshot.DiskStorageUsedBytes, snapshot.QueueSaturationPercent, result.Signals.NetworkState)
+						}
+					})
+				}()
+			}
+		}
+	}
 
 	procCol := process.NewCollector(cfg)
 	log.Println("Starting Process Collector...")
@@ -165,6 +242,7 @@ func main() {
 	// Wait for shutdown
 	<-ctx.Done()
 	log.Println("Endpoint Agent shutdown sequence initiated.")
+	monitorWg.Wait()
 
 	// Shutdown Sequence
 	// 1. Stop Collectors (stops OS collection, waits for collector to exit)

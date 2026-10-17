@@ -2,14 +2,28 @@ package forwarder
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"redcyberfox/agent/internal/governor"
 	"redcyberfox/pkg/events"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func responseWithStatus(status int) *http.Response {
+	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}
+}
 
 type MockStorage struct {
 	events  []*events.CanonicalEvent
@@ -52,19 +66,23 @@ func (m *MockStorage) GetDeviceID() string                                      
 func (m *MockStorage) Close() error                                                  { return nil }
 
 func TestForwarder_202Accepted(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusAccepted)
-	}))
-	defer srv.Close()
-
 	store := &MockStorage{
 		events: []*events.CanonicalEvent{
 			{EventID: "ev-1", TenantID: "tenant-1"},
 		},
 	}
-	f := NewForwarder(srv.URL, "tenant-1", store)
+	f := NewForwarder("http://example.invalid", "tenant-1", store)
+	f.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return responseWithStatus(http.StatusAccepted), nil
+	})
+	if f.NetworkState() != governor.NetworkUnknown {
+		t.Fatalf("connectivity must be unknown before an HTTP attempt")
+	}
 
 	f.processPending(context.Background())
+	if f.NetworkState() != governor.NetworkOnline {
+		t.Fatalf("successful HTTP response must establish online state: got %s, failed=%v", f.NetworkState(), store.failed)
+	}
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -74,19 +92,20 @@ func TestForwarder_202Accepted(t *testing.T) {
 }
 
 func TestForwarder_400BadRequest(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-	}))
-	defer srv.Close()
-
 	store := &MockStorage{
 		events: []*events.CanonicalEvent{
 			{EventID: "ev-2", TenantID: "tenant-1"},
 		},
 	}
-	f := NewForwarder(srv.URL, "tenant-1", store)
+	f := NewForwarder("http://example.invalid", "tenant-1", store)
+	f.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return responseWithStatus(http.StatusBadRequest), nil
+	})
 
 	f.processPending(context.Background())
+	if f.NetworkState() != governor.NetworkOnline {
+		t.Fatalf("HTTP 400 still proves that the server was reached: got %s, failed=%v", f.NetworkState(), store.failed)
+	}
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -96,25 +115,48 @@ func TestForwarder_400BadRequest(t *testing.T) {
 }
 
 func TestForwarder_429TooManyRequests(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Retry-After", "30")
-		w.WriteHeader(http.StatusTooManyRequests)
-	}))
-	defer srv.Close()
-
 	store := &MockStorage{
 		events: []*events.CanonicalEvent{
 			{EventID: "ev-3", TenantID: "tenant-1"},
 		},
 	}
-	f := NewForwarder(srv.URL, "tenant-1", store)
+	f := NewForwarder("http://example.invalid", "tenant-1", store)
+	f.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		resp := responseWithStatus(http.StatusTooManyRequests)
+		resp.Header.Set("Retry-After", "30")
+		return resp, nil
+	})
 
 	f.processPending(context.Background())
+	if f.NetworkState() != governor.NetworkOnline {
+		t.Fatalf("HTTP 429 still proves that the server was reached: got %s, failed=%v", f.NetworkState(), store.failed)
+	}
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if len(store.failed) != 1 || store.failed[0] != "ev-3" {
 		t.Errorf("Event should be marked failed on 429")
+	}
+}
+
+func TestForwarder_NetworkStateRecoversAfterResponse(t *testing.T) {
+	store := &MockStorage{events: []*events.CanonicalEvent{{EventID: "ev-recovery", TenantID: "tenant-1"}}}
+	f := NewForwarder("http://example.invalid", "tenant-1", store)
+	attempts := 0
+	f.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return nil, errors.New("transport unavailable")
+		}
+		return responseWithStatus(http.StatusAccepted), nil
+	})
+	f.processPending(context.Background())
+	if f.NetworkState() != governor.NetworkOffline {
+		t.Fatalf("failed transport must set offline state, got %s", f.NetworkState())
+	}
+	f.processPending(context.Background())
+	if f.NetworkState() != governor.NetworkOnline || len(store.removed) != 1 {
+		t.Fatalf("successful retry must restore online state and remove event: state=%s removed=%v", f.NetworkState(), store.removed)
 	}
 }
 
@@ -133,6 +175,9 @@ func TestForwarder_LostResponseTimeout(t *testing.T) {
 	f.httpClient.Timeout = 10 * time.Millisecond // fast timeout
 
 	f.processPending(context.Background())
+	if f.NetworkState() != governor.NetworkOffline {
+		t.Fatalf("HTTP timeout must mark connectivity offline")
+	}
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
