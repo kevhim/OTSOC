@@ -34,7 +34,7 @@ events, or change forwarding order. Those policies require representative
 low-spec benchmarks and separate Phase 4 acceptance work. Offline collection,
 SQLite durability, and the Phase 2E.4 channel boundary are unchanged.
 
-## Verification boundary
+## Verification
 
 The governor and forwarder Go test packages pass locally on Windows. The
 ingestion package compiles and has no direct tests. The broader storage suite
@@ -43,8 +43,9 @@ that test is outside this resource wiring slice. Sampling tests cover SQLite
 WAL growth and removal, queue saturation, network state, invalid sidecars,
 and timed recovery through the coordinator. Provider tests sample both a
 temporary DB/WAL fixture and a live SQLite database with the real OS provider.
-The endpoint compiles on
-Windows and for Linux/amd64 when the existing YARA-X source file is temporarily
-overlaid during the build. A native Windows endpoint build is blocked by the
-YARA-X Go package's existing build constraints. Linux CI with the real YARA-X
-C API must verify the full endpoint before this phase is closed.
+The [Linux PR CI run](https://github.com/kevhim/OTSOC/actions/runs/39019997303)
+passed the real YARA-X C API build, formatting, Go vet, unit/integration and
+race tests, migrations, E2E, dashboard build, and Docker Compose validation.
+This closes the Phase 4.3.4 integration gate. A native Windows endpoint build
+remains blocked by the existing YARA-X Go package build constraints; the
+endpoint compiled locally with a temporary YARA overlay.
