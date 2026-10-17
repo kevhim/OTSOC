@@ -37,7 +37,7 @@
     - **Phase 4.3.1**: OS Provider Contract & Mock Verification (CLOSED)
     - **Phase 4.3.2**: Windows OS Resource Provider (CLOSED)
     - **Phase 4.3.3**: Linux OS Resource Provider (CLOSED)
-    - **Phase 4.3.4**: Resource Signal Wiring & Integration (NEXT / NOT STARTED)
+    - **Phase 4.3.4**: Resource Signal Wiring & Integration (IMPLEMENTED / LINUX CI VERIFICATION PENDING)
 - **Phase 5**: OT Lab
 - **Phase 6**: Passive OT Sensor
 - **Phase 7**: OT Context

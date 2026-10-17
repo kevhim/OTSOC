@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"redcyberfox/agent/internal/governor"
 	"redcyberfox/agent/internal/interfaces"
 	"redcyberfox/pkg/events"
 )
@@ -22,13 +24,20 @@ type Forwarder struct {
 	httpClient *http.Client
 	storage    interfaces.Storage
 
-	mu      sync.Mutex
-	wakeup  chan struct{}
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	started bool
-	stopped bool
+	mu           sync.Mutex
+	wakeup       chan struct{}
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	started      bool
+	stopped      bool
+	networkState atomic.Uint32
 }
+
+const (
+	networkUnknown uint32 = iota
+	networkOnline
+	networkOffline
+)
 
 func NewForwarder(apiURL, tenantID string, storage interfaces.Storage) *Forwarder {
 	return &Forwarder{
@@ -39,6 +48,19 @@ func NewForwarder(apiURL, tenantID string, storage interfaces.Storage) *Forwarde
 			Timeout: 10 * time.Second,
 		},
 		wakeup: make(chan struct{}, 1),
+	}
+}
+
+// NetworkState reflects observed HTTP connectivity. Until the first request,
+// the state is unknown; this method does not probe the network.
+func (f *Forwarder) NetworkState() governor.NetworkState {
+	switch f.networkState.Load() {
+	case networkOnline:
+		return governor.NetworkOnline
+	case networkOffline:
+		return governor.NetworkOffline
+	default:
+		return governor.NetworkUnknown
 	}
 }
 
@@ -161,12 +183,16 @@ func (f *Forwarder) sendEvent(ctx context.Context, event *events.CanonicalEvent)
 
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
+		if ctx.Err() == nil {
+			f.networkState.Store(networkOffline)
+		}
 		if err := f.storage.MarkFailed(ctx, event.EventID, 0, err); err != nil {
 			log.Printf("CRITICAL: Failed to mark event %s as failed (http do): %v", event.EventID, err)
 		}
 		return
 	}
 	defer resp.Body.Close()
+	f.networkState.Store(networkOnline)
 
 	body, _ := io.ReadAll(resp.Body)
 

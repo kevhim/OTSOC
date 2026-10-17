@@ -1,6 +1,6 @@
 # Current State
 
-- **Current Git Branch**: `main`
+- **Current Git Branch**: `feature/phase-4-3-4-resource-wiring`
 - **Current Commit Hash**: `HEAD`
 
 ## Phase Status
@@ -112,4 +112,4 @@ Phase 4.3 — Real Resource Signal Collection: ACTIVE
 - **Phase 4.3.1 (OS Provider Contract & Mock Verification)**: CLOSED
 - **Phase 4.3.2 (Windows OS Resource Provider)**: CLOSED (cumulative source review approved; CPU continuity, overflow guards, storage configuration integrity, and checked storage accumulation verified under Windows UCRT64/CGO)
 - **Phase 4.3.3 (Linux OS Resource Provider)**: CLOSED (cumulative source review approved; CPU continuity, overflow guards, RSS estimate/overflow guards, regular-file storage checks, storage configuration integrity/defensive copy, real Linux-source smoke test, sleep-free deterministic clock advancement, and checked storage accumulation verified under Ubuntu Go 1.26)
-- **Phase 4.3.4 (Resource Signal Wiring & Integration)**: NEXT / NOT STARTED
+- **Phase 4.3.4 (Resource Signal Wiring & Integration)**: IMPLEMENTED / LINUX CI VERIFICATION PENDING. The endpoint now samples OS process resources, SQLite DB/WAL/SHM file sizes against its existing 50 MiB quota, bounded ingress queue saturation, and forwarder-observed connectivity. State transitions and changed sampling errors are logged. The monitor is observational; collector throttling and priority policy remain later Phase 4 work. Windows governor and forwarder tests pass, including coordinated storage/queue/network pressure and recovery; the unrelated existing `TestStorage_CorruptDB` backup assertion fails on this Windows host, while the rest of the storage package passes. See `docs/implementation/phase_4_3_4_resource_signal_wiring.md`.
