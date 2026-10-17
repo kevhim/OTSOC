@@ -48,7 +48,11 @@ type MetricsSnapshot struct {
 	QueueSaturationPercent     ValidFloat64
 	QueueCapacityCount         ValidUint64
 	DiskStorageUsedBytes       ValidUint64
-	DiskWritePressureBytesSec  ValidFloat64
+	// DiskWritePressureBytesSec represents the agent process's observed write-I/O transfer rate
+	// in bytes per second.
+	// Naming note: This field retains the name DiskWritePressureBytesSec for API/schema compatibility,
+	// but it measures the agent process's observed write-I/O rate, NOT physical disk saturation or host disk pressure.
+	DiskWritePressureBytesSec ValidFloat64
 
 	EventsAggregatedTotal map[EventCategory]uint64
 	EventsDroppedTotal    map[EventCategory]uint64
@@ -139,6 +143,9 @@ func (m *GovernorMetrics) UpdateQueue(depth, capacity ValidUint64, oldestAge Val
 	return nil
 }
 
+// UpdateDisk updates the agent persistence footprint and process write-I/O rate.
+// writePressure represents the process observed write-I/O transfer rate in bytes per second,
+// not physical disk throughput or host disk saturation.
 func (m *GovernorMetrics) UpdateDisk(used ValidUint64, writePressure ValidFloat64) error {
 	if writePressure.Valid && (math.IsNaN(writePressure.Value) || writePressure.Value < 0) {
 		return errors.New("invalid disk write pressure")

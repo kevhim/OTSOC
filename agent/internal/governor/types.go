@@ -15,6 +15,7 @@ const (
 type NetworkState string
 
 const (
+	NetworkUnknown NetworkState = "UNKNOWN"
 	NetworkOnline  NetworkState = "ONLINE"
 	NetworkOffline NetworkState = "OFFLINE"
 )
