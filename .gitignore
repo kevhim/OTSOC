@@ -28,6 +28,7 @@ dist/
 *.dll
 *.so
 *.dylib
+*.elf
 
 # Node / JS
 node_modules/
@@ -62,7 +63,9 @@ temp/
 coverage/
 logs/
 *.log
-test*.zip
+*.zip
+!.tools/go/lib/time/zoneinfo.zip
+scratch/
 
 # Sensitive OT
 *.pcap
