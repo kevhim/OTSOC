@@ -562,11 +562,39 @@ func TestStorage_RetryTimestamp_UTCAndMigration(t *testing.T) {
 		t.Fatalf("Store failed: %v", err)
 	}
 
-	// 2. Simulate legacy timestamp write with local offset (+0530) and monotonic suffix
+	// 2. Simulate legacy timestamp writes:
+	// 2a. Legacy timestamp with positive offset (+0530) and monotonic suffix
 	legacyTS := "2026-09-07 00:26:53.3862089 +0530 IST m=+10.022039201"
 	_, err := s.db.Exec("UPDATE events SET next_attempt_at = ? WHERE event_id = ?", legacyTS, ev.EventID)
 	if err != nil {
 		t.Fatalf("Failed to write legacy timestamp: %v", err)
+	}
+
+	// 2b. Legacy timestamp with negative offset (-0400)
+	evNeg := &events.CanonicalEvent{
+		EventID:  "retry-ev-neg",
+		Severity: "INFO",
+		Source:   "test-retry-neg",
+	}
+	if err := s.Store(context.Background(), evNeg); err != nil {
+		t.Fatalf("Store evNeg failed: %v", err)
+	}
+	legacyNegTS := "2026-09-06 14:56:53 -0400 EDT m=+5.123"
+	if _, err := s.db.Exec("UPDATE events SET next_attempt_at = ? WHERE event_id = ?", legacyNegTS, evNeg.EventID); err != nil {
+		t.Fatalf("Failed to write legacy negative offset: %v", err)
+	}
+
+	// 2c. Malformed unparseable timestamp
+	evBad := &events.CanonicalEvent{
+		EventID:  "retry-ev-bad",
+		Severity: "INFO",
+		Source:   "test-retry-bad",
+	}
+	if err := s.Store(context.Background(), evBad); err != nil {
+		t.Fatalf("Store evBad failed: %v", err)
+	}
+	if _, err := s.db.Exec("UPDATE events SET next_attempt_at = 'garbage-unparseable-date' WHERE event_id = ?", evBad.EventID); err != nil {
+		t.Fatalf("Failed to write malformed timestamp: %v", err)
 	}
 
 	// 3. Run migration
@@ -574,12 +602,12 @@ func TestStorage_RetryTimestamp_UTCAndMigration(t *testing.T) {
 		t.Fatalf("migrateRetryTimestamps failed: %v", err)
 	}
 
+	// 3a. Verify +0530 migrated correctly
 	var migratedTS string
 	if err := s.db.QueryRow("SELECT next_attempt_at FROM events WHERE event_id = ?", ev.EventID).Scan(&migratedTS); err != nil {
 		t.Fatalf("Failed to read migrated timestamp: %v", err)
 	}
 
-	// modernc scans DATETIME columns as time.Time / RFC3339 string. Parse and verify instant:
 	tParsed, ok := parseRetryTimestamp(migratedTS)
 	if !ok {
 		t.Fatalf("Failed to parse migrated timestamp '%s'", migratedTS)
@@ -589,13 +617,38 @@ func TestStorage_RetryTimestamp_UTCAndMigration(t *testing.T) {
 		t.Errorf("Expected migrated instant %v, got %v", expectedInstant, tParsed)
 	}
 
-	// Verify that GetPendingEvents finds the event (since 2026-09-06 is in the past)
+	// 3b. Verify -0400 migrated to exact same instant
+	var migratedNegTS string
+	if err := s.db.QueryRow("SELECT next_attempt_at FROM events WHERE event_id = ?", evNeg.EventID).Scan(&migratedNegTS); err != nil {
+		t.Fatalf("Failed to read migrated negative timestamp: %v", err)
+	}
+	tNegParsed, ok := parseRetryTimestamp(migratedNegTS)
+	if !ok || !tNegParsed.Equal(expectedInstant) {
+		t.Errorf("Expected negative offset migrated to %v, got %v (raw: %s)", expectedInstant, tNegParsed, migratedNegTS)
+	}
+
+	// 3c. Verify malformed row was migrated to immediate eligibility (in past)
+	var migratedBadTS string
+	if err := s.db.QueryRow("SELECT next_attempt_at FROM events WHERE event_id = ?", evBad.EventID).Scan(&migratedBadTS); err != nil {
+		t.Fatalf("Failed to read migrated malformed timestamp: %v", err)
+	}
+	tBadParsed, ok := parseRetryTimestamp(migratedBadTS)
+	if !ok || !tBadParsed.Before(time.Now().UTC()) {
+		t.Errorf("Expected malformed timestamp to be migrated to past time, got %v", tBadParsed)
+	}
+
+	// 3d. Verify idempotency of migration: running migration again produces no errors and leaves rows valid
+	if err := s.migrateRetryTimestamps(context.Background()); err != nil {
+		t.Fatalf("Second run of migrateRetryTimestamps failed: %v", err)
+	}
+
+	// Verify all 3 events are now eligible in GetPendingEvents
 	pending, err := s.GetPendingEvents(context.Background(), 10)
 	if err != nil {
 		t.Fatalf("GetPendingEvents failed: %v", err)
 	}
-	if len(pending) != 1 || pending[0].EventID != ev.EventID {
-		t.Errorf("Expected event %s to be immediately eligible after migration, found %d events", ev.EventID, len(pending))
+	if len(pending) != 3 {
+		t.Errorf("Expected 3 immediately eligible events after migration, found %d", len(pending))
 	}
 
 	// 4. Test MarkFailed produces canonical UTC timestamp

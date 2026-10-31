@@ -602,8 +602,10 @@ func (s *SQLiteStorage) MarkFailed(ctx context.Context, eventID string, retryAft
 }
 
 // migrateRetryTimestamps normalizes legacy or local-offset retry timestamps in existing rows to UTC.
+// It uses a bounded batch and filters only non-canonical rows, ensuring bounded startup work.
 func (s *SQLiteStorage) migrateRetryTimestamps(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, "SELECT event_id, next_attempt_at FROM events WHERE next_attempt_at IS NOT NULL")
+	// Query only rows that do not match canonical 19-char format ("YYYY-MM-DD HH:MM:SS"), bounded by limit.
+	rows, err := s.db.QueryContext(ctx, "SELECT event_id, next_attempt_at FROM events WHERE next_attempt_at IS NOT NULL AND length(next_attempt_at) != 19 LIMIT 1000")
 	if err != nil {
 		return fmt.Errorf("failed to query retry timestamps: %w", err)
 	}
@@ -621,16 +623,13 @@ func (s *SQLiteStorage) migrateRetryTimestamps(ctx context.Context) error {
 		if err := rows.Scan(&eventID, &rawTS); err != nil {
 			return err
 		}
-		// If rawTS already matches canonical SQLite UTC "YYYY-MM-DD HH:MM:SS" (len 19), no migration needed.
-		if len(rawTS) == 19 && rawTS[4] == '-' && rawTS[7] == '-' && rawTS[10] == ' ' && rawTS[13] == ':' && rawTS[16] == ':' {
-			continue
-		}
 		parsed, ok := parseRetryTimestamp(rawTS)
 		var newTS string
 		if ok {
 			newTS = parsed.UTC().Format("2006-01-02 15:04:05")
 		} else {
-			// Unparseable legacy string: set to past UTC so it becomes immediately eligible rather than stuck
+			// Unparseable legacy string: log warning for observability and set to past UTC for immediate eligibility
+			log.Printf("Warning: unparseable legacy retry timestamp for event %s ('%s'); migrating to immediate eligibility", eventID, rawTS)
 			newTS = time.Now().UTC().Add(-1 * time.Hour).Format("2006-01-02 15:04:05")
 		}
 		updates = append(updates, toUpdate{eventID: eventID, formatted: newTS})
@@ -639,13 +638,29 @@ func (s *SQLiteStorage) migrateRetryTimestamps(ctx context.Context) error {
 		return err
 	}
 
+	if len(updates) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin migration tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, "UPDATE events SET next_attempt_at = ? WHERE event_id = ?")
+	if err != nil {
+		return fmt.Errorf("failed to prepare migration update stmt: %w", err)
+	}
+	defer stmt.Close()
+
 	for _, u := range updates {
-		_, err := s.db.ExecContext(ctx, "UPDATE events SET next_attempt_at = ? WHERE event_id = ?", u.formatted, u.eventID)
-		if err != nil {
-			log.Printf("Warning: failed to migrate retry timestamp for event %s: %v", u.eventID, err)
+		if _, err := stmt.ExecContext(ctx, u.formatted, u.eventID); err != nil {
+			return fmt.Errorf("failed to migrate retry timestamp for event %s: %w", u.eventID, err)
 		}
 	}
-	return nil
+
+	return tx.Commit()
 }
 
 // parseRetryTimestamp parses legacy and variant timestamp strings into UTC time.

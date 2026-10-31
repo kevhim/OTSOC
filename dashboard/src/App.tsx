@@ -22,7 +22,7 @@ interface Alert {
 function App() {
   const [events, setEvents] = useState<Event[]>([])
   const [alerts, setAlerts] = useState<Alert[]>([])
-  const [tenantId, setTenantId] = useState<string>('tenant-alpha')
+  const [tenantId, setTenantId] = useState<string>('test-tenant')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [lastFetched, setLastFetched] = useState<string | null>(null)
 

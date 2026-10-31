@@ -129,3 +129,111 @@ func TestIngestion_EmergencySpill_SuccessfulSpill(t *testing.T) {
 		t.Errorf("Spill file is empty")
 	}
 }
+
+func TestIngestion_EndpointIdentityLifecycleAcrossRestarts(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	identityPath := filepath.Join(tmpDir, "identity.json")
+
+	// 1. Initial boot: legacy identity bootstrap file exists
+	initialID := "initial-device-guid-12345"
+	if err := os.WriteFile(identityPath, []byte(`{"device_id":"`+initialID+`"}`), 0600); err != nil {
+		t.Fatalf("Failed to create identity file: %v", err)
+	}
+
+	// First run: Storage initializes, migrates identity into SQLite, unlinks identity.json
+	db1 := storage.NewSQLiteStorage(dbPath, identityPath, 10*1024*1024)
+	if err := db1.Init(context.Background()); err != nil {
+		t.Fatalf("db1.Init failed: %v", err)
+	}
+	devID1 := db1.GetDeviceID()
+	if devID1 != initialID {
+		t.Fatalf("Expected devID1 '%s', got '%s'", initialID, devID1)
+	}
+
+	// Endpoint wires devID1 into Ingestion Engine AssetID (matching updated main.go wiring)
+	eng1 := NewEngine(db1, Config{
+		TenantID: "tenant-test",
+		SiteID:   "site-test",
+		AssetID:  devID1,
+	})
+
+	ev1 := &events.CanonicalEvent{
+		EventID:  "run1-ev-1",
+		Severity: "INFO",
+		Source:   "test",
+	}
+	ctx := context.Background()
+	outcome1 := eng1.ProcessEvent(ctx, ctx, ev1)
+	if outcome1 != OutcomeCommitted {
+		t.Fatalf("Event 1 failed to commit: %v", outcome1)
+	}
+
+	// Verify ev1 in storage has matching AssetID, DeviceID in database, and SeqNo = 1
+	pending1, err := db1.GetPendingEvents(ctx, 10)
+	if err != nil || len(pending1) != 1 {
+		t.Fatalf("Failed to get pending events: %v (len: %d)", err, len(pending1))
+	}
+	if pending1[0].AssetID != initialID || pending1[0].SeqNo != 1 {
+		t.Errorf("Event 1 mismatch: AssetID=%s, SeqNo=%d", pending1[0].AssetID, pending1[0].SeqNo)
+	}
+	var dbDevID1 string
+	if err := db1.GetDB().QueryRow("SELECT device_id FROM events WHERE event_id = ?", pending1[0].EventID).Scan(&dbDevID1); err != nil {
+		t.Fatalf("Failed to query stored device_id: %v", err)
+	}
+	if dbDevID1 != initialID {
+		t.Errorf("Stored device_id mismatch: expected '%s', got '%s'", initialID, dbDevID1)
+	}
+	db1.Close()
+
+	// Verify identity.json is absent after run 1
+	if _, err := os.Stat(identityPath); !os.IsNotExist(err) {
+		t.Fatalf("Expected identity.json to be deleted after migration")
+	}
+
+	// 2. Second boot (Endpoint Restart):
+	// identity.json is absent! Storage re-opens existing db.
+	db2 := storage.NewSQLiteStorage(dbPath, identityPath, 10*1024*1024)
+	if err := db2.Init(context.Background()); err != nil {
+		t.Fatalf("db2.Init failed on restart: %v", err)
+	}
+	devID2 := db2.GetDeviceID()
+	if devID2 != initialID {
+		t.Fatalf("Identity drifted on restart! Expected '%s', got '%s'", initialID, devID2)
+	}
+
+	// Endpoint constructs ingestion engine using authoritative devID2
+	eng2 := NewEngine(db2, Config{
+		TenantID: "tenant-test",
+		SiteID:   "site-test",
+		AssetID:  devID2,
+	})
+
+	ev2 := &events.CanonicalEvent{
+		EventID:  "run2-ev-2",
+		Severity: "INFO",
+		Source:   "test",
+	}
+	outcome2 := eng2.ProcessEvent(ctx, ctx, ev2)
+	if outcome2 != OutcomeCommitted {
+		t.Fatalf("Event 2 failed to commit on restart: %v", outcome2)
+	}
+
+	// Verify ev2 in storage has matching AssetID, DeviceID, and continuous SeqNo = 2
+	pending2, err := db2.GetPendingEvents(ctx, 10)
+	if err != nil || len(pending2) != 2 {
+		t.Fatalf("Failed to get pending events on restart: %v (len: %d)", err, len(pending2))
+	}
+	if pending2[1].AssetID != initialID || pending2[1].SeqNo != 2 {
+		t.Errorf("Event 2 mismatch: AssetID=%s, SeqNo=%d", pending2[1].AssetID, pending2[1].SeqNo)
+	}
+	var dbDevID2 string
+	if err := db2.GetDB().QueryRow("SELECT device_id FROM events WHERE event_id = ?", pending2[1].EventID).Scan(&dbDevID2); err != nil {
+		t.Fatalf("Failed to query stored device_id for event 2: %v", err)
+	}
+	if dbDevID2 != initialID {
+		t.Errorf("Stored device_id mismatch for event 2: expected '%s', got '%s'", initialID, dbDevID2)
+	}
+	db2.Close()
+}
+
