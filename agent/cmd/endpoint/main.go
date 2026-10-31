@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
 	"os"
@@ -93,10 +94,10 @@ func main() {
 	// 6. Collector Initialization
 	centralEvents := make(chan *events.CanonicalEvent, 200)
 
-	// Phase 4.3.4: sample real process resources and the bounded ingress queue.
-	// These thresholds are provisional observations until low-spec benchmarks
-	// calibrate enforcement policy in a later Phase 4 slice.
-	var monitorWg sync.WaitGroup
+	// Phase 4.3: Initialize resource governance infrastructure (synchronous, on-demand).
+	// Recurring endpoint background sampling is not enabled.
+	// Storage pressure evaluation remains unresolved pending an authoritative persistence budget policy.
+	var coordinator *governor.Coordinator
 	resourceProvider, err := governor.NewSQLiteResourceProvider(agentDBPath, time.Now)
 	if err != nil {
 		log.Printf("Resource monitoring unavailable: %v", err)
@@ -115,54 +116,31 @@ func main() {
 		if governorErr != nil {
 			log.Printf("Resource governor unavailable: %v", governorErr)
 		} else {
-			coordinator, coordinatorErr := governor.NewCoordinator(resourceProvider, resourceGovernor, resourceMetrics,
-				governor.CoordinatorConfig{StorageBudgetBytes: uint64(storageQuotaBytes)}, time.Now)
-			if coordinatorErr != nil {
-				log.Printf("Resource coordination unavailable: %v", coordinatorErr)
+			// Authoritative storage budget is unresolved; StorageBudgetBytes is 0 to ensure
+			// storage pressure evaluation remains blocked rather than assuming arbitrary quotas.
+			var coordErr error
+			coordinator, coordErr = governor.NewCoordinator(resourceProvider, resourceGovernor, resourceMetrics,
+				governor.CoordinatorConfig{StorageBudgetBytes: 0}, time.Now)
+			if coordErr != nil {
+				log.Printf("Resource coordinator unavailable: %v", coordErr)
 			} else {
-				monitorWg.Add(1)
-				go func() {
-					defer monitorWg.Done()
-					ticker := time.NewTicker(5 * time.Second)
-					defer ticker.Stop()
-					var lastError string
-					var samples uint64
-					_ = governor.RunSampling(ctx, ticker.C, coordinator, func() governor.RuntimeSignals {
-						return governor.RuntimeSignals{
-							QueueDepth:    governor.ValidUint64{Value: uint64(len(centralEvents)), Valid: true},
-							QueueCapacity: governor.ValidUint64{Value: uint64(cap(centralEvents)), Valid: true},
-							// The channel cannot reveal its oldest element without consuming it.
-							QueueOldestAgeSec: governor.ValidFloat64{Valid: false},
-							NetworkState:      fwd.NetworkState(),
-						}
-					}, func(result governor.StepResult, stepErr error) {
-						if ctx.Err() != nil {
-							return
-						}
-						currentError := ""
-						if stepErr != nil {
-							currentError = stepErr.Error()
-						}
-						if currentError != lastError {
-							if currentError == "" {
-								log.Println("Resource sampling recovered")
-							} else {
-								log.Printf("Resource sampling degraded: %s", currentError)
-							}
-							lastError = currentError
-						}
-						samples++
-						if samples%12 == 0 && result.Ready {
-							snapshot := resourceMetrics.Snapshot()
-							log.Printf("Resource sample: state=%s cpu=%v rss=%v storage=%v queue=%v network=%s",
-								snapshot.GovernorState, snapshot.AgentCPUPercent, snapshot.AgentRSSBytes,
-								snapshot.DiskStorageUsedBytes, snapshot.QueueSaturationPercent, result.Signals.NetworkState)
-						}
-					})
-				}()
+				// Initial startup baseline invocation to prime CPU provider continuity
+				// and sample initial runtime state. This executes synchronously on demand
+				// without background tickers, goroutines, or recurring scheduling.
+				stepRes, stepErr := coordinator.Step(ctx, governor.RuntimeSignals{
+					QueueDepth:    governor.ValidUint64{Value: uint64(len(centralEvents)), Valid: true},
+					QueueCapacity: governor.ValidUint64{Value: uint64(cap(centralEvents)), Valid: true},
+					NetworkState:  fwd.NetworkState(),
+				})
+				if stepErr != nil && !errors.Is(stepErr, governor.ErrMissingStorageBudget) {
+					log.Printf("Resource coordinator initial baseline sample error: %v", stepErr)
+				}
+				log.Printf("Resource governor coordinator initialized (on-demand mode, initial step ready=%v evaluated=%v storageBlocked=%v)",
+					stepRes.Ready, stepRes.Evaluated, stepRes.StorageBlocked)
 			}
 		}
 	}
+	_ = coordinator
 
 	procCol := process.NewCollector(cfg)
 	log.Println("Starting Process Collector...")
@@ -242,7 +220,6 @@ func main() {
 	// Wait for shutdown
 	<-ctx.Done()
 	log.Println("Endpoint Agent shutdown sequence initiated.")
-	monitorWg.Wait()
 
 	// Shutdown Sequence
 	// 1. Stop Collectors (stops OS collection, waits for collector to exit)

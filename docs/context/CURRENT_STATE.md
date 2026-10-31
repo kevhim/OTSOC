@@ -108,10 +108,17 @@
 Phase 4: ACTIVE
 Phase 4.1 / Gate 1: CLOSED
 Phase 4.2: CLOSED
-Phase 4.3 — Real Resource Signal Collection: CLOSED
+Phase 4.3 — Real Resource Signal Collection: IN PROGRESS (Acceptance Blockers Identified)
 - **Phase 4.3.1 (OS Provider Contract & Mock Verification)**: CLOSED
 - **Phase 4.3.2 (Windows OS Resource Provider)**: CLOSED (cumulative source review approved; CPU continuity, overflow guards, storage configuration integrity, and checked storage accumulation verified under Windows UCRT64/CGO)
 - **Phase 4.3.3 (Linux OS Resource Provider)**: CLOSED (cumulative source review approved; CPU continuity, overflow guards, RSS estimate/overflow guards, regular-file storage checks, storage configuration integrity/defensive copy, real Linux-source smoke test, sleep-free deterministic clock advancement, and checked storage accumulation verified under Ubuntu Go 1.26)
-- **Phase 4.3.4 (Resource Signal Wiring & Integration)**: CLOSED / LINUX CI VERIFIED. The endpoint samples process resources, SQLite DB/WAL/SHM against its 50 MiB quota, bounded ingress queue saturation, and forwarder-observed connectivity. Transitions and changed sampling errors are logged. The monitor remains observational; collector throttling and priority policy require later Phase 4 work. Local Windows governor and forwarder tests pass; the existing `TestStorage_CorruptDB` backup assertion fails on this Windows host. The [Linux PR CI run](https://github.com/kevhim/OTSOC/actions/runs/39019997303) passed the real YARA-X build, Go vet, unit/integration and race tests, migrations, E2E, dashboard build, and Docker Compose check. See `docs/implementation/phase_4_3_4_resource_signal_wiring.md`.
+- **Phase 4.3.4 (Resource Signal Wiring & Integration)**: PARTIAL / ACCEPTANCE BLOCKERS IDENTIFIED:
+  - **OS Resource Providers**: COMPLETED.
+  - **On-Demand Coordinator Integration**: COMPLETED STARTUP BASELINE (constructed in main.go; invokes initial baseline Step synchronously at startup to prime CPU continuity and sample initial metrics; ongoing runtime invocation remains uninvoked pending Phase 4 batch/lifecycle policy).
+  - **Continuous Endpoint Sampling**: NOT ENABLED (unapproved background 5s ticker removed from endpoint runtime).
+  - **Storage-Pressure Policy**: UNRESOLVED (missing authoritative persistence budget policy; StorageBudgetBytes remains 0, leaving storage pressure blocked).
+  - **Governor Race Validation**: PENDING CI EXECUTION (dedicated governor race step added to .github/workflows/ci.yml; awaiting Linux CI run).
+
+Phase 4.3 remains open until storage budget policy is established and CI race test evidence is collected. See docs/implementation/phase_4_3_4_resource_signal_wiring.md.
 
 The next Phase 4 work is to benchmark representative low-spec endpoints, calibrate provisional thresholds, and define safe enforcement and priority behavior against the Phase 4 gate-0 acceptance criteria.

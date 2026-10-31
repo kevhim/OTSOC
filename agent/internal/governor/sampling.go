@@ -6,9 +6,10 @@ import (
 	"time"
 )
 
-// RunSampling performs an immediate sample and then one sample per tick. The
-// caller owns the ticker and the runtime signal source; no polling is hidden in
-// the coordinator. It returns promptly when the agent context is canceled.
+// RunSampling performs an immediate sample and then one sample per tick from
+// an externally supplied trigger channel. It is a harness and test utility;
+// the production endpoint runtime does not use background tickers and relies
+// on on-demand coordinator invocation. It returns promptly when the agent context is canceled.
 func RunSampling(
 	ctx context.Context,
 	ticks <-chan time.Time,

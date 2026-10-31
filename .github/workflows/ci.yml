@@ -89,6 +89,9 @@ jobs:
       - name: Go Test Race (Integration/Detection)
         run: go test -race -v ./agent/internal/integration/... ./agent/internal/detection/...
 
+      - name: Go Test Race (Governor)
+        run: go test -race -v -count=1 ./agent/internal/governor/...
+
       - name: Go Test (Migration)
         run: go test -v -run=TestMigrations ./server
         env:
