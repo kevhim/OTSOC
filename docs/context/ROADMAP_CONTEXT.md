@@ -30,7 +30,14 @@
 
 ## Official Roadmap Workflow
 - **Phase 3**: Detection Core
-- **Phase 4**: Rural Hardening (Official next phase milestone)
+- **Phase 4**: Rural Hardening (ACTIVE)
+  - **Phase 4.1**: Resource Governor Core & Margins (CLOSED)
+  - **Phase 4.2**: Observable Resource Governor Metrics (CLOSED)
+  - **Phase 4.3**: Real Resource Signal Collection (CLOSED)
+    - **Phase 4.3.1**: OS Provider Contract & Mock Verification (CLOSED)
+    - **Phase 4.3.2**: Windows OS Resource Provider (CLOSED)
+    - **Phase 4.3.3**: Linux OS Resource Provider (CLOSED)
+    - **Phase 4.3.4**: Resource Signal Wiring & Integration (CLOSED / LINUX CI VERIFIED)
 - **Phase 5**: OT Lab
 - **Phase 6**: Passive OT Sensor
 - **Phase 7**: OT Context
