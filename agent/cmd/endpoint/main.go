@@ -21,7 +21,6 @@ import (
 	"redcyberfox/agent/internal/forwarder"
 	"redcyberfox/agent/internal/governor"
 	"redcyberfox/agent/internal/health"
-	"redcyberfox/agent/internal/identity"
 	"redcyberfox/agent/internal/ingestion"
 	"redcyberfox/agent/internal/storage"
 	"redcyberfox/pkg/events"
@@ -45,12 +44,19 @@ func main() {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// 2. Identity Initialization
-	id, err := identity.LoadOrInitialize(*identityPath)
-	if err != nil {
-		log.Fatalf("Failed to initialize device identity: %v", err)
+	// 2. Storage Initialization & Authoritative Device Identity
+	// SQLite is the single authoritative source of truth for device identity.
+	// If a legacy identity file is present, db.Init migrates it into SQLite and removes it.
+	db := storage.NewSQLiteStorage(agentDBPath, *identityPath, storageQuotaBytes)
+	if err := db.Init(context.Background()); err != nil {
+		log.Fatalf("Failed to initialize storage: %v", err)
 	}
-	log.Printf("Device Identity: %s", id.DeviceID)
+
+	deviceID := db.GetDeviceID()
+	if deviceID == "" {
+		log.Fatalf("Failed to establish authoritative device identity from storage")
+	}
+	log.Printf("Device Identity: %s", deviceID)
 
 	// 3. Graceful Shutdown Context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -79,13 +85,7 @@ func main() {
 		}()
 	}()
 
-	// 4. Storage Initialization
-	db := storage.NewSQLiteStorage(agentDBPath, *identityPath, storageQuotaBytes)
-	if err := db.Init(ctx); err != nil {
-		log.Fatalf("Failed to initialize storage: %v", err)
-	}
-
-	// 5. Forwarder Initialization
+	// 4. Forwarder Initialization
 	fwd := forwarder.NewForwarder(cfg.APIAddr, cfg.TenantID, db)
 	if err := fwd.Start(ctx); err != nil {
 		log.Fatalf("Failed to start forwarder: %v", err)
@@ -174,7 +174,7 @@ func main() {
 
 	// 7. Health Manager (from previous phase)
 	healthCh := make(chan *health.Signal, 100)
-	healthMgr := health.NewManager(id.DeviceID, cfg.TenantID, cfg.SiteID, healthCh)
+	healthMgr := health.NewManager(deviceID, cfg.TenantID, cfg.SiteID, healthCh)
 	go func() {
 		if err := healthMgr.Start(ctx); err != nil {
 			log.Printf("Health manager stopped with error: %v", err)
@@ -189,7 +189,7 @@ func main() {
 	ingestEngine := ingestion.NewEngine(db, ingestion.Config{
 		TenantID: cfg.TenantID,
 		SiteID:   cfg.SiteID,
-		AssetID:  id.DeviceID,
+		AssetID:  deviceID,
 		OnCommitted: func(ctx context.Context, ev *events.CanonicalEvent) {
 			detEngine.Evaluate(ctx, ev)
 			fwd.Wakeup()

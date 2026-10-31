@@ -150,11 +150,17 @@ func (e *Engine) ProcessEvent(ctx, drainCtx context.Context, ev *events.Canonica
 
 				// DLQ failed: Best-effort emergency spill to disk.
 				spillBytes, marshalErr := json.Marshal(ev)
-				var spillErr error
-				if marshalErr == nil {
-					spillErr = os.WriteFile(e.cfg.EmergencySpillPath, append(spillBytes, '\n'), 0600)
+				if marshalErr != nil {
+					log.Printf("ERROR: Event %s failed to serialize for emergency spill: %v", ev.EventID, marshalErr)
+					if e.cfg.OnFatal != nil {
+						e.cfg.OnFatal(ev, marshalErr)
+						return OutcomeDropped
+					}
+					log.Printf("FATAL: Event %s serialization failed during emergency spill: %v. Dropping.", ev.EventID, marshalErr)
+					return OutcomeDropped
 				}
 
+				spillErr := os.WriteFile(e.cfg.EmergencySpillPath, append(spillBytes, '\n'), 0600)
 				if spillErr == nil {
 					log.Printf("CRITICAL: Event %s spilled to disk (BEST-EFFORT) due to uncertain commit and DLQ failure.", ev.EventID)
 					return OutcomeSpilledDisk
