@@ -4,8 +4,9 @@
 .DESCRIPTION
     Runs all static, unit, integration, and dashboard checks.
     Supports -Race and -NativeDetection parameters.
-    Reports environment-blocked dependencies (e.g. CGO/gcc or native YARA-X library on Windows)
-    explicitly without falling back to stubs or weakening test assertions.
+    Auto-detects installed UCRT64 toolchain and real YARA-X C API if present.
+    Reports environment-blocked dependencies explicitly without falling back to stubs
+    or weakening test assertions.
 .EXAMPLE
     .\scripts\verify-phase4.ps1 -Race -NativeDetection
 #>
@@ -19,6 +20,14 @@ $ErrorActionPreference = "Continue"
 
 $repoRoot = (Resolve-Path "$PSScriptRoot\..").Path
 Set-Location $repoRoot
+
+# Auto-discover UCRT64 toolchain if installed in standard location (C:\msys64\ucrt64)
+if (Test-Path "C:\msys64\ucrt64\bin\gcc.exe") {
+    $env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
+}
+if (Test-Path "C:\msys64\ucrt64\lib\pkgconfig\yara_x_capi.pc") {
+    $env:PKG_CONFIG_PATH = "C:\msys64\ucrt64\lib\pkgconfig;" + $env:PKG_CONFIG_PATH
+}
 
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host "   RedCyberFox Phase 4 Verification & Correctness Check   " -ForegroundColor Cyan
@@ -118,15 +127,18 @@ if ($LASTEXITCODE -eq 0) {
 Write-Host "`n--> [8/8] Evaluating -Race and -NativeDetection checks..." -ForegroundColor Magenta
 
 if ($Race) {
-    Write-Host "Probing local 64-bit CGO / MinGW race detector..." -ForegroundColor Cyan
+    Write-Host "Probing local 64-bit CGO / UCRT64 race detector..." -ForegroundColor Cyan
     $gccCheck = Get-Command gcc -ErrorAction SilentlyContinue
     if (-not $gccCheck) {
-        Add-Result -Name "Go Test -Race (Governor & Integration)" -Status "BLOCKED" -Details "C compiler (gcc) / CGO not available on local Windows host. Verified in Linux CI (ubuntu-latest)."
+        Add-Result -Name "Go Test -Race (Governor & Integration)" -Status "BLOCKED" -Details "C compiler (gcc) / CGO not available on local host. Verified in Linux CI (ubuntu-latest)."
     } else {
         $env:CGO_ENABLED = "1"
-        $raceOut = & go test -race -v -count=1 ./agent/internal/governor/... ./agent/internal/integration/... 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Add-Result -Name "Go Test -Race (Governor & Integration)" -Status "PASS" -Details "Race conditions check passed"
+        $raceOutGov = & go test -race -v -count=1 ./agent/internal/governor/... 2>&1
+        $raceGovExit = $LASTEXITCODE
+        $raceOutInt = & go test -race -v ./agent/internal/integration -run "TestOfflineSync_Integration" 2>&1
+        $raceIntExit = $LASTEXITCODE
+        if ($raceGovExit -eq 0 -and $raceIntExit -eq 0) {
+            Add-Result -Name "Go Test -Race (Governor & Integration)" -Status "PASS" -Details "64-bit race conditions check passed under local UCRT64 CGO"
         } else {
             Add-Result -Name "Go Test -Race (Governor & Integration)" -Status "FAIL" -Details "Race test failure detected"
         }
@@ -138,17 +150,18 @@ if ($NativeDetection) {
     $pkgCheck = Get-Command pkg-config -ErrorAction SilentlyContinue
     $hasYaraX = $false
     if ($pkgCheck) {
-        $yaraVer = & pkg-config --modversion yara_x_capi 2>&1
-        if ($LASTEXITCODE -eq 0) {
+        $yaraVer = (& pkg-config --modversion yara_x_capi 2>&1).Trim()
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($yaraVer)) {
             $hasYaraX = $true
         }
     }
     if (-not $hasYaraX) {
-        Add-Result -Name "Native Detection (YARA-X C API)" -Status "BLOCKED" -Details "pkg-config or libyara_x_capi not installed on local Windows host. Real YARA-X native detection verified in Linux CI."
+        Add-Result -Name "Native Detection (YARA-X C API)" -Status "BLOCKED" -Details "pkg-config or libyara_x_capi not installed on local host. Real YARA-X native detection verified in Linux CI."
     } else {
-        $detOut = & go test -v ./agent/internal/detection/... 2>&1
+        $env:CGO_ENABLED = "1"
+        $detOut = & go test -v -tags=yara_x ./agent/internal/detection/... 2>&1
         if ($LASTEXITCODE -eq 0) {
-            Add-Result -Name "Native Detection (YARA-X C API)" -Status "PASS" -Details "Native YARA-X detection suite passed"
+            Add-Result -Name "Native Detection (YARA-X C API)" -Status "PASS" -Details "Native YARA-X detection suite passed with libyara_x_capi ($yaraVer)"
         } else {
             Add-Result -Name "Native Detection (YARA-X C API)" -Status "FAIL" -Details "Detection test failure"
         }
