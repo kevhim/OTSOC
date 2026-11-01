@@ -3,8 +3,10 @@ package events
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -63,6 +65,8 @@ func Deserialize(data []byte) (*CanonicalEvent, error) {
 // CurrentSchemaVersion defines the canonical version expected by this implementation
 const CurrentSchemaVersion = "1.0.0"
 
+var tenantSiteRegex = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
+
 // Validate ensures the canonical event strictly adheres to the schema.
 func (e *CanonicalEvent) Validate() error {
 	if _, err := uuid.Parse(e.EventID); err != nil {
@@ -79,11 +83,10 @@ func (e *CanonicalEvent) Validate() error {
 		return fmt.Errorf("category is required")
 	}
 
-	tenantSiteRegex := regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
-	if e.TenantID == "" || !tenantSiteRegex.MatchString(e.TenantID) {
+	if e.TenantID == "" || !tenantSiteRegex.MatchString(e.TenantID) || len(e.TenantID) > 128 {
 		return fmt.Errorf("invalid tenant_id")
 	}
-	if e.SiteID == "" || !tenantSiteRegex.MatchString(e.SiteID) {
+	if e.SiteID == "" || !tenantSiteRegex.MatchString(e.SiteID) || len(e.SiteID) > 128 {
 		return fmt.Errorf("invalid site_id")
 	}
 
@@ -98,8 +101,26 @@ func (e *CanonicalEvent) Validate() error {
 		return fmt.Errorf("invalid severity: %s", e.Severity)
 	}
 
+	// Mirror PostgreSQL VARCHAR limits before queuing. Otherwise the worker
+	// retries an event that can never fit in its target database columns.
+	for _, field := range []struct {
+		name  string
+		value string
+		limit int
+	}{
+		{"asset_id", e.AssetID, 128}, {"sensor_id", e.SensorID, 128},
+		{"source", e.Source, 255}, {"category", e.Category, 255},
+		{"protocol", e.Protocol, 128}, {"src", e.Src, 255},
+		{"dst", e.Dst, 255}, {"action", e.Action, 128},
+		{"rule_id", e.RuleID, 255}, {"rule_version", e.RuleVersion, 64},
+	} {
+		if utf8.RuneCountInString(field.value) > field.limit {
+			return fmt.Errorf("%s exceeds maximum length of %d", field.name, field.limit)
+		}
+	}
+
 	if e.Confidence != nil {
-		if *e.Confidence < 0 || *e.Confidence > 100 {
+		if math.IsNaN(*e.Confidence) || math.IsInf(*e.Confidence, 0) || *e.Confidence < 0 || *e.Confidence > 100 {
 			return fmt.Errorf("confidence must be between 0 and 100")
 		}
 	}

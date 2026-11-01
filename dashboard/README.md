@@ -1,32 +1,20 @@
-# React + TypeScript + Vite
+# RedCyberFox Dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Minimal Phase-1 live event and alert dashboard for a development environment.
 
-Currently, two official plugins are available:
+## Run locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+1. Start PostgreSQL and Valkey from `deployments/dev` using `docker compose up -d`.
+2. Start the Go worker: `go run ./server/cmd/worker` (from repository root).
+3. Start the Go API: `go run ./server/cmd/api` (from repository root).
+4. Run `npm ci && npm run dev` here and open the Vite address.
 
-## React Compiler
+The browser fetches `/v1/events` and `/v1/alerts` on **the same origin**. Vite
+proxies `/v1` to `http://127.0.0.1:8081` during local development. For a
+production deployment, configure your reverse proxy to forward `/v1/*` to the
+API server on the same origin as the dashboard. Direct access to a separately
+hosted API will not work without deliberate CORS setup.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+**Security:** The tenant ID query parameter is a development convenience, **not
+authentication**. Do not expose this dashboard/API as a public or multi-tenant
+service before implementing access control and authenticated tenant scoping.

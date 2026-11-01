@@ -10,6 +10,8 @@ import (
 	"redcyberfox/pkg/events"
 )
 
+var tenantIDPattern = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
+
 type ReadHandler struct {
 	db *pgxpool.Pool
 }
@@ -26,13 +28,12 @@ func (h *ReadHandler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// DEVELOPMENT ONLY: Wildcard CORS should not be used in production
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Same-origin dashboard traffic (Vite proxies /v1 during development).
+	// Do not expose arbitrary tenants to cross-origin browser requests.
 	w.Header().Set("Content-Type", "application/json")
 
 	tenantID := r.URL.Query().Get("tenant_id")
-	tenantRegex := regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
-	if tenantID == "" || !tenantRegex.MatchString(tenantID) {
+	if tenantID == "" || len(tenantID) > 128 || !tenantIDPattern.MatchString(tenantID) {
 		http.Error(w, "Bad Request: Missing or invalid tenant_id (development-only mechanism)", http.StatusBadRequest)
 		return
 	}
@@ -55,18 +56,21 @@ func (h *ReadHandler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var ev events.CanonicalEvent
 		err := rows.Scan(&ev.EventID, &ev.TenantID, &ev.SiteID, &ev.OccurredAt, &ev.Severity, &ev.Source, &ev.Category, &ev.SeqNo)
-		if err == nil {
-			result = append(result, map[string]interface{}{
-				"event_id":    ev.EventID,
-				"tenant_id":   ev.TenantID,
-				"site_id":     ev.SiteID,
-				"occurred_at": ev.OccurredAt,
-				"severity":    ev.Severity,
-				"source":      ev.Source,
-				"category":    ev.Category,
-				"seq_no":      ev.SeqNo,
-			})
+		if err != nil {
+			log.Printf("Failed to scan event row: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
 		}
+		result = append(result, map[string]interface{}{
+			"event_id":    ev.EventID,
+			"tenant_id":   ev.TenantID,
+			"site_id":     ev.SiteID,
+			"occurred_at": ev.OccurredAt,
+			"severity":    ev.Severity,
+			"source":      ev.Source,
+			"category":    ev.Category,
+			"seq_no":      ev.SeqNo,
+		})
 	}
 
 	if err := rows.Err(); err != nil {
@@ -88,13 +92,12 @@ func (h *ReadHandler) ServeAlerts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// DEVELOPMENT ONLY: Wildcard CORS should not be used in production
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Same-origin dashboard traffic (Vite proxies /v1 during development).
+	// Do not expose arbitrary tenants to cross-origin browser requests.
 	w.Header().Set("Content-Type", "application/json")
 
 	tenantID := r.URL.Query().Get("tenant_id")
-	tenantRegex := regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
-	if tenantID == "" || !tenantRegex.MatchString(tenantID) {
+	if tenantID == "" || len(tenantID) > 128 || !tenantIDPattern.MatchString(tenantID) {
 		http.Error(w, "Bad Request: Missing or invalid tenant_id (development-only mechanism)", http.StatusBadRequest)
 		return
 	}
@@ -117,9 +120,12 @@ func (h *ReadHandler) ServeAlerts(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var al events.Alert
 		err := rows.Scan(&al.AlertID, &al.EventID, &al.TenantID, &al.Severity, &al.Description, &al.CreatedAt)
-		if err == nil {
-			result = append(result, al)
+		if err != nil {
+			log.Printf("Failed to scan alert row: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
 		}
+		result = append(result, al)
 	}
 
 	if err := rows.Err(); err != nil {

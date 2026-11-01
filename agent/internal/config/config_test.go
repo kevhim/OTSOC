@@ -54,3 +54,23 @@ func TestLoadConfig(t *testing.T) {
 		t.Fatal("Expected error for missing site_id")
 	}
 }
+
+func TestConfigRejectsInvalidEndpointAndIdentifiers(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+	}{
+		{"invalid scheme", Config{APIAddr: "localhost:8081", TenantID: "t", SiteID: "s"}},
+		{"invalid URL", Config{APIAddr: "ftp://server:21", TenantID: "t", SiteID: "s"}},
+		{"URL userinfo", Config{APIAddr: "http://user:secret@server:8081", TenantID: "t", SiteID: "s"}},
+		{"invalid tenant", Config{APIAddr: "http://localhost:8081", TenantID: "tenant_bad", SiteID: "s"}},
+		{"invalid site", Config{APIAddr: "http://localhost:8081", TenantID: "t", SiteID: "site bad"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.cfg.Validate(); err == nil {
+				t.Fatalf("expected invalid config to be rejected")
+			}
+		})
+	}
+}

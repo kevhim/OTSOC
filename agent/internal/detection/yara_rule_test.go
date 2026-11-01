@@ -1,9 +1,13 @@
+//go:build cgo
+
 package detection
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"redcyberfox/pkg/events"
 )
@@ -275,3 +279,54 @@ func BenchmarkYaraRule_Evaluate_100KB(b *testing.B) { benchmarkYaraRuleSize(b, 1
 func BenchmarkYaraRule_Evaluate_1MB(b *testing.B)   { benchmarkYaraRuleSize(b, 1024*1024) }
 func BenchmarkYaraRule_Evaluate_10MB(b *testing.B)  { benchmarkYaraRuleSize(b, 10*1024*1024) }
 func BenchmarkYaraRule_Evaluate_50MB(b *testing.B)  { benchmarkYaraRuleSize(b, 50*1024*1024) }
+
+func TestDetectionEngine_YaraIntegration(t *testing.T) {
+	tempDir := t.TempDir()
+	malwarePath := filepath.Join(tempDir, "malware.exe")
+	if err := os.WriteFile(malwarePath, []byte("mimikatz_payload"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ruleSource := `
+rule test_mimikatz {
+	strings:
+		$a = "mimikatz"
+	condition:
+		$a
+}
+`
+	yaraRule, err := NewYaraRule("YARA-MIMIKATZ", "1.0", "CRITICAL", 100.0, "Mimikatz detected", nil, nil, ruleSource)
+	if err != nil {
+		t.Fatalf("Failed to create YARA rule: %v", err)
+	}
+
+	store := &mockStorage{}
+	engine := NewEngine(store, []Rule{yaraRule})
+
+	telemetryEvent := &events.CanonicalEvent{
+		EventID:       "99999999-9999-9999-9999-999999999999",
+		TenantID:      "tenant-1",
+		SiteID:        "site-1",
+		Category:      "process",
+		Source:        "windows_process",
+		OccurredAt:    time.Now().UTC(),
+		SchemaVersion: events.CurrentSchemaVersion,
+		Metadata: map[string]interface{}{
+			"file_path": malwarePath,
+		},
+	}
+
+	engine.Evaluate(context.Background(), telemetryEvent)
+
+	if len(store.stored) != 1 {
+		t.Fatalf("Expected 1 YARA finding, got %d", len(store.stored))
+	}
+
+	finding := store.stored[0]
+	if finding.RuleID != "YARA-MIMIKATZ" {
+		t.Errorf("Expected YARA-MIMIKATZ, got %s", finding.RuleID)
+	}
+	if finding.Category != "detection/finding" {
+		t.Errorf("Expected category 'detection/finding', got %s", finding.Category)
+	}
+}

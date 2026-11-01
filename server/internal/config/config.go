@@ -56,7 +56,7 @@ func InitDatabase(ctx context.Context, url string) (*pgxpool.Pool, error) {
 
 	// Add startup readiness check
 	if err := dbpool.Ping(ctx); err != nil {
-		return nil, fmt.Errorf("failed to ping database at %s: %w", url, err)
+		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
 	return dbpool, nil

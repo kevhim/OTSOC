@@ -3,7 +3,10 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
 	"os"
+	"regexp"
 )
 
 type Config struct {
@@ -31,6 +34,8 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+var idPattern = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
+
 func (c *Config) Validate() error {
 	if c.APIAddr == "" {
 		return errors.New("api_addr is required")
@@ -40,6 +45,17 @@ func (c *Config) Validate() error {
 	}
 	if c.SiteID == "" {
 		return errors.New("site_id is required")
+	}
+	parsed, err := url.Parse(c.APIAddr)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("api_addr must be a valid http(s) base URL without credentials, query, or fragment")
+	}
+	for _, id := range []struct{ name, value string }{
+		{"tenant_id", c.TenantID}, {"site_id", c.SiteID},
+	} {
+		if len(id.value) > 128 || !idPattern.MatchString(id.value) {
+			return fmt.Errorf("%s must be 1-128 letters, digits, or hyphens", id.name)
+		}
 	}
 	return nil
 }

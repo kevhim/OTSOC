@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"redcyberfox/agent/internal/interfaces"
@@ -164,7 +166,7 @@ func (e *Engine) ProcessEvent(ctx, drainCtx context.Context, ev *events.Canonica
 					return OutcomeDropped
 				}
 
-				spillErr := os.WriteFile(e.cfg.EmergencySpillPath, append(spillBytes, '\n'), 0600)
+				spillErr := appendEmergencySpill(e.cfg.EmergencySpillPath, append(spillBytes, '\n'))
 				if spillErr == nil {
 					log.Printf("CRITICAL: Event %s spilled to disk (BEST-EFFORT) due to uncertain commit and DLQ failure.", ev.EventID)
 					return OutcomeSpilledDisk
@@ -209,4 +211,33 @@ func (e *Engine) ProcessEvent(ctx, drainCtx context.Context, ev *events.Canonica
 		}
 		return OutcomeDropped
 	}
+}
+
+// emergencySpillMu serializes concurrent emergency spills to avoid partial line interleaving.
+var emergencySpillMu sync.Mutex
+
+// appendEmergencySpill preserves all recovery records in a JSON-lines file.
+// os.WriteFile truncated the file on every failure, silently losing any earlier
+// events saved during the same outage. This path is emergency-only: sync before
+// reporting a successful spill and preserve restrictive file permissions.
+func appendEmergencySpill(path string, record []byte) error {
+	emergencySpillMu.Lock()
+	defer emergencySpillMu.Unlock()
+
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+	if err != nil {
+		return err
+	}
+	n, writeErr := file.Write(record)
+	if writeErr == nil && n != len(record) {
+		writeErr = io.ErrShortWrite
+	}
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }

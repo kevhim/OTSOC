@@ -54,8 +54,12 @@ func main() {
 	})
 
 	server := &http.Server{
-		Addr:    cfg.APIAddr,
-		Handler: mux,
+		Addr:              cfg.APIAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	// 4. Graceful Shutdown

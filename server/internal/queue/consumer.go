@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -42,8 +43,17 @@ func NewConsumer(client *redis.Client, repo *db.Repository, stream, group, consu
 func (c *Consumer) Start(ctx context.Context) error {
 	// Initialize group (ignore if exists)
 	err := c.client.XGroupCreateMkStream(ctx, c.stream, c.group, "0").Err()
-	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
+	if err != nil && !strings.HasPrefix(err.Error(), "BUSYGROUP") {
 		return err
+	}
+
+	// Recover eligible unACKed messages immediately after a restart; don't
+	// defer the first recovery until the minute-long ticker fires.
+	if err := c.recoverPending(ctx); err != nil && ctx.Err() == nil {
+		log.Printf("Initial pending recovery failed: %v", err)
+	}
+	if ctx.Err() != nil {
+		return nil
 	}
 
 	// 1. Recover pending messages continuously in background
@@ -82,12 +92,19 @@ func (c *Consumer) Start(ctx context.Context) error {
 		}).Result()
 
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
 			if errors.Is(err, redis.Nil) { // No new messages
 				continue
 			}
 			// Transient network failure
 			log.Printf("XReadGroup error: %v", err)
-			time.Sleep(1 * time.Second)
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(time.Second):
+			}
 			continue
 		}
 
