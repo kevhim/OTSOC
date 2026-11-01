@@ -76,3 +76,14 @@
   - Specified storage budget contract distinguishing SQLite soft quota, total persistence footprint, reserved headroom, physical free-disk observations, and future hard enforcement.
   - Specified real detection workload (`RealIOCExecRule`, `LOCAL-IOC-EXEC-001`, `v1.0`), evaluated inputs, artifact bounds, and harmless fixture, distinguishing from native YARA-X rules.
 - **Milestone Status**: Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Representative low-spec hardware benchmarks, queue-age/recovery instrumentation, and safe priority adaptation remain open.
+
+## Phase 4 Bounded Measurement Reports & Workload Demonstration Checkpoint (2026-11-01)
+- **Status**: Completed on branch `fix/correctness-remediation-checkpoint`.
+- **Key Changes**:
+  - Implemented `agent/internal/resourcereport` providing opt-in machine-readable JSON reports, duration/interval validation, sample and output byte bounds, exclusive creation (`O_EXCL`), persistence file conflict rejection, watched path exclusion, and null preservation for unmeasured metrics.
+  - Implemented `resourcereport.ShutdownCoordinator` guaranteeing a single shared shutdown path across measurement timer expiry and OS signals, starting the single global 10-second drain deadline exactly once.
+  - Implemented production-path integration test `agent/internal/integration/workload_demonstration_test.go` demonstrating harmless bounded event ingestion, synchronous evaluation of `RealIOCExecRule` (`LOCAL-IOC-EXEC-001`), derived finding generation with deterministic UUIDv5, explicit evidence event ID linkage, and durable SQLite presence after clean shutdown.
+  - Demonstrated endpoint execution producing a bounded Windows developer-host smoke-run report (`windows_smoke_report.json`), and documented the platform mismatch between live Windows process monitoring and the Linux fixture path.
+  - Extracted shared request execution logic `fetchTenantData` in `dashboard/src/tenant_query.ts`, tested directly in `dashboard/src/request_isolation.test.mjs`.
+- **Milestone Status**: Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
+- **Next Bounded Implementation Task**: Event accounting and queue-age/recovery instrumentation, followed by representative Windows/Linux workloads before threshold calibration.

@@ -240,3 +240,52 @@ Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
 - `npm --prefix dashboard run lint`: PASS (0 errors, 0 warnings).
 - `go build -v ./agent/cmd/endpoint`: PASS.
 - Linux runtime validation: Outstanding on local Windows host; verified via GitHub Actions CI workflow.
+
+## 2026-11-01 Phase 4 Bounded Endpoint Measurement Reports & Workload Demonstration (non-phase changing)
+
+A focused checkpoint implementing machine-readable measurement reports, shared shutdown coordination, and a reproducible harmless workload demonstration was completed on branch `fix/correctness-remediation-checkpoint`.
+Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
+
+### 1. Bounded Machine-Readable Measurement Reports (`agent/internal/resourcereport`)
+- **Package Architecture**: Extracted reporting logic into `agent/internal/resourcereport` containing `types.go`, `config.go`, `manifest.go`, `reporter.go`, `runner.go`, `shutdown.go`, and `report_test.go`.
+- **CLI Options**: Added opt-in flags `-measure-report <path>`, `-measure-profile <desc>`, `-measure-duration <duration>`, and `-measure-interval <interval>` in `agent/cmd/endpoint/main.go`. Defaults to disabled (`0`), preserving zero-overhead passive production runtime.
+- **Bounding & Safety Validations**:
+  - Validates `duration > 0`, `interval >= 100ms`, `interval <= duration`, and bounds sample limits (`expected <= maxSamples`, default 10,000).
+  - Validates report file size limits (`MaxOutputBytes`, default 10 MiB) before writing.
+  - Refuses overwrite using exclusive creation (`os.O_CREATE|os.O_EXCL|os.O_WRONLY`).
+  - Rejects destination conflicts against `agent.db`, `agent.db-wal`, `agent.db-shm`, `identity.json`, `agent.json`, and `agent_emergency_spill.log`.
+  - Rejects report paths inside monitored directories (`cfg.MonitorPaths`) to prevent self-generated filesystem telemetry.
+  - Visible logging on write errors without panicking or interrupting ordinary monitoring.
+  - Preserves nulls for missing/unready measurements (`*float64`, `*uint64`), never fabricating zero.
+- **Manifest & Contributing Files**: Captures git commit SHA, dirty state, OS, arch, toolchain, logical CPU count, profile description, loaded rule IDs/versions, sampling bounds, and lists every persistence file with path, size, and existence boolean.
+- **Summary**: Records total samples, degraded samples, reporting errors, shutdown outcome, and the mandatory non-qualification notice.
+
+### 2. Single Shared Shutdown Path & Drain Deadline Coordination
+- **Coordinator**: `resourcereport.ShutdownCoordinator` unifies shutdown initiation across measurement timer expiry and OS signals (SIGINT, SIGTERM).
+- **Single Drain Deadline**: Starts the single global 10-second drain deadline timer exactly once via `sync.Once`.
+- **Invariant**: Bypassing the deadline with `cancel()` alone is prevented; `drainCtx` is guaranteed to expire if draining stalls. Tested under concurrent timer/signal overlap and pending ingestion.
+
+### 3. Harmless Workload Demonstration & Rule Verification
+- **Production-Path Integration Test (`agent/internal/integration/workload_demonstration_test.go`)**:
+  - Exercises collector event creation -> enrichment boundary (`TenantID`, `SiteID`, `AssetID`) -> SQLite durability -> detection engine -> derived finding durability -> clean shutdown.
+  - Ingests bounded recipe of 11 source events: 5 benign process events, 1 harmless IOC fixture event (`executable_path == "/opt/malicious/bin/miner"`), and 5 benign filesystem events.
+  - Detection rule `RealIOCExecRule` (`LOCAL-IOC-EXEC-001`, `v1.0`, `CRITICAL`) fires synchronously on the IOC event.
+  - Generated finding is assigned a deterministic UUIDv5 identity and explicitly linked via `evidence_event_ids: [iocSourceEventID]`.
+  - Reopened SQLite database durably confirms 12 events total (11 source + 1 derived finding) with intact evidence linkage after clean shutdown.
+- **Windows Collector Platform Scope Mismatch**: Explicitly documented that the executable-path IOC fixture is a metadata-matching test rule, not YARA file scanning. Real Windows process collectors monitor real Windows executables (`C:\...`) and cannot emit the Linux fixture path `/opt/malicious/bin/miner` during normal OS monitoring.
+- **Windows Developer-Host Smoke-Run**:
+  - Executed compiled `endpoint.exe` in an isolated directory with `-measure-report windows_smoke_report.json -measure-profile "windows-developer-host-smoke-run" -measure-duration 3s -measure-interval 1s`.
+  - Produced 3-sample 3975-byte JSON report accurately capturing process CPU, RSS growth, write-I/O rate, and contributing persistence files (`agent.db`: 4096B, `agent.db-wal`: 201912B, `agent.db-shm`: 32768B).
+  - Explicitly labeled as **developer-host smoke-run evidence, not representative low-spec qualification**.
+
+### 4. Shared Dashboard Tenant Request Isolation
+- Extracted shared request execution logic into `dashboard/src/tenant_query.ts`.
+- Both production UI ([`App.tsx`](file:///d:/Desktop/OT-SOC/redcyberfox-ot-soc/dashboard/src/App.tsx)) and automated test ([`request_isolation.test.mjs`](file:///d:/Desktop/OT-SOC/redcyberfox-ot-soc/dashboard/src/request_isolation.test.mjs)) import and exercise this exact shared function.
+- Proves delayed responses from Tenant A cannot commit state after switching to Tenant B.
+
+### 5. Verification Outcomes
+- `scripts/verify-phase4.ps1 -Race -NativeDetection`: 9/9 PASS (Gofmt, Go Vet, Dashboard Lint/Build, Storage, Ingestion, Core Components/Reports, Integration/Workload, UCRT64 64-bit Race, Native YARA-X).
+- `npm --prefix dashboard test`: 1/1 PASS.
+- `npm --prefix dashboard run lint`: 0 errors, 0 warnings.
+- `go build -v ./agent/cmd/endpoint`: PASS.
+- Linux runtime validation: Outstanding on local Windows host; verified via GitHub Actions CI workflow.

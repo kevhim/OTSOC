@@ -22,6 +22,7 @@ import (
 	"redcyberfox/agent/internal/governor"
 	"redcyberfox/agent/internal/health"
 	"redcyberfox/agent/internal/ingestion"
+	"redcyberfox/agent/internal/resourcereport"
 	"redcyberfox/agent/internal/storage"
 	"redcyberfox/pkg/events"
 )
@@ -34,6 +35,8 @@ const (
 func main() {
 	configPath := flag.String("config", "agent.json", "path to config file")
 	identityPath := flag.String("identity", "identity.json", "path to identity file")
+	measureReport := flag.String("measure-report", "", "path to machine-readable measurement report JSON (empty disables report writing)")
+	measureProfile := flag.String("measure-profile", "", "description of hardware or workload profile for report manifest")
 	measureDuration := flag.Duration("measure-duration", 0, "run bounded resource measurement for duration, then exit (0 disables measurement mode)")
 	measureInterval := flag.Duration("measure-interval", 2*time.Second, "sampling interval for measurement mode")
 	flag.Parse()
@@ -44,6 +47,21 @@ func main() {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	reportCfg := resourcereport.Config{
+		ReportPath:         *measureReport,
+		Profile:            *measureProfile,
+		Duration:           *measureDuration,
+		Interval:           *measureInterval,
+		DBPath:             agentDBPath,
+		IdentityPath:       *identityPath,
+		ConfigPath:         *configPath,
+		EmergencySpillPath: "agent_emergency_spill.log",
+		WatchedPaths:       cfg.MonitorPaths,
+	}
+	if err := resourcereport.ValidateConfig(reportCfg); err != nil {
+		log.Fatalf("Invalid measurement report configuration: %v", err)
 	}
 
 	// 2. Storage Initialization & Authoritative Device Identity
@@ -60,31 +78,21 @@ func main() {
 	}
 	log.Printf("Device Identity: %s", deviceID)
 
-	// 3. Graceful Shutdown Context
+	// 3. Graceful Shutdown & Shared Drain Coordination
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	drainCtx, drainCancel := context.WithCancel(context.Background())
 	defer drainCancel()
 
+	shutdownCoord := resourcereport.NewShutdownCoordinator(cancel, drainCancel, 10*time.Second)
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		<-sigCh
-		log.Println("Received termination signal, shutting down...")
-		cancel()
-
-		// Establish one global provisional deterministic drain bound for shutdown
-		go func() {
-			timer := time.NewTimer(10 * time.Second)
-			defer timer.Stop()
-			select {
-			case <-timer.C:
-				drainCancel() // will surface as context.Canceled for drainCtx
-			case <-drainCtx.Done():
-			}
-		}()
+		sig := <-sigCh
+		shutdownCoord.Trigger("os_signal: " + sig.String())
 	}()
 
 	// 4. Forwarder Initialization
@@ -95,6 +103,13 @@ func main() {
 
 	// 6. Collector Initialization
 	centralEvents := make(chan *events.CanonicalEvent, 200)
+
+	// 7. Phase 3 Detection Core (Active Deterministic Rules)
+	activeRules := []detection.Rule{
+		&detection.RealIOCExecRule{},
+	}
+	log.Printf("Production detection engine initialized with %d active deterministic rules", len(activeRules))
+	detEngine := detection.NewEngine(db, activeRules)
 
 	// Phase 4.3: Initialize resource governance infrastructure (synchronous, on-demand).
 	// Recurring endpoint background sampling is not enabled.
@@ -140,31 +155,37 @@ func main() {
 				log.Printf("Resource governor coordinator initialized (on-demand mode, initial step ready=%v evaluated=%v storageBlocked=%v)",
 					stepRes.Ready, stepRes.Evaluated, stepRes.StorageBlocked)
 
-				if *measureDuration > 0 {
-					log.Printf("Starting bounded measurement mode (duration: %v, interval: %v)...", *measureDuration, *measureInterval)
-					go func() {
-						measureCtx, measureCancel := context.WithTimeout(ctx, *measureDuration)
-						defer measureCancel()
-						ticker := time.NewTicker(*measureInterval)
-						defer ticker.Stop()
-						var sampleCount uint64
-						_ = governor.RunSampling(measureCtx, ticker.C, coordinator, func() governor.RuntimeSignals {
-							return governor.RuntimeSignals{
-								QueueDepth:    governor.ValidUint64{Value: uint64(len(centralEvents)), Valid: true},
-								QueueCapacity: governor.ValidUint64{Value: uint64(cap(centralEvents)), Valid: true},
-								NetworkState:  fwd.NetworkState(),
-							}
-						}, func(result governor.StepResult, stepErr error) {
-							sampleCount++
-							snap := resourceMetrics.Snapshot()
-							log.Printf("[MEASUREMENT SAMPLE #%d] state=%s cpu=%v rss=%v storage=%v queue=%v network=%s",
-								sampleCount, snap.GovernorState, snap.AgentCPUPercent, snap.AgentRSSBytes,
-								snap.DiskStorageUsedBytes, snap.QueueSaturationPercent, result.Signals.NetworkState)
+				// Measurement Runner (bounded observational mode)
+				if *measureDuration > 0 || *measureReport != "" {
+					reportRules := make([]resourcereport.RuleInfo, 0, len(activeRules))
+					for _, r := range activeRules {
+						reportRules = append(reportRules, resourcereport.RuleInfo{
+							RuleID:   r.ID(),
+							Version:  r.Version(),
+							Severity: r.Severity(),
 						})
-						snap := resourceMetrics.Snapshot()
-						log.Printf("[MEASUREMENT COMPLETE] Total samples: %d, Final state: %s, Transitions: %d",
-							sampleCount, snap.GovernorState, snap.TotalStateTransitions)
-						cancel()
+					}
+					reporter := resourcereport.NewReporter(reportCfg, reportRules)
+					log.Printf("Starting bounded measurement mode (duration: %v, interval: %v, report: %q)...",
+						*measureDuration, *measureInterval, *measureReport)
+					go func() {
+						if runErr := resourcereport.RunMeasurementRunner(
+							ctx,
+							reportCfg,
+							reporter,
+							coordinator,
+							resourceMetrics,
+							func() governor.RuntimeSignals {
+								return governor.RuntimeSignals{
+									QueueDepth:    governor.ValidUint64{Value: uint64(len(centralEvents)), Valid: true},
+									QueueCapacity: governor.ValidUint64{Value: uint64(cap(centralEvents)), Valid: true},
+									NetworkState:  fwd.NetworkState(),
+								}
+							},
+							shutdownCoord,
+						); runErr != nil {
+							log.Printf("Measurement runner error: %v", runErr)
+						}
 					}()
 				}
 			}
@@ -210,13 +231,6 @@ func main() {
 			log.Printf("Health manager stopped with error: %v", err)
 		}
 	}()
-
-	// 7.5 Phase 3 Detection Core
-	activeRules := []detection.Rule{
-		&detection.RealIOCExecRule{},
-	}
-	log.Printf("Production detection engine initialized with %d active deterministic rules", len(activeRules))
-	detEngine := detection.NewEngine(db, activeRules)
 
 	// 8. Central Event Ingestion Loop (uses shared production Ingestion Engine)
 	ingestEngine := ingestion.NewEngine(db, ingestion.Config{

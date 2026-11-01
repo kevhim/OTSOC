@@ -105,18 +105,18 @@ if ($LASTEXITCODE -eq 0) {
     Add-Result -Name "Ingestion & Identity Lifecycle Tests" -Status "FAIL" -Details "Tests failed in agent/internal/ingestion"
 }
 
-# 6. Governor, Forwarder, Server, & Pkg Tests
-Write-Host "`n--> [6/8] Running Core Component Unit Tests (Governor, Forwarder, Server API, Events)..." -ForegroundColor Magenta
-$coreOut = & go test ./agent/internal/governor/... ./agent/internal/forwarder/... ./server/internal/api/... ./pkg/... 2>&1
+# 6. Governor, Forwarder, Server, Pkg, & Measurement Report Tests
+Write-Host "`n--> [6/8] Running Core Component Unit Tests (Governor, Forwarder, Server API, Events, Reports)..." -ForegroundColor Magenta
+$coreOut = & go test ./agent/internal/governor/... ./agent/internal/forwarder/... ./agent/internal/resourcereport/... ./server/internal/api/... ./pkg/... 2>&1
 if ($LASTEXITCODE -eq 0) {
-    Add-Result -Name "Core Components (Governor, Forwarder, Server API, Events)" -Status "PASS" -Details "All unit test suites passed"
+    Add-Result -Name "Core Components (Governor, Forwarder, Reports, Server API, Events)" -Status "PASS" -Details "All unit test suites passed"
 } else {
-    Add-Result -Name "Core Components (Governor, Forwarder, Server API, Events)" -Status "FAIL" -Details "Unit test failure in core components"
+    Add-Result -Name "Core Components (Governor, Forwarder, Reports, Server API, Events)" -Status "FAIL" -Details "Unit test failure in core components"
 }
 
 # 7. Pipeline Integration & Offline Sync Tests
 Write-Host "`n--> [7/8] Running Pipeline Integration & Offline Sync Tests..." -ForegroundColor Magenta
-$integrationOut = & go test -v ./agent/internal/integration -run "^(TestOffline|TestLostResponse|TestIntegration_LocalRemovalFailure|TestFocusedIngestion|TestPhase2E4|TestEndpointPipeline|TestFilesystemPipeline|TestInventoryPipeline|TestNetworkPipeline|TestPassiveNetworkPipeline|TestUSBPipeline)" 2>&1
+$integrationOut = & go test -v ./agent/internal/integration -run "^(TestOffline|TestLostResponse|TestIntegration_LocalRemovalFailure|TestFocusedIngestion|TestPhase2E4|TestEndpointPipeline|TestFilesystemPipeline|TestInventoryPipeline|TestNetworkPipeline|TestPassiveNetworkPipeline|TestUSBPipeline|TestWorkloadDemonstration)" 2>&1
 if ($LASTEXITCODE -eq 0) {
     Add-Result -Name "Integration & Offline Sync Tests" -Status "PASS" -Details "Pipeline end-to-end and offline sync recovery passed"
 } else {

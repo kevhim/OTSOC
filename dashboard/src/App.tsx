@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { fetchTenantData } from './tenant_query.ts'
 
 interface Event {
   event_id: string
@@ -55,41 +56,27 @@ function App() {
 
     const abortController = new AbortController()
     let refreshTimer: ReturnType<typeof setTimeout> | undefined
-    const tenantParam = encodeURIComponent(trimmedTenant)
-    const normalizedBase = apiBase.trim().replace(/\/+$/, '')
     const currentGen = ++queryGenRef.current
-
-    const getJSON = async <T,>(path: string): Promise<T[]> => {
-      // Configurable API base supports separate backend host or same-origin proxy
-      const response = await fetch(`${normalizedBase}${path}`, { signal: abortController.signal })
-      if (!response.ok) {
-        const message = await response.text()
-        throw new Error(`API error: HTTP ${response.status} (${message.trim() || response.statusText})`)
-      }
-      const data: unknown = await response.json()
-      if (!Array.isArray(data)) {
-        throw new Error('API error: expected an array response')
-      }
-      return data as T[]
-    }
 
     const refresh = async () => {
       try {
-        const [nextEvents, nextAlerts] = await Promise.all([
-          getJSON<Event>(`/v1/events?tenant_id=${tenantParam}`),
-          getJSON<Alert>(`/v1/alerts?tenant_id=${tenantParam}`),
-        ])
-        if (!abortController.signal.aborted && currentGen === queryGenRef.current) {
-          setEvents(nextEvents)
-          setAlerts(nextAlerts)
-          setErrorMessage(null)
-          setLastFetched(new Date().toLocaleTimeString())
-        }
-      } catch (error: unknown) {
-        if (!abortController.signal.aborted && currentGen === queryGenRef.current) {
-          console.error('Failed to fetch data:', error)
-          setErrorMessage(error instanceof Error ? error.message : 'Failed to connect to backend API')
-        }
+        await fetchTenantData<Event, Alert>({
+          apiBase,
+          tenantId: trimmedTenant,
+          generation: currentGen,
+          signal: abortController.signal,
+          isCurrentGeneration: (gen) => gen === queryGenRef.current,
+          onSuccess: ({ events: nextEvents, alerts: nextAlerts }) => {
+            setEvents(nextEvents)
+            setAlerts(nextAlerts)
+            setErrorMessage(null)
+            setLastFetched(new Date().toLocaleTimeString())
+          },
+          onError: (error) => {
+            console.error('Failed to fetch data:', error)
+            setErrorMessage(error.message)
+          },
+        })
       } finally {
         // Schedule only after a request finishes to avoid overlapping polls.
         if (!abortController.signal.aborted && currentGen === queryGenRef.current) {
