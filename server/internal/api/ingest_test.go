@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,5 +146,45 @@ func TestIngestHandler(t *testing.T) {
 				t.Errorf("expected status %d, got %d", tt.expectedStatus, w.Code)
 			}
 		})
+	}
+}
+
+func TestIngestRejectsMultipleJSONEvents(t *testing.T) {
+	producer := &MockProducer{}
+	h := NewIngestHandler(producer)
+	ev := events.CanonicalEvent{
+		EventID:  "550e8400-e29b-41d4-a716-446655440000",
+		TenantID: "t1", SiteID: "s1", OccurredAt: time.Now().UTC(),
+		Source: "test", Category: "network", Severity: "INFO", SchemaVersion: "1.0.0",
+	}
+	payload, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{string(payload) + string(payload), string(payload) + " extra"} {
+		req := httptest.NewRequest(http.MethodPost, "/v1/ingest?tenant_id=t1", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("got HTTP %d, want 400", w.Code)
+		}
+	}
+	if len(producer.PublishedEvents) != 0 {
+		t.Fatal("rejected request must not be published")
+	}
+}
+
+func TestIngestRejectsOversizedBody(t *testing.T) {
+	producer := &MockProducer{}
+	h := NewIngestHandler(producer)
+	body := `{"tenant_id":"t1","metadata":"` + strings.Repeat("x", int(maxIngestBodyBytes)) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/ingest?tenant_id=t1", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("got HTTP %d, want 413", w.Code)
+	}
+	if len(producer.PublishedEvents) != 0 {
+		t.Fatal("oversized request must not be published")
 	}
 }

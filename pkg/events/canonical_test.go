@@ -1,6 +1,8 @@
 package events
 
 import (
+	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -137,6 +139,31 @@ func TestCanonicalEventValidation(t *testing.T) {
 			mutate: func(e *CanonicalEvent) {
 				e.OccurredAt = time.Time{}
 			},
+			wantErr: true,
+		},
+		{
+			name:    "tenant ID exceeds PostgreSQL limit",
+			mutate:  func(e *CanonicalEvent) { e.TenantID = strings.Repeat("t", 129) },
+			wantErr: true,
+		},
+		{
+			name:    "source exceeds PostgreSQL limit",
+			mutate:  func(e *CanonicalEvent) { e.Source = strings.Repeat("s", 256) },
+			wantErr: true,
+		},
+		{
+			name:    "asset ID exceeds PostgreSQL limit",
+			mutate:  func(e *CanonicalEvent) { e.AssetID = strings.Repeat("a", 129) },
+			wantErr: true,
+		},
+		{
+			name:    "confidence NaN",
+			mutate:  func(e *CanonicalEvent) { v := math.NaN(); e.Confidence = &v },
+			wantErr: true,
+		},
+		{
+			name:    "confidence infinite",
+			mutate:  func(e *CanonicalEvent) { v := math.Inf(1); e.Confidence = &v },
 			wantErr: true,
 		},
 		{
