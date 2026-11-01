@@ -236,4 +236,3 @@ func TestIngestion_EndpointIdentityLifecycleAcrossRestarts(t *testing.T) {
 	}
 	db2.Close()
 }
-
