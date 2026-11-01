@@ -26,43 +26,70 @@ function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [lastFetched, setLastFetched] = useState<string | null>(null)
 
-  const fetchData = async () => {
+  const validationError = !tenantId.trim() ? 'tenant_id must not be empty' : null
+  const displayedError = validationError || errorMessage
+
+  useEffect(() => {
     const trimmedTenant = tenantId.trim()
     if (!trimmedTenant) {
-      setErrorMessage("tenant_id must not be empty")
       return
     }
 
-    try {
-      const tenantParam = encodeURIComponent(trimmedTenant)
-      const evRes = await fetch(`http://localhost:8081/v1/events?tenant_id=${tenantParam}`)
-      if (!evRes.ok) {
-        const errorText = await evRes.text()
-        throw new Error(`Events API error: HTTP ${evRes.status} (${errorText.trim() || evRes.statusText})`)
-      }
-      const evData = await evRes.json()
-      setEvents(evData || [])
+    // Never display the previous tenant's data while the new query loads.
+    setEvents([])
+    setAlerts([])
+    setLastFetched(null)
+    setErrorMessage(null)
 
-      const alRes = await fetch(`http://localhost:8081/v1/alerts?tenant_id=${tenantParam}`)
-      if (!alRes.ok) {
-        const errorText = await alRes.text()
-        throw new Error(`Alerts API error: HTTP ${alRes.status} (${errorText.trim() || alRes.statusText})`)
-      }
-      const alData = await alRes.json()
-      setAlerts(alData || [])
+    const abortController = new AbortController()
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined
+    const tenantParam = encodeURIComponent(trimmedTenant)
 
-      setErrorMessage(null)
-      setLastFetched(new Date().toLocaleTimeString())
-    } catch (e: any) {
-      console.error("Failed to fetch data:", e)
-      setErrorMessage(e.message || "Failed to connect to backend API")
+    const getJSON = async <T,>(path: string): Promise<T[]> => {
+      // Same-origin requests work with the Vite development proxy and with a
+      // production reverse proxy serving the dashboard and /v1 API together.
+      const response = await fetch(path, { signal: abortController.signal })
+      if (!response.ok) {
+        const message = await response.text()
+        throw new Error(`API error: HTTP ${response.status} (${message.trim() || response.statusText})`)
+      }
+      const data: unknown = await response.json()
+      if (!Array.isArray(data)) {
+        throw new Error('API error: expected an array response')
+      }
+      return data as T[]
     }
-  }
 
-  useEffect(() => {
-    fetchData()
-    const interval = setInterval(fetchData, 2000)
-    return () => clearInterval(interval)
+    const refresh = async () => {
+      try {
+        const [nextEvents, nextAlerts] = await Promise.all([
+          getJSON<Event>(`/v1/events?tenant_id=${tenantParam}`),
+          getJSON<Alert>(`/v1/alerts?tenant_id=${tenantParam}`),
+        ])
+        if (!abortController.signal.aborted) {
+          setEvents(nextEvents)
+          setAlerts(nextAlerts)
+          setErrorMessage(null)
+          setLastFetched(new Date().toLocaleTimeString())
+        }
+      } catch (error: unknown) {
+        if (!abortController.signal.aborted) {
+          console.error('Failed to fetch data:', error)
+          setErrorMessage(error instanceof Error ? error.message : 'Failed to connect to backend API')
+        }
+      } finally {
+        // Schedule only after a request finishes to avoid overlapping polls.
+        if (!abortController.signal.aborted) {
+          refreshTimer = setTimeout(refresh, 2000)
+        }
+      }
+    }
+
+    void refresh()
+    return () => {
+      abortController.abort()
+      if (refreshTimer !== undefined) clearTimeout(refreshTimer)
+    }
   }, [tenantId])
 
   return (
@@ -81,9 +108,9 @@ function App() {
         {lastFetched && <span style={{ color: '#666', fontSize: '12px' }}>Last updated: {lastFetched}</span>}
       </div>
 
-      {errorMessage && (
+      {displayedError && (
         <div style={{ padding: '10px', marginBottom: '15px', backgroundColor: '#ffebee', color: '#c62828', border: '1px solid #ef9a9a', borderRadius: '4px' }}>
-          <strong>Error:</strong> {errorMessage}
+          <strong>Error:</strong> {displayedError}
         </div>
       )}
 

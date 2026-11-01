@@ -122,3 +122,15 @@ Phase 4.3 — Real Resource Signal Collection: IN PROGRESS (Acceptance Blockers 
 Phase 4.3 remains open until storage budget policy is established and CI race test evidence is collected. See docs/implementation/phase_4_3_4_resource_signal_wiring.md.
 
 The next Phase 4 work is to benchmark representative low-spec endpoints, calibrate provisional thresholds, and define safe enforcement and priority behavior against the Phase 4 gate-0 acceptance criteria.
+
+## 2026-11-01 Targeted Source Audit (non-phase changing)
+
+A maintenance review of the exported ZIP corrected emergency-spill append durability,
+server ingress bounding/validation, event VARCHAR length validation,
+read-handler row scanning, consumer restart recovery/cancellation,
+endpoint configuration validation, and the dashboard's same-origin polling flow.
+The full Go 1.26 test matrix, PostgreSQL/Valkey integration suite, and npm build
+remain **unverified** in this review environment; they must be run on a properly
+provisioned host/CI before a production-readiness claim. See
+`docs/implementation/2026-11-01-project-audit.md`. Existing Phase 4
+acceptance blockers are unchanged.

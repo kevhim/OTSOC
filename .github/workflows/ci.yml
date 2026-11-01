@@ -71,7 +71,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Check Gofmt
-        run: test -z "$(gofmt -l .)"
+        run: test -z "$(find agent server pkg -name '*.go' -print0 | xargs -0 gofmt -l)"
 
       - name: Verify pkg-config
         run: |
@@ -144,10 +144,7 @@ jobs:
       - name: npm install and build
         run: |
           cd dashboard
-          rm -f package-lock.json
-          npm install
-          npm install @oxlint/binding-linux-x64-gnu --no-save
-          chmod +x node_modules/.bin/oxlint || true
+          npm ci
           npm run lint
           npm run build
 
