@@ -1,6 +1,6 @@
 # Current State
 
-- **Current Git Branch**: `feature/phase-4-3-4-resource-wiring`
+- **Current Git Branch**: `fix/correctness-remediation-checkpoint`
 - **Current Commit Hash**: `HEAD`
 
 ## Phase Status
@@ -134,3 +134,56 @@ remain **unverified** in this review environment; they must be run on a properly
 provisioned host/CI before a production-readiness claim. See
 `docs/implementation/2026-11-01-project-audit.md`. Existing Phase 4
 acceptance blockers are unchanged.
+
+
+## 2026-11-01 Phase 4 Correctness-Remediation Checkpoint (non-phase changing)
+
+A focused correctness remediation checkpoint was executed on branch `fix/correctness-remediation-checkpoint`.
+Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
+
+### 1. Authoritative Endpoint Identity
+- **Defect/Risk**: Endpoint startup previously generated an ephemeral identity from file prior to storage initialization; SQLite subsequently migrated or retained its own authoritative identity and unlinked the file, allowing subsequent restarts or conflicting files to drift runtime and health identities.
+- **Remediation**:
+  - SQLite storage (`agent_state`) is established as the sole authoritative source of truth for runtime consumers (`db.GetDeviceID()`).
+  - Added accessor `healthMgr.DeviceID()` in `agent/internal/health/health.go` ensuring health reporting stays synchronized with SQLite.
+  - Ingestion engine explicitly binds `AssetID` matching `db.GetDeviceID()`.
+  - Added comprehensive multi-boot regression test in `agent/internal/ingestion/engine_test.go` (`TestIngestion_EndpointIdentityLifecycleAcrossRestarts`) proving:
+    1. First boot: legacy identity migrated into SQLite and unlinked.
+    2. Second boot: missing legacy file successfully opens existing SQLite database and preserves identity and sequence continuity (`SeqNo = 2`).
+    3. Third boot: conflicting legacy `identity.json` file is ignored, SQLite retains authoritative identity, rogue file is unlinked, and sequence continuity (`SeqNo = 3`) is preserved without altering historical events.
+    4. Fourth boot: corrupt/malformed legacy file is unlinked, SQLite opens normally, sequence continuity (`SeqNo = 4`) and health identity remain consistent.
+
+### 2. Deterministic Retry Eligibility
+- **Defect/Risk**: `GetPendingEvents` evaluated retry eligibility using driver-dependent time representation or host clock (`CURRENT_TIMESTAMP`), causing potential flakiness around date boundaries, timezone offsets, and high attempt backoffs. Tests previously relied on fake `UPDATE events SET next_attempt_at = NULL` manipulation.
+- **Remediation**:
+  - Added thread-safe deterministic clock seam `s.getClock()` and `s.SetClock(clock func() time.Time)` in `SQLiteStorage`.
+  - Standardized all retry timestamp persistence and queries to UTC formatted string (`2006-01-02 15:04:05`) evaluated via parameterized SQL: `AND (next_attempt_at IS NULL OR datetime(next_attempt_at) <= datetime(?))`.
+  - `MarkFailed` computes bounded exponential backoff clamped at 1 hour using the deterministic UTC clock.
+  - Added `TestStorage_RetryEligibility_DeterministicClock` in `sqlite_test.go` validating ineligibility before deadline, eligibility at/after deadline, non-UTC timezone offsets (`+05:30 IST`), UTC midnight date-boundary rollover (`23:59:30 UTC -> 00:00:15 UTC`), and database reopen schedule preservation.
+  - Updated `offline_test.go` integration tests to advance the deterministic clock rather than clearing database columns.
+
+### 3. Idempotency Before Quota Side Effects
+- **Defect/Risk**: Event duplicate check previously risked triggering quota pruning or failing with false quota exhaustion before checking whether the incoming event was already committed or dead-lettered.
+- **Remediation**:
+  - `SQLiteStorage.Store` checks both `events` and `dead_letter_queue` tables for duplicate `event_id` and matching serialized payload BEFORE calling `enforceQuota`.
+  - Added `TestStorage_IdempotencyDLQ_IntegrityAndPressureContract` proving identical retries under severe quota pressure succeed without pruning or seq_no changes, while payload conflicts return explicit integrity errors without corrupting evidence.
+
+### 4. Dashboard Read Contract
+- **Defect/Risk**: Dashboard lacked configurable API base, had fixed endpoints, and triggered cascading render warnings in OxLint due to synchronous state resets inside `useEffect`.
+- **Remediation**:
+  - Provided configurable API base supporting `VITE_API_BASE_URL` environment variable and runtime UI input bar.
+  - Properly encoded `tenant_id` query parameter (`encodeURIComponent`) on `/v1/events` and `/v1/alerts`.
+  - Added visible error banner displaying HTTP error status and body.
+  - Eliminated synchronous `setState` in `useEffect` by moving reset logic into input change handlers (`handleTenantChange`, `handleApiBaseChange`), resolving OxLint warnings.
+  - Verified dashboard: 0 lint errors, 0 warnings, build succeeded.
+
+### 5. Unified Phase 4 Verification Harness
+- Created `scripts/verify-phase4.ps1` supporting `-Race` and `-NativeDetection` flags.
+- Reports environment-blocked dependencies (local Windows MinGW missing 64-bit CGO/gcc compiler, missing local `pkg-config`/`yara_x_capi`) separately from runnable tests without substituting stubs or weakening assertions.
+- Verification results: All runnable checks PASSED (100%).
+
+### 6. Remaining Acceptance Gaps (Phase 4 Remains OPEN)
+- Authoritative storage budget policy (`StorageBudgetBytes`) remains unresolved.
+- Calibration of resource thresholds from real low-spec endpoint hardware benchmarks.
+- Explicit real detection workload and queue-age/recovery measurements.
+- Safe resource adaptation and priority queue enforcement.

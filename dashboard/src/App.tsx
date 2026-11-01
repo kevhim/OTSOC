@@ -23,11 +23,28 @@ function App() {
   const [events, setEvents] = useState<Event[]>([])
   const [alerts, setAlerts] = useState<Alert[]>([])
   const [tenantId, setTenantId] = useState<string>('test-tenant')
+  const [apiBase, setApiBase] = useState<string>((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [lastFetched, setLastFetched] = useState<string | null>(null)
 
   const validationError = !tenantId.trim() ? 'tenant_id must not be empty' : null
   const displayedError = validationError || errorMessage
+
+  const handleTenantChange = (value: string) => {
+    setTenantId(value)
+    setEvents([])
+    setAlerts([])
+    setLastFetched(null)
+    setErrorMessage(null)
+  }
+
+  const handleApiBaseChange = (value: string) => {
+    setApiBase(value)
+    setEvents([])
+    setAlerts([])
+    setLastFetched(null)
+    setErrorMessage(null)
+  }
 
   useEffect(() => {
     const trimmedTenant = tenantId.trim()
@@ -35,20 +52,14 @@ function App() {
       return
     }
 
-    // Never display the previous tenant's data while the new query loads.
-    setEvents([])
-    setAlerts([])
-    setLastFetched(null)
-    setErrorMessage(null)
-
     const abortController = new AbortController()
     let refreshTimer: ReturnType<typeof setTimeout> | undefined
     const tenantParam = encodeURIComponent(trimmedTenant)
+    const normalizedBase = apiBase.trim().replace(/\/+$/, '')
 
     const getJSON = async <T,>(path: string): Promise<T[]> => {
-      // Same-origin requests work with the Vite development proxy and with a
-      // production reverse proxy serving the dashboard and /v1 API together.
-      const response = await fetch(path, { signal: abortController.signal })
+      // Configurable API base supports separate backend host or same-origin proxy
+      const response = await fetch(`${normalizedBase}${path}`, { signal: abortController.signal })
       if (!response.ok) {
         const message = await response.text()
         throw new Error(`API error: HTTP ${response.status} (${message.trim() || response.statusText})`)
@@ -90,21 +101,34 @@ function App() {
       abortController.abort()
       if (refreshTimer !== undefined) clearTimeout(refreshTimer)
     }
-  }, [tenantId])
+  }, [tenantId, apiBase])
 
   return (
     <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
       <h1>RedCyberFox Dashboard (Phase 1 Vertical Slice)</h1>
 
-      <div style={{ marginBottom: '15px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <label htmlFor="tenant-input"><strong>Tenant ID:</strong></label>
-        <input
-          id="tenant-input"
-          type="text"
-          value={tenantId}
-          onChange={(e) => setTenantId(e.target.value)}
-          style={{ padding: '5px 10px', fontSize: '14px', width: '200px' }}
-        />
+      <div style={{ marginBottom: '15px', display: 'flex', alignItems: 'center', gap: '15px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <label htmlFor="tenant-input"><strong>Tenant ID:</strong></label>
+          <input
+            id="tenant-input"
+            type="text"
+            value={tenantId}
+            onChange={(e) => handleTenantChange(e.target.value)}
+            style={{ padding: '5px 10px', fontSize: '14px', width: '200px' }}
+          />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <label htmlFor="api-base-input"><strong>API Base URL:</strong></label>
+          <input
+            id="api-base-input"
+            type="text"
+            value={apiBase}
+            placeholder="(same-origin proxy)"
+            onChange={(e) => handleApiBaseChange(e.target.value)}
+            style={{ padding: '5px 10px', fontSize: '14px', width: '220px' }}
+          />
+        </div>
         {lastFetched && <span style={{ color: '#666', fontSize: '12px' }}>Last updated: {lastFetched}</span>}
       </div>
 

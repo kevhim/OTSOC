@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"redcyberfox/agent/internal/health"
 	"redcyberfox/agent/internal/storage"
 	"redcyberfox/pkg/events"
 )
@@ -258,6 +259,12 @@ func TestIngestion_EndpointIdentityLifecycleAcrossRestarts(t *testing.T) {
 		t.Fatalf("Expected devID1 '%s', got '%s'", initialID, devID1)
 	}
 
+	// Verify health manager identity matches SQLite authoritative device ID on initial boot
+	healthMgr1 := health.NewManager(devID1, "tenant-test", "site-test", nil)
+	if healthMgr1.DeviceID() != initialID {
+		t.Fatalf("Health manager identity mismatch on boot 1: expected '%s', got '%s'", initialID, healthMgr1.DeviceID())
+	}
+
 	// Endpoint wires devID1 into Ingestion Engine AssetID (matching updated main.go wiring)
 	eng1 := NewEngine(db1, Config{
 		TenantID: "tenant-test",
@@ -309,6 +316,12 @@ func TestIngestion_EndpointIdentityLifecycleAcrossRestarts(t *testing.T) {
 		t.Fatalf("Identity drifted on restart! Expected '%s', got '%s'", initialID, devID2)
 	}
 
+	// Verify health manager identity on restart 2
+	healthMgr2 := health.NewManager(devID2, "tenant-test", "site-test", nil)
+	if healthMgr2.DeviceID() != initialID {
+		t.Fatalf("Health manager identity mismatch on restart 2: expected '%s', got '%s'", initialID, healthMgr2.DeviceID())
+	}
+
 	// Endpoint constructs ingestion engine using authoritative devID2
 	eng2 := NewEngine(db2, Config{
 		TenantID: "tenant-test",
@@ -342,4 +355,120 @@ func TestIngestion_EndpointIdentityLifecycleAcrossRestarts(t *testing.T) {
 		t.Errorf("Stored device_id mismatch for event 2: expected '%s', got '%s'", initialID, dbDevID2)
 	}
 	db2.Close()
+
+	// 3. Third boot (Conflicting Legacy Identity File Present):
+	// A rogue or conflicting identity.json is placed in the filesystem.
+	// SQLite must remain authoritative: retain initialID, ignore rogue file, and remove the file.
+	conflictingID := "conflicting-rogue-device-99999"
+	if err := os.WriteFile(identityPath, []byte(`{"device_id":"`+conflictingID+`"}`), 0600); err != nil {
+		t.Fatalf("Failed to write conflicting identity file: %v", err)
+	}
+
+	db3 := storage.NewSQLiteStorage(dbPath, identityPath, 10*1024*1024)
+	if err := db3.Init(context.Background()); err != nil {
+		t.Fatalf("db3.Init failed with conflicting legacy identity: %v", err)
+	}
+	devID3 := db3.GetDeviceID()
+	if devID3 != initialID {
+		t.Fatalf("SQLite failed to maintain authoritative identity against conflicting file! Got '%s', expected '%s'", devID3, initialID)
+	}
+
+	// Verify conflicting file was unlinked
+	if _, err := os.Stat(identityPath); !os.IsNotExist(err) {
+		t.Fatalf("Expected conflicting identity.json to be unlinked after db3.Init")
+	}
+
+	// Verify health manager identity matches SQLite authoritative ID
+	healthMgr3 := health.NewManager(devID3, "tenant-test", "site-test", nil)
+	if healthMgr3.DeviceID() != initialID {
+		t.Fatalf("Health manager identity mismatch on restart 3: expected '%s', got '%s'", initialID, healthMgr3.DeviceID())
+	}
+
+	eng3 := NewEngine(db3, Config{
+		TenantID: "tenant-test",
+		SiteID:   "site-test",
+		AssetID:  devID3,
+	})
+
+	ev3 := &events.CanonicalEvent{
+		EventID:  "run3-ev-3",
+		Severity: "WARN",
+		Source:   "test",
+	}
+	outcome3 := eng3.ProcessEvent(ctx, ctx, ev3)
+	if outcome3 != OutcomeCommitted {
+		t.Fatalf("Event 3 failed to commit on restart 3: %v", outcome3)
+	}
+
+	pending3, err := db3.GetPendingEvents(ctx, 10)
+	if err != nil || len(pending3) != 3 {
+		t.Fatalf("Failed to get pending events on restart 3: %v (len: %d)", err, len(pending3))
+	}
+	if pending3[2].AssetID != initialID || pending3[2].SeqNo != 3 {
+		t.Errorf("Event 3 mismatch: AssetID=%s, SeqNo=%d", pending3[2].AssetID, pending3[2].SeqNo)
+	}
+	var dbDevID3 string
+	if err := db3.GetDB().QueryRow("SELECT device_id FROM events WHERE event_id = ?", pending3[2].EventID).Scan(&dbDevID3); err != nil {
+		t.Fatalf("Failed to query stored device_id for event 3: %v", err)
+	}
+	if dbDevID3 != initialID {
+		t.Errorf("Stored device_id mismatch for event 3: expected '%s', got '%s'", initialID, dbDevID3)
+	}
+
+	// Verify historical events 1 and 2 were not modified or rewritten
+	if pending3[0].AssetID != initialID || pending3[0].SeqNo != 1 {
+		t.Errorf("Historical event 1 corrupted: AssetID=%s, SeqNo=%d", pending3[0].AssetID, pending3[0].SeqNo)
+	}
+	if pending3[1].AssetID != initialID || pending3[1].SeqNo != 2 {
+		t.Errorf("Historical event 2 corrupted: AssetID=%s, SeqNo=%d", pending3[1].AssetID, pending3[1].SeqNo)
+	}
+	db3.Close()
+
+	// 4. Fourth boot (Corrupt/Malformed Legacy Identity File):
+	// A corrupt legacy file exists. SQLite must still open reliably using its authoritative committed state.
+	if err := os.WriteFile(identityPath, []byte(`{invalid-json-payload-corrupt`), 0600); err != nil {
+		t.Fatalf("Failed to write corrupt identity file: %v", err)
+	}
+
+	db4 := storage.NewSQLiteStorage(dbPath, identityPath, 10*1024*1024)
+	if err := db4.Init(context.Background()); err != nil {
+		t.Fatalf("db4.Init failed with corrupt legacy identity file present: %v", err)
+	}
+	devID4 := db4.GetDeviceID()
+	if devID4 != initialID {
+		t.Fatalf("SQLite identity corrupted by malformed file! Got '%s', expected '%s'", devID4, initialID)
+	}
+	if _, err := os.Stat(identityPath); !os.IsNotExist(err) {
+		t.Fatalf("Expected corrupt identity.json to be unlinked after db4.Init")
+	}
+
+	healthMgr4 := health.NewManager(devID4, "tenant-test", "site-test", nil)
+	if healthMgr4.DeviceID() != initialID {
+		t.Fatalf("Health manager identity mismatch on restart 4: expected '%s', got '%s'", initialID, healthMgr4.DeviceID())
+	}
+
+	eng4 := NewEngine(db4, Config{
+		TenantID: "tenant-test",
+		SiteID:   "site-test",
+		AssetID:  devID4,
+	})
+
+	ev4 := &events.CanonicalEvent{
+		EventID:  "run4-ev-4",
+		Severity: "ERROR",
+		Source:   "test",
+	}
+	outcome4 := eng4.ProcessEvent(ctx, ctx, ev4)
+	if outcome4 != OutcomeCommitted {
+		t.Fatalf("Event 4 failed to commit on restart 4: %v", outcome4)
+	}
+
+	pending4, err := db4.GetPendingEvents(ctx, 10)
+	if err != nil || len(pending4) != 4 {
+		t.Fatalf("Failed to get pending events on restart 4: %v (len: %d)", err, len(pending4))
+	}
+	if pending4[3].AssetID != initialID || pending4[3].SeqNo != 4 {
+		t.Errorf("Event 4 mismatch: AssetID=%s, SeqNo=%d", pending4[3].AssetID, pending4[3].SeqNo)
+	}
+	db4.Close()
 }

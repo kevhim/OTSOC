@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -840,4 +841,232 @@ func TestStorage_IdentityStabilityAcrossRestarts(t *testing.T) {
 		t.Fatalf("Identity drifted on 3rd run! Expected '%s', got '%s'", initialUUID, id3)
 	}
 	s3.Close()
+}
+
+func TestStorage_RetryEligibility_DeterministicClock(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	s := NewSQLiteStorage(dbPath, "", 1024*1024*10)
+	if err := s.Init(context.Background()); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	defer s.Close()
+
+	// 1. Establish simulated clock seam at 23:59:30 UTC (near UTC midnight boundary)
+	var mu sync.Mutex
+	simTime := time.Date(2026, 11, 1, 23, 59, 30, 0, time.UTC)
+	s.SetClock(func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return simTime
+	})
+
+	ev := &events.CanonicalEvent{
+		EventID:  "retry-clock-1",
+		Severity: "INFO",
+		Source:   "clock-test",
+	}
+	if err := s.Store(context.Background(), ev); err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	// 2. Mark failed with 45s Retry-After -> deadline is 2026-11-02 00:00:15 UTC (crosses midnight)
+	if err := s.MarkFailed(context.Background(), ev.EventID, 45, errors.New("rate-limited")); err != nil {
+		t.Fatalf("MarkFailed failed: %v", err)
+	}
+
+	// Verify formatted string in SQLite crossed date boundary to 2026-11-02
+	var rawDeadline string
+	if err := s.db.QueryRow("SELECT next_attempt_at FROM events WHERE event_id = ?", ev.EventID).Scan(&rawDeadline); err != nil {
+		t.Fatalf("Failed to scan next_attempt_at: %v", err)
+	}
+	tDead, ok := parseRetryTimestamp(rawDeadline)
+	if !ok || tDead.UTC().Format("2006-01-02 15:04:05") != "2026-11-02 00:00:15" {
+		t.Fatalf("Expected parsed next_attempt_at '2026-11-02 00:00:15', got raw '%s'", rawDeadline)
+	}
+
+	// 3. Ineligible before deadline: at 23:59:30, 0 pending events returned
+	pending, err := s.GetPendingEvents(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("GetPendingEvents failed: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("Expected 0 pending events before deadline, got %d", len(pending))
+	}
+
+	// Advance time to 2026-11-02 00:00:10 UTC (still before deadline by 5s)
+	mu.Lock()
+	simTime = time.Date(2026, 11, 2, 0, 0, 10, 0, time.UTC)
+	mu.Unlock()
+
+	pending, err = s.GetPendingEvents(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("GetPendingEvents failed: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("Expected 0 pending events at T-5s before deadline, got %d", len(pending))
+	}
+
+	// 4. Eligible at/after deadline: advance clock to exactly 2026-11-02 00:00:15 UTC
+	mu.Lock()
+	simTime = time.Date(2026, 11, 2, 0, 0, 15, 0, time.UTC)
+	mu.Unlock()
+
+	pending, err = s.GetPendingEvents(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("GetPendingEvents failed: %v", err)
+	}
+	if len(pending) != 1 || pending[0].EventID != ev.EventID {
+		t.Fatalf("Expected 1 pending event eligible at deadline, got %d", len(pending))
+	}
+
+	// 5. Non-UTC timezone behavior: clock in non-UTC timezone (+05:30)
+	// 2026-11-02 05:30:15 IST == 2026-11-02 00:00:15 UTC
+	istZone := time.FixedZone("IST", 5*3600+1800)
+	mu.Lock()
+	simTime = time.Date(2026, 11, 2, 5, 30, 15, 0, istZone)
+	mu.Unlock()
+
+	pending, err = s.GetPendingEvents(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("GetPendingEvents failed with non-UTC clock: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("Expected event eligible when clock is in non-UTC timezone representing >= deadline, got %d", len(pending))
+	}
+
+	// 6. Database reopen preserves scheduling
+	s.Close()
+
+	sReopened := NewSQLiteStorage(dbPath, "", 1024*1024*10)
+	if err := sReopened.Init(context.Background()); err != nil {
+		t.Fatalf("Reopen init failed: %v", err)
+	}
+	defer sReopened.Close()
+
+	// Before deadline on reopened DB -> 0
+	sReopened.SetClock(func() time.Time {
+		return time.Date(2026, 11, 2, 0, 0, 14, 0, time.UTC)
+	})
+	pending, err = sReopened.GetPendingEvents(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("GetPendingEvents on reopen failed: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Errorf("Reopened DB should not return event before deadline, got %d", len(pending))
+	}
+
+	// After deadline on reopened DB -> 1
+	sReopened.SetClock(func() time.Time {
+		return time.Date(2026, 11, 2, 0, 0, 16, 0, time.UTC)
+	})
+	pending, err = sReopened.GetPendingEvents(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("GetPendingEvents on reopen failed: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Errorf("Reopened DB should return event after deadline, got %d", len(pending))
+	}
+}
+
+func TestStorage_IdempotencyDLQ_IntegrityAndPressureContract(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	s := NewSQLiteStorage(dbPath, "", 500*1024)
+	if err := s.Init(context.Background()); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	defer s.Close()
+
+	// 1. Store a diagnostic event that should be preserved
+	diagEv := &events.CanonicalEvent{
+		EventID:  "diag-ev-preserve",
+		Severity: "DEBUG",
+		Source:   "diag",
+		Metadata: map[string]interface{}{"note": "must not be pruned"},
+	}
+	if err := s.Store(context.Background(), diagEv); err != nil {
+		t.Fatalf("Store diagEv failed: %v", err)
+	}
+
+	// 2. Store event that will be moved to DLQ
+	dlqEv := &events.CanonicalEvent{
+		EventID:  "dlq-ev-1",
+		Severity: "CRITICAL",
+		Source:   "test-source",
+		Metadata: map[string]interface{}{"payload": "original-dlq-payload"},
+	}
+	if err := s.Store(context.Background(), dlqEv); err != nil {
+		t.Fatalf("Store dlqEv failed: %v", err)
+	}
+	dlqSeq := dlqEv.SeqNo
+
+	// Move dlqEv to DLQ
+	if err := s.MoveToDLQ(context.Background(), dlqEv, "POISON_PILL", "serialization error"); err != nil {
+		t.Fatalf("MoveToDLQ failed: %v", err)
+	}
+
+	// Verify dlqEv is in dead_letter_queue
+	var dlqCount int
+	s.db.QueryRow("SELECT COUNT(*) FROM dead_letter_queue WHERE event_id = ?", dlqEv.EventID).Scan(&dlqCount)
+	if dlqCount != 1 {
+		t.Fatalf("Expected 1 entry in dead_letter_queue, got %d", dlqCount)
+	}
+
+	// 3. Artificially restrict quota to trigger extreme pressure for any new writes
+	s.quotaBytes = 1000
+
+	// 4. Retry storing dlqEv with IDENTICAL payload
+	// Must succeed without pruning, counter changes, or sequence allocation
+	var seqBefore int64
+	s.db.QueryRow("SELECT next_seq_no FROM agent_state WHERE id = 1").Scan(&seqBefore)
+
+	retryIdentical := &events.CanonicalEvent{
+		EventID:  "dlq-ev-1",
+		Severity: "CRITICAL",
+		Source:   "test-source",
+		Metadata: map[string]interface{}{"payload": "original-dlq-payload"},
+	}
+	if err := s.Store(context.Background(), retryIdentical); err != nil {
+		t.Fatalf("Idempotent Store for DLQ event failed: %v", err)
+	}
+	if retryIdentical.SeqNo != dlqSeq {
+		t.Errorf("Expected SeqNo to match original %d, got %d", dlqSeq, retryIdentical.SeqNo)
+	}
+
+	var seqAfter int64
+	s.db.QueryRow("SELECT next_seq_no FROM agent_state WHERE id = 1").Scan(&seqAfter)
+	if seqAfter != seqBefore {
+		t.Errorf("next_seq_no incremented during idempotent DLQ retry: before=%d, after=%d", seqBefore, seqAfter)
+	}
+
+	// Diagnostic event must NOT be pruned
+	var diagCount int
+	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE event_id = 'diag-ev-preserve'").Scan(&diagCount)
+	if diagCount != 1 {
+		t.Errorf("Diagnostic event was pruned during idempotent DLQ retry!")
+	}
+
+	// 5. Retry storing dlqEv with CONFLICTING payload
+	// Must return integrity error without deleting DLQ evidence or pruning
+	retryConflicting := &events.CanonicalEvent{
+		EventID:  "dlq-ev-1",
+		Severity: "CRITICAL",
+		Source:   "test-source",
+		Metadata: map[string]interface{}{"payload": "TAMPERED-payload"},
+	}
+	err := s.Store(context.Background(), retryConflicting)
+	if err == nil {
+		t.Fatalf("Expected integrity error on conflicting DLQ retry, got nil")
+	}
+
+	// DLQ evidence must remain intact
+	var dlqPayload string
+	if err := s.db.QueryRow("SELECT payload FROM dead_letter_queue WHERE event_id = ?", dlqEv.EventID).Scan(&dlqPayload); err != nil {
+		t.Fatalf("DLQ evidence missing after conflicting retry: %v", err)
+	}
+	origPayload, _ := dlqEv.Serialize()
+	if dlqPayload != string(origPayload) {
+		t.Errorf("DLQ payload was altered! Expected '%s', got '%s'", string(origPayload), dlqPayload)
+	}
 }

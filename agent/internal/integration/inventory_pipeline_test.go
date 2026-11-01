@@ -100,8 +100,17 @@ func TestInventoryPipeline_Integration(t *testing.T) {
 		t.Fatalf("Failed to start inventory collector: %v", err)
 	}
 
-	// Wait for event to propagate through HTTP roundtrip
-	time.Sleep(500 * time.Millisecond)
+	// Wait for event to propagate through HTTP roundtrip with timeout
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		rec := received
+		mu.Unlock()
+		if rec >= 1 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
 	// Shutdown
 	invCol.Stop()

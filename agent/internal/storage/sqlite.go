@@ -35,6 +35,8 @@ type SQLiteStorage struct {
 
 	mu sync.Mutex
 
+	clock func() time.Time
+
 	maintenanceCancel context.CancelFunc
 	maintenanceWg     sync.WaitGroup
 
@@ -437,6 +439,20 @@ func (s *SQLiteStorage) GetDeviceID() string {
 	return s.deviceID
 }
 
+func (s *SQLiteStorage) getClock() time.Time {
+	if s.clock != nil {
+		return s.clock()
+	}
+	return time.Now()
+}
+
+// SetClock configures a deterministic clock seam for retry and scheduling tests.
+func (s *SQLiteStorage) SetClock(clock func() time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.clock = clock
+}
+
 func (s *SQLiteStorage) GetDB() *sql.DB {
 	return s.db
 }
@@ -452,12 +468,14 @@ func (s *SQLiteStorage) GetPendingEvents(ctx context.Context, limit int) ([]*eve
 		return nil, errors.New("DEGRADED_STORAGE: DB not initialized")
 	}
 
+	nowStr := s.getClock().UTC().Format("2006-01-02 15:04:05")
+
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT event_id, device_id, seq_no, payload FROM events 
-		WHERE state = 'PENDING' AND (next_attempt_at IS NULL OR datetime(next_attempt_at) <= CURRENT_TIMESTAMP)
+		WHERE state = 'PENDING' AND (next_attempt_at IS NULL OR datetime(next_attempt_at) <= datetime(?))
 		ORDER BY seq_no ASC
 		LIMIT ?
-	`, limit)
+	`, nowStr, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -568,13 +586,14 @@ func (s *SQLiteStorage) MarkFailed(ctx context.Context, eventID string, retryAft
 		attemptCount = 1
 	}
 
+	now := s.getClock().UTC()
 	var nextAttemptAt time.Time
 	if retryAfter > 0 {
 		// F13: Bounded retry-after against integer/duration overflow
 		if retryAfter > maxRetryAfterSeconds {
 			retryAfter = maxRetryAfterSeconds
 		}
-		nextAttemptAt = time.Now().UTC().Add(time.Duration(retryAfter) * time.Second)
+		nextAttemptAt = now.Add(time.Duration(retryAfter) * time.Second)
 	} else {
 		// F13: Saturate exponential backoff arithmetic before shifting
 		// Formula: next_attempt_at = now + min(MaxBackoff, InitialBackoff * 2^attempt_count) + Jitter
@@ -588,8 +607,8 @@ func (s *SQLiteStorage) MarkFailed(ctx context.Context, eventID string, retryAft
 				backoff = maxBackoffSeconds
 			}
 		}
-		jitter := time.Duration(time.Now().UnixNano()%10) * time.Second // Bounded jitter up to 10s
-		nextAttemptAt = time.Now().UTC().Add(time.Duration(backoff)*time.Second + jitter)
+		jitter := time.Duration(now.UnixNano()%10) * time.Second // Bounded jitter up to 10s
+		nextAttemptAt = now.Add(time.Duration(backoff)*time.Second + jitter)
 	}
 
 	// F01: Format as canonical UTC text matching SQLite CURRENT_TIMESTAMP format ("YYYY-MM-DD HH:MM:SS")

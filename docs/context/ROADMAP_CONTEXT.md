@@ -55,3 +55,14 @@
 - Phase 2D implements real-time filesystem telemetry with recursive directory watching.
 - Phase 2E.1, 2E.2, 2E.3 implement system inventory, network active connections, and hardware USB change tracking across Windows and Linux.
 - Phase 2E.4 completes cross-source regression with a shared production ingestion engine, unified event ID ownership, single 10-second global shutdown drain deadline, SQLite contention resilience, and deterministic error cause preservation.
+
+
+## Phase 4 Correctness-Remediation Checkpoint (2026-11-01)
+- **Status**: Completed on branch `fix/correctness-remediation-checkpoint`.
+- **Key Changes**:
+  - Authoritative endpoint identity anchored strictly in SQLite `agent_state`, verified across missing, conflicting, and corrupt legacy identity files across multiple boots.
+  - Deterministic UTC clock seam and parameterized retry queries in SQLite storage; fake retry database manipulation removed from integration tests.
+  - Store and DLQ duplicate integrity checks executed prior to quota pruning or failure.
+  - Dashboard read contract repaired with configurable API base, encoded tenant query parameters, visible error handling, and clean OxLint verification.
+  - Unified verification script `scripts/verify-phase4.ps1` added with explicit blocked-dependency accounting.
+- **Milestone Status**: Phase 4 acceptance remains **OPEN** pending low-spec hardware benchmarks, authoritative storage budget policy, real detection workloads, and safe resource adaptation.
