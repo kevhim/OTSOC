@@ -15,20 +15,37 @@ type item struct {
 }
 
 // EventQueue is an instrumented, bounded FIFO queue with a fixed-size ring buffer.
-// It exposes non-destructive queue depth, capacity, oldest event age, and backpressure
-// metrics to the Resource Governor and Measurement Reporter.
+// It exposes non-destructive queue depth, capacity, oldest event age, and precisely
+// defined backpressure metrics to the Resource Governor and Measurement Reporter.
+//
+// Backpressure Semantics:
+//  1. BlockedEnqueueAttemptsTotal: Counts each distinct event enqueue attempt that
+//     was blocked waiting for downstream capacity because the queue was at maximum capacity.
+//  2. PressureEpisodesTotal: Counts each discrete transition into the 100% saturated
+//     state (count == capacity). A continuous period of saturation counts as 1 episode.
+//  3. TimeSpentFullSeconds: Measures the cumulative elapsed duration in seconds the queue
+//     remained at 100% saturation.
 type EventQueue struct {
-	mu                sync.RWMutex
-	capacity          int
-	inCh              chan *events.CanonicalEvent
-	outCh             chan *events.CanonicalEvent
-	ring              []item
-	head              int
-	tail              int
-	count             int
-	backpressureTotal uint64
-	closeOnce         sync.Once
-	done              chan struct{}
+	mu       sync.Mutex
+	notFull  *sync.Cond
+	notEmpty *sync.Cond
+
+	capacity int
+	ring     []item
+	head     int
+	tail     int
+	count    int
+	closed   bool
+
+	inCh      chan *events.CanonicalEvent
+	outCh     chan *events.CanonicalEvent
+	done      chan struct{}
+	closeOnce sync.Once
+
+	blockedEnqueueAttempts atomic.Uint64
+	pressureEpisodes       atomic.Uint64
+	timeSpentFull          time.Duration
+	fullStartTime          time.Time
 }
 
 // New creates an initialized EventQueue with fixed capacity.
@@ -39,12 +56,16 @@ func New(capacity int) *EventQueue {
 	}
 	q := &EventQueue{
 		capacity: capacity,
+		ring:     make([]item, capacity),
 		inCh:     make(chan *events.CanonicalEvent),
 		outCh:    make(chan *events.CanonicalEvent),
-		ring:     make([]item, capacity),
 		done:     make(chan struct{}),
 	}
-	go q.run()
+	q.notFull = sync.NewCond(&q.mu)
+	q.notEmpty = sync.NewCond(&q.mu)
+
+	go q.inPump()
+	go q.outPump()
 	return q
 }
 
@@ -59,8 +80,7 @@ func (q *EventQueue) Out() <-chan *events.CanonicalEvent {
 }
 
 // Close gracefully stops accepting new events into the queue by closing In.
-// The internal runner will continue delivering buffered items to Out until empty,
-// at which point Out is closed.
+// Buffered items continue delivering to Out until empty, at which point Out is closed.
 func (q *EventQueue) Close() {
 	q.closeOnce.Do(func() {
 		close(q.inCh)
@@ -74,8 +94,8 @@ func (q *EventQueue) WaitDrain() {
 
 // Depth returns the current number of events buffered in the queue.
 func (q *EventQueue) Depth() governor.ValidUint64 {
-	q.mu.RLock()
-	defer q.mu.RUnlock()
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	return governor.ValidUint64{Value: uint64(q.count), Valid: true}
 }
 
@@ -86,8 +106,8 @@ func (q *EventQueue) Capacity() governor.ValidUint64 {
 
 // SaturationPercent returns the fill ratio (0.0 to 100.0) of the queue.
 func (q *EventQueue) SaturationPercent() governor.ValidFloat64 {
-	q.mu.RLock()
-	defer q.mu.RUnlock()
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	sat := (float64(q.count) / float64(q.capacity)) * 100.0
 	return governor.ValidFloat64{Value: sat, Valid: true}
 }
@@ -95,8 +115,8 @@ func (q *EventQueue) SaturationPercent() governor.ValidFloat64 {
 // OldestEventAge returns the elapsed duration in seconds of the oldest event in the queue.
 // If the queue is empty, returns Valid: false.
 func (q *EventQueue) OldestEventAge() governor.ValidFloat64 {
-	q.mu.RLock()
-	defer q.mu.RUnlock()
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	if q.count == 0 {
 		return governor.ValidFloat64{Valid: false}
 	}
@@ -107,68 +127,127 @@ func (q *EventQueue) OldestEventAge() governor.ValidFloat64 {
 	return governor.ValidFloat64{Value: age, Valid: true}
 }
 
-// BackpressureEventsTotal returns the count of times enqueueing encountered a full queue.
-func (q *EventQueue) BackpressureEventsTotal() uint64 {
-	return atomic.LoadUint64(&q.backpressureTotal)
+// BlockedEnqueueAttemptsTotal returns the count of event enqueue attempts that
+// were blocked waiting for queue capacity because the queue was at maximum capacity.
+func (q *EventQueue) BlockedEnqueueAttemptsTotal() uint64 {
+	return q.blockedEnqueueAttempts.Load()
 }
 
-func (q *EventQueue) run() {
-	defer close(q.outCh)
-	defer close(q.done)
+// BackpressureEventsTotal is an alias for BlockedEnqueueAttemptsTotal for backward compatibility.
+func (q *EventQueue) BackpressureEventsTotal() uint64 {
+	return q.BlockedEnqueueAttemptsTotal()
+}
 
-	inClosed := false
+// PressureEpisodesTotal returns the count of discrete episodes where queue saturation reached 100%.
+func (q *EventQueue) PressureEpisodesTotal() uint64 {
+	return q.pressureEpisodes.Load()
+}
 
+// TimeSpentFullSeconds returns the cumulative duration in seconds the queue spent at 100% capacity.
+func (q *EventQueue) TimeSpentFullSeconds() float64 {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	spent := q.timeSpentFull
+	if q.count == q.capacity && !q.fullStartTime.IsZero() {
+		spent += time.Since(q.fullStartTime)
+	}
+	return spent.Seconds()
+}
+
+func (q *EventQueue) inPump() {
 	for {
-		var headEv *events.CanonicalEvent
-		var currentOut chan *events.CanonicalEvent
-
-		q.mu.RLock()
-		currentCount := q.count
-		if currentCount > 0 {
-			headEv = q.ring[q.head].event
-			currentOut = q.outCh
+		q.mu.Lock()
+		wasFull := false
+		for q.count == q.capacity && !q.closed {
+			wasFull = true
+			q.notFull.Wait()
 		}
-		q.mu.RUnlock()
+		if q.closed {
+			q.mu.Unlock()
+			return
+		}
+		q.mu.Unlock()
 
-		if inClosed && currentCount == 0 {
+		var ev *events.CanonicalEvent
+		var ok bool
+
+		if wasFull {
+			// If queue was full, check if a producer was already blocked waiting to send on inCh.
+			select {
+			case ev, ok = <-q.inCh:
+				if ok {
+					q.blockedEnqueueAttempts.Add(1)
+				}
+			default:
+				ev, ok = <-q.inCh
+			}
+		} else {
+			ev, ok = <-q.inCh
+		}
+
+		if !ok {
+			q.mu.Lock()
+			q.closed = true
+			q.notEmpty.Signal()
+			q.notFull.Broadcast()
+			q.mu.Unlock()
 			return
 		}
 
-		var currentIn chan *events.CanonicalEvent
-		if !inClosed {
-			if currentCount < q.capacity {
-				currentIn = q.inCh
-			} else {
-				// Queue is full, backpressure is active
-				atomic.AddUint64(&q.backpressureTotal, 1)
-			}
+		q.mu.Lock()
+		wasEmpty := (q.count == 0)
+		q.ring[q.tail] = item{
+			event:      ev,
+			enqueuedAt: time.Now(),
+		}
+		q.tail = (q.tail + 1) % q.capacity
+		q.count++
+
+		if q.count == q.capacity {
+			q.pressureEpisodes.Add(1)
+			q.fullStartTime = time.Now()
 		}
 
-		select {
-		case ev, ok := <-currentIn:
-			if !ok {
-				inClosed = true
-				continue
-			}
-			q.mu.Lock()
-			if q.count < q.capacity {
-				q.ring[q.tail] = item{
-					event:      ev,
-					enqueuedAt: time.Now(),
-				}
-				q.tail = (q.tail + 1) % q.capacity
-				q.count++
-			}
-			q.mu.Unlock()
-
-		case currentOut <- headEv:
-			q.mu.Lock()
-			if q.count > 0 {
-				q.ring[q.head] = item{} // Zero out reference for GC
-				q.head = (q.head + 1) % q.capacity
-				q.count--
-			}
-			q.mu.Unlock()
+		if wasEmpty {
+			q.notEmpty.Signal()
 		}
+		q.mu.Unlock()
+	}
+}
+
+func (q *EventQueue) outPump() {
+	defer close(q.outCh)
+	defer close(q.done)
+
+	for {
+		q.mu.Lock()
+		for q.count == 0 && !q.closed {
+			q.notEmpty.Wait()
+		}
+		if q.count == 0 && q.closed {
+			q.mu.Unlock()
+			return
+		}
+
+		headEv := q.ring[q.head].event
+		q.mu.Unlock()
+
+		// Deliver to outCh without holding queue lock
+		q.outCh <- headEv
+
+		q.mu.Lock()
+		q.ring[q.head] = item{} // Zero out reference for GC
+		q.head = (q.head + 1) % q.capacity
+		wasFull := (q.count == q.capacity)
+		if wasFull && !q.fullStartTime.IsZero() {
+			q.timeSpentFull += time.Since(q.fullStartTime)
+			q.fullStartTime = time.Time{}
+		}
+		q.count--
+
+		if wasFull {
+			q.notFull.Signal()
+		}
+		q.mu.Unlock()
 	}
 }

@@ -87,14 +87,16 @@
   - Extracted shared request execution logic `fetchTenantData` in `dashboard/src/tenant_query.ts`, tested directly in `dashboard/src/request_isolation.test.mjs`.
 - **Milestone Status**: Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
 
-## Phase 4.4 Event Accounting & Queue Instrumentation Checkpoint (2026-11-01)
+## Phase 4.4 Measurement Finalization, Backpressure Semantics & Ingestion-Outcome Reconciliation Checkpoint (2026-11-01)
 - **Status**: Completed on branch `fix/correctness-remediation-checkpoint`.
 - **Key Changes**:
-  - Implemented `agent/internal/eventqueue`: Bounded ring buffer queue with $O(1)$ non-destructive oldest event age tracking, capacity and saturation monitoring, natural channel backpressure, and graceful draining.
-  - Instrumented `agent/internal/ingestion/engine.go` with atomic event accounting across committed, pre-commit failure, DLQ recovery, disk spill, and drop outcomes, enforcing the pipeline invariant:
+  - **Finalize-After-Drain Lifecycle**: Decoupled measurement timer expiry from report writing. Expiry triggers `resourcereport.ShutdownCoordinator` to enter the shared 10-second drain sequence; report is finalized only after collectors stop, the queue drains, ingestion finishes, and forwarder stops. SQLite state is inspected (`InspectDurableStorage`) before closing the DB. Shutdown/report errors exit with code 1.
+  - **Ingestion-Outcome Reconciliation**: Explicitly named and scoped the accounting equation:
     $$\text{IngestedTotal} = \text{CommittedTotal} + \text{FailedBeforeCommitTotal} + \text{RecoveredDLQTotal} + \text{SpilledDiskTotal} + \text{DroppedTotal}$$
-  - Instrumented `agent/internal/forwarder/forwarder.go` with atomic accounting tracking attempts, forwarded, DLQ, and retried counts.
-  - Integrated queue metrics and event accounting into `agent/cmd/endpoint/main.go` and `agent/internal/resourcereport` runner and reporter.
-  - Expanded `scripts/verify-phase4.ps1` to cover `eventqueue` in core component and race checks (9/9 PASS).
+    Enforces local ingestion-outcome reconciliation (protected with mutex snapshotting against atomic skew). Strictly not labeled end-to-end reconciliation or proof of zero loss.
+  - **Explicit Durable & Forwarder Accounting**: Distinguished source telemetry from derived detection findings, pending events from DLQ, HTTP attempts from unique 202 acceptances (`HTTPAcceptedTotal`), and local SQLite deletions (`LocalRemovedTotal`). Unsupported metrics (retention pruning) remain explicitly `null`.
+  - **Deterministic Backpressure Semantics**: Ring buffer queue in `agent/internal/eventqueue` tracks distinct blocked enqueue attempts on full queue (tested under full-queue pressure and 10 concurrent senders with zero data races), saturation transitions (`PressureEpisodesTotal`), cumulative time spent full (`TimeSpentFullSeconds`), and non-destructive oldest event age.
+  - **Queued Event Drain Regression**: Added `agent/internal/integration/queued_drain_report_test.go` verifying that events queued when measurement expires are completely drained, committed to SQLite, and accounted for in the finalized report.
+  - **Verification**: `scripts/verify-phase4.ps1 -Race -NativeDetection` 9/9 PASS, dashboard request isolation tests PASS, native endpoint build PASS.
 - **Milestone Status**: Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
 - **Next Bounded Implementation Task**: Representative Linux and Windows workload benchmarks and resource governor threshold calibration.

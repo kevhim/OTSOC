@@ -116,7 +116,7 @@ if ($LASTEXITCODE -eq 0) {
 
 # 7. Pipeline Integration & Offline Sync Tests
 Write-Host "`n--> [7/8] Running Pipeline Integration & Offline Sync Tests..." -ForegroundColor Magenta
-$integrationOut = & go test -v ./agent/internal/integration -run "^(TestOffline|TestLostResponse|TestIntegration_LocalRemovalFailure|TestFocusedIngestion|TestPhase2E4|TestEndpointPipeline|TestFilesystemPipeline|TestInventoryPipeline|TestNetworkPipeline|TestPassiveNetworkPipeline|TestUSBPipeline|TestWorkloadDemonstration)" 2>&1
+$integrationOut = & go test -v ./agent/internal/integration -run "^(TestOffline|TestLostResponse|TestIntegration_LocalRemovalFailure|TestFocusedIngestion|TestPhase2E4|TestEndpointPipeline|TestFilesystemPipeline|TestInventoryPipeline|TestNetworkPipeline|TestPassiveNetworkPipeline|TestUSBPipeline|TestWorkloadDemonstration|TestMeasurement)" 2>&1
 if ($LASTEXITCODE -eq 0) {
     Add-Result -Name "Integration & Offline Sync Tests" -Status "PASS" -Details "Pipeline end-to-end and offline sync recovery passed"
 } else {

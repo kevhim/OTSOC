@@ -356,8 +356,14 @@ func TestForwarder_Accounting(t *testing.T) {
 	if acc.AttemptsTotal != 3 { // 3 HTTP attempts (mismatch was moved to DLQ before HTTP)
 		t.Errorf("expected 3 attempts, got %d", acc.AttemptsTotal)
 	}
-	if acc.ForwardedTotal != 1 { // 1 accepted (ev-202)
-		t.Errorf("expected 1 forwarded, got %d", acc.ForwardedTotal)
+	if acc.HTTPAcceptedTotal != 1 || acc.ForwardedTotal != 1 { // 1 accepted (ev-202)
+		t.Errorf("expected 1 accepted/forwarded, got %d", acc.HTTPAcceptedTotal)
+	}
+	if acc.LocalRemovedTotal != 1 {
+		t.Errorf("expected 1 local removed, got %d", acc.LocalRemovedTotal)
+	}
+	if acc.LocalRemovalErrorsTotal != 0 {
+		t.Errorf("expected 0 local removal errors, got %d", acc.LocalRemovalErrorsTotal)
 	}
 	if acc.DLQTotal != 2 { // 1 bad request (ev-400) + 1 mismatch (ev-mismatch)
 		t.Errorf("expected 2 DLQ, got %d", acc.DLQTotal)

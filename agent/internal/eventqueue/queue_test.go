@@ -29,12 +29,11 @@ func TestEventQueue_FIFOAndAge(t *testing.T) {
 	ev2 := &events.CanonicalEvent{EventID: "ev-2"}
 
 	q.In() <- ev1
-	// Wait a tiny moment so age increases noticeably
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(30 * time.Millisecond) // Allow age to progress
 	q.In() <- ev2
 
 	// Check depth and age
-	time.Sleep(10 * time.Millisecond) // Allow pump to process
+	time.Sleep(20 * time.Millisecond)
 	if q.Depth().Value != 2 {
 		t.Fatalf("expected depth 2, got %d", q.Depth().Value)
 	}
@@ -56,7 +55,7 @@ func TestEventQueue_FIFOAndAge(t *testing.T) {
 		t.Fatalf("expected FIFO ev-2, got %s", out2.EventID)
 	}
 
-	time.Sleep(10 * time.Millisecond) // Allow pump to update
+	time.Sleep(20 * time.Millisecond)
 	if q.Depth().Value != 0 {
 		t.Fatalf("expected depth 0 after dequeue, got %d", q.Depth().Value)
 	}
@@ -65,88 +64,120 @@ func TestEventQueue_FIFOAndAge(t *testing.T) {
 	}
 }
 
-func TestEventQueue_BackpressureAndBoundedCapacity(t *testing.T) {
-	capacity := 5
+func TestEventQueue_BackpressureAndBlockedEnqueueAttempts(t *testing.T) {
+	capacity := 4
 	q := New(capacity)
 
-	// Fill queue to capacity
+	// Fill queue to capacity (4 items)
 	for i := 1; i <= capacity; i++ {
 		q.In() <- &events.CanonicalEvent{EventID: fmt.Sprintf("ev-%d", i)}
 	}
 
-	time.Sleep(20 * time.Millisecond)
+	// Allow inPump to process items into the ring buffer
+	time.Sleep(30 * time.Millisecond)
+
 	if q.Depth().Value != uint64(capacity) {
 		t.Fatalf("expected depth %d, got %d", capacity, q.Depth().Value)
 	}
 	if q.SaturationPercent().Value != 100.0 {
 		t.Fatalf("expected saturation 100%%, got %v", q.SaturationPercent().Value)
 	}
+	if q.PressureEpisodesTotal() != 1 {
+		t.Fatalf("expected 1 pressure episode, got %d", q.PressureEpisodesTotal())
+	}
+	if q.BlockedEnqueueAttemptsTotal() != 0 {
+		t.Fatalf("expected 0 blocked enqueue attempts while filling to capacity, got %d", q.BlockedEnqueueAttemptsTotal())
+	}
 
-	// A 6th event send should block until an item is read
-	sendComplete := make(chan struct{})
+	// Attempt to send 5th event: must block
+	ev5Sent := make(chan struct{})
 	go func() {
-		q.In() <- &events.CanonicalEvent{EventID: "ev-6"}
-		close(sendComplete)
+		q.In() <- &events.CanonicalEvent{EventID: "ev-5"}
+		close(ev5Sent)
 	}()
 
 	select {
-	case <-sendComplete:
-		t.Fatalf("expected send beyond capacity to block, but it completed immediately")
-	case <-time.After(50 * time.Millisecond):
-		// Expected to block
+	case <-ev5Sent:
+		t.Fatalf("expected send of ev-5 to block on full queue, but it completed immediately")
+	case <-time.After(40 * time.Millisecond):
+		// Expected to block on unbuffered channel while queue is full
 	}
 
-	// Read one item to unblock
+	// Read 1 item from Out to unblock ev-5
 	head := <-q.Out()
 	if head.EventID != "ev-1" {
 		t.Fatalf("expected ev-1, got %s", head.EventID)
 	}
 
 	select {
-	case <-sendComplete:
-		// Send unblocked as expected
+	case <-ev5Sent:
+		// Succeeded unblocking
 	case <-time.After(200 * time.Millisecond):
-		t.Fatalf("timed out waiting for blocked send to complete")
+		t.Fatalf("timed out waiting for ev-5 send to complete after dequeue")
 	}
 
-	// Backpressure counter should have been incremented
-	if q.BackpressureEventsTotal() == 0 {
-		t.Fatalf("expected backpressure counter > 0, got %d", q.BackpressureEventsTotal())
+	// Blocked enqueue attempts should now be exactly 1
+	if q.BlockedEnqueueAttemptsTotal() != 1 {
+		t.Fatalf("expected 1 blocked enqueue attempt after ev-5 was unblocked, got %d", q.BlockedEnqueueAttemptsTotal())
+	}
+	// Pressure episodes should be 2 (first 1..4, second after ev-5 refilled the queue)
+	if q.PressureEpisodesTotal() != 2 {
+		t.Fatalf("expected 2 pressure episodes, got %d", q.PressureEpisodesTotal())
 	}
 
+	// Allow pump to settle
+	time.Sleep(30 * time.Millisecond)
+	if q.Depth().Value != uint64(capacity) {
+		t.Fatalf("expected depth back at capacity %d, got %d", capacity, q.Depth().Value)
+	}
+
+	// Time spent full should be > 0
+	if q.TimeSpentFullSeconds() <= 0 {
+		t.Fatalf("expected TimeSpentFullSeconds > 0, got %v", q.TimeSpentFullSeconds())
+	}
+
+	// Drain everything
 	q.Close()
+	var drainedCount int
 	for range q.Out() {
+		drainedCount++
 	}
 	q.WaitDrain()
+
+	if drainedCount != 4 { // ev-2, ev-3, ev-4, ev-5
+		t.Fatalf("expected 4 remaining items drained, got %d", drainedCount)
+	}
 }
 
 func TestEventQueue_GracefulDrainOnClose(t *testing.T) {
 	q := New(50)
 
-	// Send 20 events
-	for i := 1; i <= 20; i++ {
+	// Send 25 events
+	for i := 1; i <= 25; i++ {
 		q.In() <- &events.CanonicalEvent{EventID: fmt.Sprintf("drain-%d", i)}
 	}
 
 	// Close queue
 	q.Close()
 
-	// Receiver should drain all 20 events and then receive channel close
+	// Receiver drains all 25 events and then receives channel close
 	var received []string
 	for ev := range q.Out() {
 		received = append(received, ev.EventID)
 	}
+	q.WaitDrain()
 
-	if len(received) != 20 {
-		t.Fatalf("expected 20 drained events, got %d", len(received))
+	if len(received) != 25 {
+		t.Fatalf("expected 25 drained events, got %d", len(received))
 	}
-	if received[0] != "drain-1" || received[19] != "drain-20" {
+	if received[0] != "drain-1" || received[24] != "drain-25" {
 		t.Fatalf("FIFO ordering corrupted during drain")
 	}
 }
 
 func TestEventQueue_ConcurrentSenders(t *testing.T) {
-	q := New(100)
+	capacity := 20
+	q := New(capacity)
 	senderCount := 10
 	eventsPerSender := 50
 	totalExpected := senderCount * eventsPerSender
@@ -176,8 +207,13 @@ func TestEventQueue_ConcurrentSenders(t *testing.T) {
 	wg.Wait()
 	q.Close()
 	<-receiveDone
+	q.WaitDrain()
 
 	if receiveCount != totalExpected {
 		t.Fatalf("expected %d events, got %d", totalExpected, receiveCount)
+	}
+	// Under high contention on capacity 20 with 500 events, blocked attempts should be observed
+	if q.BlockedEnqueueAttemptsTotal() == 0 {
+		t.Fatalf("expected blocked enqueue attempts > 0 under contention")
 	}
 }

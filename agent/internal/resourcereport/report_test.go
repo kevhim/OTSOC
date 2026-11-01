@@ -2,6 +2,7 @@ package resourcereport
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestConfig_InvalidOptions(t *testing.T) {
@@ -406,5 +409,76 @@ func TestReport_EventAccounting(t *testing.T) {
 	}
 	if sample0["backpressure_events_total"].(float64) != 3 {
 		t.Fatalf("expected backpressure_events_total 3, got %v", sample0["backpressure_events_total"])
+	}
+}
+
+func TestInspectDurableStorage(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_inspect.db")
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	schema := `
+	CREATE TABLE events (
+		event_id TEXT PRIMARY KEY,
+		device_id TEXT NOT NULL,
+		seq_no INTEGER NOT NULL,
+		severity TEXT NOT NULL,
+		payload TEXT NOT NULL,
+		state TEXT NOT NULL
+	);
+	CREATE TABLE dead_letter_queue (
+		event_id TEXT PRIMARY KEY,
+		device_id TEXT NOT NULL,
+		seq_no INTEGER NOT NULL,
+		payload TEXT NOT NULL,
+		failure_type TEXT NOT NULL,
+		failure_reason TEXT NOT NULL
+	);
+	`
+	if _, err := db.Exec(schema); err != nil {
+		t.Fatalf("failed to create schema: %v", err)
+	}
+
+	// Insert: 2 regular events (1 pending, 1 sent), 1 finding (pending), 1 DLQ event
+	_, err = db.Exec(`
+	INSERT INTO events (event_id, device_id, seq_no, severity, payload, state) VALUES
+		('ev-1', 'dev-1', 1, 'INFO', '{"category":"process","action":"EXEC"}', 'PENDING'),
+		('ev-2', 'dev-1', 2, 'INFO', '{"category":"filesystem","action":"WRITE"}', 'SENT'),
+		('ev-3', 'dev-1', 3, 'CRITICAL', '{"category":"detection/finding","rule_id":"R1"}', 'PENDING');
+	INSERT INTO dead_letter_queue (event_id, device_id, seq_no, payload, failure_type, failure_reason) VALUES
+		('ev-dlq-1', 'dev-1', 4, '{"category":"network"}', 'http_400', 'bad request');
+	`)
+	if err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+
+	initialBacklog := uint64(5)
+	snap := InspectDurableStorage(db, &initialBacklog)
+
+	if snap.InitialBacklogPendingEvents == nil || *snap.InitialBacklogPendingEvents != 5 {
+		t.Fatalf("expected InitialBacklogPendingEvents 5, got %v", snap.InitialBacklogPendingEvents)
+	}
+	if snap.DurablePendingEvents == nil || *snap.DurablePendingEvents != 2 { // ev-1 and ev-3
+		t.Fatalf("expected DurablePendingEvents 2, got %v", snap.DurablePendingEvents)
+	}
+	if snap.DurableTotalEvents == nil || *snap.DurableTotalEvents != 3 {
+		t.Fatalf("expected DurableTotalEvents 3, got %v", snap.DurableTotalEvents)
+	}
+	if snap.DurableDLQEvents == nil || *snap.DurableDLQEvents != 1 {
+		t.Fatalf("expected DurableDLQEvents 1, got %v", snap.DurableDLQEvents)
+	}
+	if snap.DerivedFindingsEvents == nil || *snap.DerivedFindingsEvents != 1 {
+		t.Fatalf("expected DerivedFindingsEvents 1, got %v", snap.DerivedFindingsEvents)
+	}
+	if snap.SourceTelemetryEvents == nil || *snap.SourceTelemetryEvents != 2 {
+		t.Fatalf("expected SourceTelemetryEvents 2, got %v", snap.SourceTelemetryEvents)
+	}
+	if snap.PrunedEventsTotal != nil {
+		t.Fatalf("expected PrunedEventsTotal to be nil (unsupported), got %v", snap.PrunedEventsTotal)
 	}
 }

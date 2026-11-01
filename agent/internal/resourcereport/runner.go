@@ -3,15 +3,24 @@ package resourcereport
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"time"
 
 	"redcyberfox/agent/internal/governor"
 )
 
+// QueueStatsProvider returns current blocked enqueue attempts and saturation pressure episodes.
+type QueueStatsProvider func() (blockedAttempts uint64, pressureEpisodes uint64)
+
 // RunMeasurementRunner coordinates sampling ticks, snapshots live governor signals,
-// accumulates samples, and invokes the shared shutdown path upon measurement completion.
+// and accumulates samples into the Reporter.
+//
+// Measurement Lifecycle Contract:
+// Measurement sampling completion is strictly separated from report finalization.
+// When the measurement duration expires, this runner triggers the shared shutdown path
+// via shutdownCoord.Trigger("MEASUREMENT_COMPLETE") and exits.
+// Report finalization occurs in the main shutdown sequence AFTER all collectors stop,
+// the event queue drains, ingestion finishes, and the forwarder stops.
 func RunMeasurementRunner(
 	ctx context.Context,
 	cfg Config,
@@ -20,15 +29,15 @@ func RunMeasurementRunner(
 	metrics *governor.GovernorMetrics,
 	signalsFn func() governor.RuntimeSignals,
 	shutdownCoord *ShutdownCoordinator,
-	accountingFns ...func() *EventAccountingSummary,
+	queueStatsProviders ...QueueStatsProvider,
 ) error {
 	if coordinator == nil || metrics == nil || signalsFn == nil || shutdownCoord == nil {
 		return errors.New("measurement runner requires non-nil coordinator, metrics, signalsFn, and shutdownCoord")
 	}
 
-	var getAccounting func() *EventAccountingSummary
-	if len(accountingFns) > 0 {
-		getAccounting = accountingFns[0]
+	var getQueueStats QueueStatsProvider
+	if len(queueStatsProviders) > 0 {
+		getQueueStats = queueStatsProviders[0]
 	}
 
 	measureCtx, measureCancel := context.WithTimeout(ctx, cfg.Duration)
@@ -91,12 +100,12 @@ func RunMeasurementRunner(
 			qAgePtr = &v
 		}
 
-		var bpPtr *uint64
-		if getAccounting != nil {
-			if acc := getAccounting(); acc != nil {
-				bpVal := acc.BackpressureEventsTotal
-				bpPtr = &bpVal
-			}
+		var blockedPtr *uint64
+		var episodesPtr *uint64
+		if getQueueStats != nil {
+			blocked, episodes := getQueueStats()
+			blockedPtr = &blocked
+			episodesPtr = &episodes
 		}
 
 		var errStrPtr *string
@@ -108,21 +117,23 @@ func RunMeasurementRunner(
 		contributing := InspectContributingFiles(cfg.DBPath, cfg.EmergencySpillPath)
 
 		sample := Sample{
-			SampleIndex:                sampleIndex,
-			Timestamp:                  time.Now().UTC().Format(time.RFC3339),
-			CPUPercent:                 cpuPtr,
-			RSSBytes:                   rssPtr,
-			PersistenceBytes:           storagePtr,
-			ContributingFiles:          contributing,
-			WriteIOBytesPerSec:         ioPtr,
-			QueueDepth:                 qDepthPtr,
-			QueueCapacity:              qCapPtr,
-			QueueSaturationPercent:     qSatPtr,
-			QueueOldestEventAgeSeconds: qAgePtr,
-			BackpressureEventsTotal:    bpPtr,
-			Connectivity:               string(result.Signals.NetworkState),
-			GovernorState:              string(snap.GovernorState),
-			SamplingError:              errStrPtr,
+			SampleIndex:                 sampleIndex,
+			Timestamp:                   time.Now().UTC().Format(time.RFC3339),
+			CPUPercent:                  cpuPtr,
+			RSSBytes:                    rssPtr,
+			PersistenceBytes:            storagePtr,
+			ContributingFiles:           contributing,
+			WriteIOBytesPerSec:          ioPtr,
+			QueueDepth:                  qDepthPtr,
+			QueueCapacity:               qCapPtr,
+			QueueSaturationPercent:      qSatPtr,
+			QueueOldestEventAgeSeconds:  qAgePtr,
+			BlockedEnqueueAttemptsTotal: blockedPtr,
+			PressureEpisodesTotal:       episodesPtr,
+			BackpressureEventsTotal:     blockedPtr, // alias
+			Connectivity:                string(result.Signals.NetworkState),
+			GovernorState:               string(snap.GovernorState),
+			SamplingError:               errStrPtr,
 		}
 
 		moreAllowed := reporter.AddSample(sample)
@@ -141,25 +152,17 @@ func RunMeasurementRunner(
 		reporter.IncrementReportingError("sampling error: %v", err)
 	}
 
-	outcome := "MEASUREMENT_COMPLETE"
-	if ctx.Err() != nil {
-		outcome = shutdownCoord.Outcome()
-	} else {
-		// Measurement finished naturally: trigger the shared shutdown path
+	snap := metrics.Snapshot()
+	log.Printf("[MEASUREMENT SAMPLING COMPLETE] Total samples: %d, Final state: %s, Transitions: %d",
+		sampleIndex, snap.GovernorState, snap.TotalStateTransitions)
+
+	// If measurement duration expired naturally (main context not canceled), trigger shared shutdown
+	if ctx.Err() == nil {
+		log.Printf("[MEASUREMENT RUNNER] Duration (%v) reached. Requesting shared endpoint shutdown...", cfg.Duration)
 		shutdownCoord.Trigger("MEASUREMENT_COMPLETE")
 	}
 
-	snap := metrics.Snapshot()
-	log.Printf("[MEASUREMENT COMPLETE] Total samples: %d, Final state: %s, Transitions: %d",
-		sampleIndex, snap.GovernorState, snap.TotalStateTransitions)
-
-	if getAccounting != nil {
-		reporter.SetAccounting(getAccounting())
-	}
-
-	if _, finErr := reporter.Finalize(outcome); finErr != nil {
-		return fmt.Errorf("finalize report: %w", finErr)
-	}
-
+	// Final report finalization is intentionally performed in the main shutdown sequence
+	// after all pipeline queues, ingestion, and storage writes have completely drained.
 	return nil
 }

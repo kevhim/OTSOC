@@ -79,6 +79,14 @@ func main() {
 	}
 	log.Printf("Device Identity: %s", deviceID)
 
+	var initialPendingEvents *uint64
+	if rawDB := db.GetDB(); rawDB != nil {
+		var cnt uint64
+		if err := rawDB.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM events WHERE state = 'PENDING'").Scan(&cnt); err == nil {
+			initialPendingEvents = &cnt
+		}
+	}
+
 	// 3. Graceful Shutdown & Shared Drain Coordination
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -127,6 +135,7 @@ func main() {
 	// Recurring endpoint background sampling is not enabled.
 	// Storage pressure evaluation remains unresolved pending an authoritative persistence budget policy.
 	var coordinator *governor.Coordinator
+	var reporter *resourcereport.Reporter
 	resourceProvider, err := governor.NewSQLiteResourceProvider(agentDBPath, time.Now)
 	if err != nil {
 		log.Printf("Resource monitoring unavailable: %v", err)
@@ -178,7 +187,7 @@ func main() {
 							Severity: r.Severity(),
 						})
 					}
-					reporter := resourcereport.NewReporter(reportCfg, reportRules)
+					reporter = resourcereport.NewReporter(reportCfg, reportRules)
 					log.Printf("Starting bounded measurement mode (duration: %v, interval: %v, report: %q)...",
 						*measureDuration, *measureInterval, *measureReport)
 					go func() {
@@ -197,20 +206,8 @@ func main() {
 								}
 							},
 							shutdownCoord,
-							func() *resourcereport.EventAccountingSummary {
-								ingestAcc := ingestEngine.Accounting()
-								fwdAcc := fwd.Accounting()
-								return &resourcereport.EventAccountingSummary{
-									IngestedTotal:           ingestAcc.IngestedTotal,
-									CommittedTotal:          ingestAcc.CommittedTotal,
-									ForwardedTotal:          fwdAcc.ForwardedTotal,
-									FailedBeforeCommitTotal: ingestAcc.FailedBeforeCommitTotal,
-									RecoveredDLQTotal:       ingestAcc.RecoveredDLQTotal,
-									SpilledDiskTotal:        ingestAcc.SpilledDiskTotal,
-									DroppedTotal:            ingestAcc.DroppedTotal,
-									BackpressureEventsTotal: eventQ.BackpressureEventsTotal(),
-									ReconciliationValid:     ingestAcc.Reconciled(),
-								}
+							func() (uint64, uint64) {
+								return eventQ.BlockedEnqueueAttemptsTotal(), eventQ.PressureEpisodesTotal()
 							},
 						); runErr != nil {
 							log.Printf("Measurement runner error: %v", runErr)
@@ -304,8 +301,70 @@ func main() {
 	// 4. Stop Forwarder (waits for forwarding loop to exit)
 	fwd.Stop()
 
-	// 5. Close Storage
-	db.Close()
+	// 5. Inspect durable storage before DB close & finalize measurement report
+	var shutdownErr error
+	if reporter != nil {
+		storageSnap := resourcereport.InspectDurableStorage(db.GetDB(), initialPendingEvents)
+		ingestAcc := ingestEngine.Accounting()
+		fwdAcc := fwd.Accounting()
+
+		finalAccounting := &resourcereport.EventAccountingSummary{
+			IngestionOutcome: resourcereport.IngestionOutcomeSummary{
+				IngestedTotal:           ingestAcc.IngestedTotal,
+				CommittedTotal:          ingestAcc.CommittedTotal,
+				FailedBeforeCommitTotal: ingestAcc.FailedBeforeCommitTotal,
+				RecoveredDLQTotal:       ingestAcc.RecoveredDLQTotal,
+				SpilledDiskTotal:        ingestAcc.SpilledDiskTotal,
+				DroppedTotal:            ingestAcc.DroppedTotal,
+				ReconciliationValid:     ingestAcc.IngestionOutcomeReconciled(),
+			},
+			Forwarder: resourcereport.ForwarderAccountingSummary{
+				AttemptsTotal:           fwdAcc.AttemptsTotal,
+				HTTPAcceptedTotal:       fwdAcc.HTTPAcceptedTotal,
+				DLQTotal:                fwdAcc.DLQTotal,
+				RetryTotal:              fwdAcc.RetryTotal,
+				LocalRemovedTotal:       fwdAcc.LocalRemovedTotal,
+				LocalRemovalErrorsTotal: fwdAcc.LocalRemovalErrorsTotal,
+			},
+			Queue: resourcereport.QueueAccountingSummary{
+				BlockedEnqueueAttemptsTotal: eventQ.BlockedEnqueueAttemptsTotal(),
+				PressureEpisodesTotal:       eventQ.PressureEpisodesTotal(),
+				TimeSpentFullSeconds:        eventQ.TimeSpentFullSeconds(),
+			},
+			Storage: storageSnap,
+
+			// Flat compatibility fields
+			IngestedTotal:           ingestAcc.IngestedTotal,
+			CommittedTotal:          ingestAcc.CommittedTotal,
+			ForwardedTotal:          fwdAcc.HTTPAcceptedTotal,
+			FailedBeforeCommitTotal: ingestAcc.FailedBeforeCommitTotal,
+			RecoveredDLQTotal:       ingestAcc.RecoveredDLQTotal,
+			SpilledDiskTotal:        ingestAcc.SpilledDiskTotal,
+			DroppedTotal:            ingestAcc.DroppedTotal,
+			BackpressureEventsTotal: eventQ.BlockedEnqueueAttemptsTotal(),
+			ReconciliationValid:     ingestAcc.IngestionOutcomeReconciled(),
+		}
+
+		reporter.SetAccounting(finalAccounting)
+		outcome := shutdownCoord.Outcome()
+		if _, err := reporter.Finalize(outcome); err != nil {
+			log.Printf("ERROR: Failed to finalize measurement report: %v", err)
+			shutdownErr = err
+		}
+	}
+
+	// 6. Close Storage
+	if err := db.Close(); err != nil {
+		log.Printf("ERROR: Failed to close storage: %v", err)
+		if shutdownErr == nil {
+			shutdownErr = err
+		}
+	}
+
+	if shutdownErr != nil {
+		log.Printf("Endpoint Agent shutdown completed with errors: %v", shutdownErr)
+		os.Exit(1)
+	}
 
 	log.Println("Endpoint Agent shutdown cleanly.")
 }
