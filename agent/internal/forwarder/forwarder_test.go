@@ -322,3 +322,47 @@ func TestForwarder_Lifecycle(t *testing.T) {
 		t.Fatalf("Expected no error on second stop, got %v", err)
 	}
 }
+
+func TestForwarder_Accounting(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/ingest", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), "ev-202") {
+			w.WriteHeader(http.StatusAccepted)
+		} else if strings.Contains(string(body), "ev-400") {
+			w.WriteHeader(http.StatusBadRequest)
+		} else if strings.Contains(string(body), "ev-429") {
+			w.WriteHeader(http.StatusTooManyRequests)
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	store := &MockStorage{
+		events: []*events.CanonicalEvent{
+			{EventID: "ev-202", TenantID: "tenant-1"},
+			{EventID: "ev-400", TenantID: "tenant-1"},
+			{EventID: "ev-429", TenantID: "tenant-1"},
+			{EventID: "ev-mismatch", TenantID: "wrong-tenant"},
+		},
+	}
+
+	f := NewForwarder(srv.URL, "tenant-1", store)
+	f.processPending(context.Background())
+
+	acc := f.Accounting()
+	if acc.AttemptsTotal != 3 { // 3 HTTP attempts (mismatch was moved to DLQ before HTTP)
+		t.Errorf("expected 3 attempts, got %d", acc.AttemptsTotal)
+	}
+	if acc.ForwardedTotal != 1 { // 1 accepted (ev-202)
+		t.Errorf("expected 1 forwarded, got %d", acc.ForwardedTotal)
+	}
+	if acc.DLQTotal != 2 { // 1 bad request (ev-400) + 1 mismatch (ev-mismatch)
+		t.Errorf("expected 2 DLQ, got %d", acc.DLQTotal)
+	}
+	if acc.RetryTotal != 1 { // 1 rate limited (ev-429)
+		t.Errorf("expected 1 retry, got %d", acc.RetryTotal)
+	}
+}

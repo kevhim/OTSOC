@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"redcyberfox/agent/internal/interfaces"
@@ -25,6 +26,22 @@ const (
 	OutcomeSpilledDisk        EventOutcome = "SPILLED_DISK"
 	OutcomeDropped            EventOutcome = "DROPPED"
 )
+
+// Accounting records observable event lifecycle counts across the ingestion pipeline.
+type Accounting struct {
+	IngestedTotal           uint64 `json:"ingested_total"`
+	CommittedTotal          uint64 `json:"committed_total"`
+	FailedBeforeCommitTotal uint64 `json:"failed_before_commit_total"`
+	RecoveredDLQTotal       uint64 `json:"recovered_dlq_total"`
+	SpilledDiskTotal        uint64 `json:"spilled_disk_total"`
+	DroppedTotal            uint64 `json:"dropped_total"`
+}
+
+// Reconciled asserts the fundamental accounting invariant:
+// IngestedTotal == CommittedTotal + FailedBeforeCommitTotal + RecoveredDLQTotal + SpilledDiskTotal + DroppedTotal
+func (a Accounting) Reconciled() bool {
+	return a.IngestedTotal == (a.CommittedTotal + a.FailedBeforeCommitTotal + a.RecoveredDLQTotal + a.SpilledDiskTotal + a.DroppedTotal)
+}
 
 // Config configures the shared ingestion engine.
 type Config struct {
@@ -45,6 +62,13 @@ type Config struct {
 type Engine struct {
 	db  interfaces.Storage
 	cfg Config
+
+	ingestedTotal           atomic.Uint64
+	committedTotal          atomic.Uint64
+	failedBeforeCommitTotal atomic.Uint64
+	recoveredDLQTotal       atomic.Uint64
+	spilledDiskTotal        atomic.Uint64
+	droppedTotal            atomic.Uint64
 }
 
 // NewEngine creates a new shared ingestion engine.
@@ -58,6 +82,18 @@ func NewEngine(db interfaces.Storage, cfg Config) *Engine {
 	return &Engine{
 		db:  db,
 		cfg: cfg,
+	}
+}
+
+// Accounting returns a point-in-time snapshot of the ingestion pipeline accounting statistics.
+func (e *Engine) Accounting() Accounting {
+	return Accounting{
+		IngestedTotal:           e.ingestedTotal.Load(),
+		CommittedTotal:          e.committedTotal.Load(),
+		FailedBeforeCommitTotal: e.failedBeforeCommitTotal.Load(),
+		RecoveredDLQTotal:       e.recoveredDLQTotal.Load(),
+		SpilledDiskTotal:        e.spilledDiskTotal.Load(),
+		DroppedTotal:            e.droppedTotal.Load(),
 	}
 }
 
@@ -92,6 +128,7 @@ func (e *Engine) enrich(ev *events.CanonicalEvent) {
 
 // ProcessEvent processes a single event through the durability and recovery pipeline.
 func (e *Engine) ProcessEvent(ctx, drainCtx context.Context, ev *events.CanonicalEvent) EventOutcome {
+	e.ingestedTotal.Add(1)
 	e.enrich(ev)
 	storeCtx := ctx
 	if ctx.Err() != nil {
@@ -113,6 +150,7 @@ func (e *Engine) ProcessEvent(ctx, drainCtx context.Context, ev *events.Canonica
 			if e.cfg.OnCommitted != nil {
 				e.cfg.OnCommitted(storeCtx, ev)
 			}
+			e.committedTotal.Add(1)
 			return OutcomeCommitted
 		}
 
@@ -131,6 +169,7 @@ func (e *Engine) ProcessEvent(ctx, drainCtx context.Context, ev *events.Canonica
 			} else {
 				log.Printf("ERROR: Event %s explicitly dropped (failed before commit): %v", ev.EventID, storeErr)
 			}
+			e.failedBeforeCommitTotal.Add(1)
 			return OutcomeFailedBeforeCommit
 		}
 
@@ -151,6 +190,7 @@ func (e *Engine) ProcessEvent(ctx, drainCtx context.Context, ev *events.Canonica
 					if e.cfg.OnDLQ != nil {
 						e.cfg.OnDLQ(ev, "uncertain_commit")
 					}
+					e.recoveredDLQTotal.Add(1)
 					return OutcomeRecoveredDLQ
 				}
 
@@ -160,24 +200,29 @@ func (e *Engine) ProcessEvent(ctx, drainCtx context.Context, ev *events.Canonica
 					log.Printf("ERROR: Event %s failed to serialize for emergency spill: %v", ev.EventID, marshalErr)
 					if e.cfg.OnFatal != nil {
 						e.cfg.OnFatal(ev, marshalErr)
+						e.droppedTotal.Add(1)
 						return OutcomeDropped
 					}
 					log.Printf("FATAL: Event %s serialization failed during emergency spill: %v. Dropping.", ev.EventID, marshalErr)
+					e.droppedTotal.Add(1)
 					return OutcomeDropped
 				}
 
 				spillErr := appendEmergencySpill(e.cfg.EmergencySpillPath, append(spillBytes, '\n'))
 				if spillErr == nil {
 					log.Printf("CRITICAL: Event %s spilled to disk (BEST-EFFORT) due to uncertain commit and DLQ failure.", ev.EventID)
+					e.spilledDiskTotal.Add(1)
 					return OutcomeSpilledDisk
 				}
 
 				// Terminal behavior
 				if e.cfg.OnFatal != nil {
 					e.cfg.OnFatal(ev, storeErr)
+					e.droppedTotal.Add(1)
 					return OutcomeDropped
 				}
 				log.Fatalf("FATAL: Event %s uncertain commit, DLQ failed (%v), and emergency spill failed (%v). Terminating.", ev.EventID, dlqErr, spillErr)
+				e.droppedTotal.Add(1)
 				return OutcomeDropped
 			}
 
@@ -198,6 +243,7 @@ func (e *Engine) ProcessEvent(ctx, drainCtx context.Context, ev *events.Canonica
 				if e.cfg.OnDropped != nil {
 					e.cfg.OnDropped(ev, "uncertain_deadline_expired", storeCtx.Err())
 				}
+				e.droppedTotal.Add(1)
 				return OutcomeDropped
 			}
 			continue
@@ -209,6 +255,7 @@ func (e *Engine) ProcessEvent(ctx, drainCtx context.Context, ev *events.Canonica
 		} else {
 			log.Printf("CRITICAL: Unknown storage error for event %s: %v", ev.EventID, storeErr)
 		}
+		e.droppedTotal.Add(1)
 		return OutcomeDropped
 	}
 }

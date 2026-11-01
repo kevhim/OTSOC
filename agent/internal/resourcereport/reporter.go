@@ -18,6 +18,7 @@ type Reporter struct {
 	samples         []Sample
 	degradedSamples int
 	reportingErrors int
+	eventAccounting *EventAccountingSummary
 }
 
 // NewReporter creates a new initialized Reporter.
@@ -28,6 +29,13 @@ func NewReporter(cfg Config, rules []RuleInfo) *Reporter {
 		manifest: manifest,
 		samples:  make([]Sample, 0, 64),
 	}
+}
+
+// SetAccounting sets the aggregated event accounting summary on the report.
+func (r *Reporter) SetAccounting(accounting *EventAccountingSummary) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.eventAccounting = accounting
 }
 
 // AddSample appends a sample, tracking degraded status and sample bounds.
@@ -69,6 +77,7 @@ func (r *Reporter) Finalize(outcome string) (*Report, error) {
 			DegradedSamples: r.degradedSamples,
 			ReportingErrors: r.reportingErrors,
 			ShutdownOutcome: outcome,
+			EventAccounting: r.eventAccounting,
 			Notice:          QualificationNotice,
 		},
 	}

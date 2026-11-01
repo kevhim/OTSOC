@@ -19,6 +19,14 @@ import (
 	"redcyberfox/pkg/events"
 )
 
+// ForwarderAccounting records observable metrics for forwarded events.
+type ForwarderAccounting struct {
+	AttemptsTotal  uint64 `json:"attempts_total"`
+	ForwardedTotal uint64 `json:"forwarded_total"`
+	DLQTotal       uint64 `json:"dlq_total"`
+	RetryTotal     uint64 `json:"retry_total"`
+}
+
 type Forwarder struct {
 	apiURL     string
 	tenantID   string
@@ -32,6 +40,21 @@ type Forwarder struct {
 	started      bool
 	stopped      bool
 	networkState atomic.Uint32
+
+	attemptsTotal  atomic.Uint64
+	forwardedTotal atomic.Uint64
+	dlqTotal       atomic.Uint64
+	retryTotal     atomic.Uint64
+}
+
+// Accounting returns a point-in-time snapshot of forwarder accounting statistics.
+func (f *Forwarder) Accounting() ForwarderAccounting {
+	return ForwarderAccounting{
+		AttemptsTotal:  f.attemptsTotal.Load(),
+		ForwardedTotal: f.forwardedTotal.Load(),
+		DLQTotal:       f.dlqTotal.Load(),
+		RetryTotal:     f.retryTotal.Load(),
+	}
 }
 
 const (
@@ -153,6 +176,7 @@ func (f *Forwarder) processPending(ctx context.Context) {
 
 func (f *Forwarder) sendEvent(ctx context.Context, event *events.CanonicalEvent) {
 	if event.TenantID != f.tenantID {
+		f.dlqTotal.Add(1)
 		err := f.storage.MoveToDLQ(ctx, event, "tenant_mismatch", fmt.Sprintf("Event tenant %s != forwarder tenant %s", event.TenantID, f.tenantID))
 		if err != nil {
 			log.Printf("CRITICAL: Failed to move tenant mismatched event %s to DLQ: %v", event.EventID, err)
@@ -162,6 +186,7 @@ func (f *Forwarder) sendEvent(ctx context.Context, event *events.CanonicalEvent)
 
 	payload, err := json.Marshal(event)
 	if err != nil {
+		f.dlqTotal.Add(1)
 		err = f.storage.MoveToDLQ(ctx, event, "serialization_error", err.Error())
 		if err != nil {
 			log.Printf("CRITICAL: Failed to move serialization-error event %s to DLQ: %v", event.EventID, err)
@@ -171,6 +196,7 @@ func (f *Forwarder) sendEvent(ctx context.Context, event *events.CanonicalEvent)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", f.apiURL+"/v1/ingest", bytes.NewReader(payload))
 	if err != nil {
+		f.retryTotal.Add(1)
 		if err := f.storage.MarkFailed(ctx, event.EventID, 0, err); err != nil {
 			log.Printf("CRITICAL: Failed to mark event %s as failed (req creation): %v", event.EventID, err)
 		}
@@ -182,11 +208,13 @@ func (f *Forwarder) sendEvent(ctx context.Context, event *events.CanonicalEvent)
 	q.Add("tenant_id", f.tenantID)
 	req.URL.RawQuery = q.Encode()
 
+	f.attemptsTotal.Add(1)
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
 		if ctx.Err() == nil {
 			f.networkState.Store(networkOffline)
 		}
+		f.retryTotal.Add(1)
 		if err := f.storage.MarkFailed(ctx, event.EventID, 0, err); err != nil {
 			log.Printf("CRITICAL: Failed to mark event %s as failed (http do): %v", event.EventID, err)
 		}
@@ -199,6 +227,7 @@ func (f *Forwarder) sendEvent(ctx context.Context, event *events.CanonicalEvent)
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 
 	if resp.StatusCode == http.StatusAccepted { // 202
+		f.forwardedTotal.Add(1)
 		if err := f.storage.RemoveEvent(ctx, event.EventID); err != nil {
 			log.Printf("CRITICAL: Failed to remove event %s after 202 response: %v", event.EventID, err)
 		}
@@ -206,6 +235,7 @@ func (f *Forwarder) sendEvent(ctx context.Context, event *events.CanonicalEvent)
 	}
 
 	if resp.StatusCode == http.StatusBadRequest { // 400
+		f.dlqTotal.Add(1)
 		bodyStr := string(body)
 		if len(bodyStr) > 512 {
 			bodyStr = bodyStr[:512] + "...(truncated)"
@@ -231,6 +261,7 @@ func (f *Forwarder) sendEvent(ctx context.Context, event *events.CanonicalEvent)
 		bodyStr = bodyStr[:512] + "...(truncated)"
 	}
 
+	f.retryTotal.Add(1)
 	if err := f.storage.MarkFailed(ctx, event.EventID, retryAfter, fmt.Errorf("HTTP %d: %s", resp.StatusCode, bodyStr)); err != nil {
 		log.Printf("CRITICAL: Failed to mark event %s as failed (HTTP %d): %v", event.EventID, resp.StatusCode, err)
 	}

@@ -328,3 +328,83 @@ func TestShutdownCoordinator_PendingIngestionDrain(t *testing.T) {
 		t.Fatalf("timed out waiting for pending ingestion drain")
 	}
 }
+
+func TestReport_EventAccounting(t *testing.T) {
+	tmpDir := t.TempDir()
+	reportPath := filepath.Join(tmpDir, "report_accounting.json")
+
+	cfg := Config{
+		ReportPath: reportPath,
+		Profile:    "test-accounting",
+		Duration:   time.Second,
+		Interval:   time.Second,
+	}
+
+	reporter := NewReporter(cfg, nil)
+
+	ageVal := 0.45
+	bpVal := uint64(3)
+	reporter.AddSample(Sample{
+		SampleIndex:                1,
+		Timestamp:                  time.Now().UTC().Format(time.RFC3339),
+		GovernorState:              "NORMAL",
+		QueueOldestEventAgeSeconds: &ageVal,
+		BackpressureEventsTotal:    &bpVal,
+	})
+
+	accounting := &EventAccountingSummary{
+		IngestedTotal:           100,
+		CommittedTotal:          90,
+		ForwardedTotal:          85,
+		FailedBeforeCommitTotal: 5,
+		RecoveredDLQTotal:       3,
+		SpilledDiskTotal:        1,
+		DroppedTotal:            1,
+		BackpressureEventsTotal: 3,
+		ReconciliationValid:     true,
+	}
+	reporter.SetAccounting(accounting)
+
+	rep, err := reporter.Finalize("MEASUREMENT_COMPLETE")
+	if err != nil {
+		t.Fatalf("finalize failed: %v", err)
+	}
+
+	if rep.Summary.EventAccounting == nil {
+		t.Fatalf("expected EventAccounting in Summary, got nil")
+	}
+	if !rep.Summary.EventAccounting.ReconciliationValid {
+		t.Fatalf("expected ReconciliationValid to be true")
+	}
+	if rep.Summary.EventAccounting.IngestedTotal != 100 {
+		t.Fatalf("expected IngestedTotal 100, got %d", rep.Summary.EventAccounting.IngestedTotal)
+	}
+
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("failed to read report: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+
+	summary := parsed["summary"].(map[string]interface{})
+	accMap := summary["event_accounting"].(map[string]interface{})
+	if accMap["ingested_total"].(float64) != 100 {
+		t.Fatalf("expected json ingested_total 100, got %v", accMap["ingested_total"])
+	}
+	if accMap["reconciliation_valid"].(bool) != true {
+		t.Fatalf("expected json reconciliation_valid true")
+	}
+
+	samples := parsed["samples"].([]interface{})
+	sample0 := samples[0].(map[string]interface{})
+	if sample0["queue_oldest_event_age_seconds"].(float64) != 0.45 {
+		t.Fatalf("expected queue_oldest_event_age_seconds 0.45, got %v", sample0["queue_oldest_event_age_seconds"])
+	}
+	if sample0["backpressure_events_total"].(float64) != 3 {
+		t.Fatalf("expected backpressure_events_total 3, got %v", sample0["backpressure_events_total"])
+	}
+}

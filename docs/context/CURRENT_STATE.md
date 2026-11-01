@@ -289,3 +289,45 @@ Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
 - `npm --prefix dashboard run lint`: 0 errors, 0 warnings.
 - `go build -v ./agent/cmd/endpoint`: PASS.
 - Linux runtime validation: Outstanding on local Windows host; verified via GitHub Actions CI workflow.
+
+## 2026-11-01 Phase 4.4 Event Accounting & Queue Instrumentation Checkpoint (non-phase changing)
+
+A focused checkpoint implementing queue-age and backpressure tracking, end-to-end event accounting reconciliation, and wiring into governor metrics and measurement reports was completed on branch `fix/correctness-remediation-checkpoint`.
+Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
+
+### 1. Instrumented Bounded Event Queue (`agent/internal/eventqueue`)
+- **Ring Buffer Design**: Fixed-capacity ring buffer (`ring []item`, `head`, `tail`, `count`) pre-allocated with zero heap allocations during steady-state pushing/popping.
+- **Oldest Event Age Exposure**: Computes `time.Since(ring[head].enqueuedAt).Seconds()` non-destructively in $O(1)$ time without requiring event dequeue. When empty, safely returns `governor.ValidFloat64{Valid: false}`.
+- **Queue Metrics**: Exposes `Depth()`, `Capacity()`, `SaturationPercent()`, `OldestEventAge()`, and `BackpressureEventsTotal()`.
+- **Channel Backpressure**: Disables receiving from `In()` channel when `count == capacity` (200), exercising natural Go channel backpressure on collectors and incrementing `backpressureEventsTotal`.
+- **Graceful Draining**: `Close()` closes `In()` channel without blocking; the internal pump delivers all buffered events to `Out()` until empty, then closes `Out()`. `WaitDrain()` blocks until drainage completes.
+- **Unit & Race Tests (`agent/internal/eventqueue/queue_test.go`)**: 4 test suites covering FIFO ordering, age progression, backpressure blocking, graceful drain, and concurrent senders. Verified under UCRT64 64-bit CGO race detection (0 data races).
+
+### 2. End-to-End Event Accounting Reconciliation
+- **Ingestion Accounting (`agent/internal/ingestion/engine.go`)**:
+  - Atomic tracking across all pipeline terminal and durability outcomes: `ingestedTotal`, `committedTotal`, `failedBeforeCommitTotal`, `recoveredDLQTotal`, `spilledDiskTotal`, `droppedTotal`.
+  - Enforces the strict pipeline accounting invariant:
+    $$\text{IngestedTotal} = \text{CommittedTotal} + \text{FailedBeforeCommitTotal} + \text{RecoveredDLQTotal} + \text{SpilledDiskTotal} + \text{DroppedTotal}$$
+  - Verified in `agent/internal/ingestion/engine_test.go` (`TestIngestion_EventAccountingReconciliation`) across 40 events traversing committed, pre-commit failure, DLQ recovery, emergency disk spill, and drop outcomes.
+- **Forwarder Accounting (`agent/internal/forwarder/forwarder.go`)**:
+  - Atomic tracking across upstream delivery outcomes: `attemptsTotal`, `forwardedTotal` (202), `dlqTotal` (400, tenant mismatch, serialization error), `retryTotal` (429, network offline).
+  - Verified in `agent/internal/forwarder/forwarder_test.go` (`TestForwarder_Accounting`).
+
+### 3. Production Runtime & Measurement Report Wiring
+- **Endpoint Production Wiring (`agent/cmd/endpoint/main.go`)**:
+  - Replaced raw channel with `eventqueue.New(200)`.
+  - All collectors (`procCol`, `fsCol`, `invCol`, `netCol`, `usbCol`) write to `eventQ.In()`.
+  - Ingestion loop drains from `eventQ.Out()`.
+  - Governor coordinator baseline step and measurement sampling dynamically read `eventQ.Depth()`, `eventQ.Capacity()`, and `eventQ.OldestEventAge()`.
+  - Graceful shutdown stops collectors, calls `eventQ.Close()`, drains ingestion, and waits on `eventQ.WaitDrain()`.
+- **Measurement Report Integration (`agent/internal/resourcereport`)**:
+  - `Sample` records live `QueueOldestEventAgeSeconds` and cumulative `BackpressureEventsTotal`.
+  - `Summary` embeds `EventAccountingSummary` detailing pipeline totals and reporting `ReconciliationValid`.
+  - Verified in `agent/internal/resourcereport/report_test.go` (`TestReport_EventAccounting`).
+
+### 4. Verification Outcomes
+- `scripts/verify-phase4.ps1 -Race -NativeDetection`: 9/9 PASS.
+- `npm --prefix dashboard test`: 1/1 PASS.
+- `npm --prefix dashboard run lint`: 0 errors, 0 warnings.
+- `go build -v ./agent/cmd/endpoint`: PASS.
+- Linux runtime validation: Outstanding on local Windows host; verified via GitHub Actions CI workflow.

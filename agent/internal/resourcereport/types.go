@@ -44,21 +44,36 @@ type Sample struct {
 	QueueDepth                 *uint64            `json:"queue_depth"`
 	QueueCapacity              *uint64            `json:"queue_capacity"`
 	QueueSaturationPercent     *float64           `json:"queue_saturation_percent"`
+	QueueOldestEventAgeSeconds *float64           `json:"queue_oldest_event_age_seconds"`
+	BackpressureEventsTotal    *uint64            `json:"backpressure_events_total,omitempty"`
 	Connectivity               string             `json:"connectivity"`
 	GovernorState              string             `json:"governor_state"`
 	SamplingError              *string            `json:"sampling_error,omitempty"`
-	QueueOldestEventAgeSeconds *float64           `json:"queue_oldest_event_age_seconds"` // kept null (unimplemented)
-	EventsDroppedTotal         *uint64            `json:"events_dropped_total"`           // kept null (unimplemented)
-	EventsAggregatedTotal      *uint64            `json:"events_aggregated_total"`        // kept null (unimplemented)
+	EventsDroppedTotal         *uint64            `json:"events_dropped_total"`    // kept null (future priority sampling)
+	EventsAggregatedTotal      *uint64            `json:"events_aggregated_total"` // kept null (future priority sampling)
+}
+
+// EventAccountingSummary aggregates pipeline event accounting metrics into the report summary.
+type EventAccountingSummary struct {
+	IngestedTotal           uint64 `json:"ingested_total"`
+	CommittedTotal          uint64 `json:"committed_total"`
+	ForwardedTotal          uint64 `json:"forwarded_total"`
+	FailedBeforeCommitTotal uint64 `json:"failed_before_commit_total"`
+	RecoveredDLQTotal       uint64 `json:"recovered_dlq_total"`
+	SpilledDiskTotal        uint64 `json:"spilled_disk_total"`
+	DroppedTotal            uint64 `json:"dropped_total"`
+	BackpressureEventsTotal uint64 `json:"backpressure_events_total"`
+	ReconciliationValid     bool   `json:"reconciliation_valid"`
 }
 
 // Summary records high-level statistics and the explicit completion notice.
 type Summary struct {
-	TotalSamples    int    `json:"total_samples"`
-	DegradedSamples int    `json:"degraded_samples"`
-	ReportingErrors int    `json:"reporting_errors"`
-	ShutdownOutcome string `json:"shutdown_outcome"`
-	Notice          string `json:"notice"`
+	TotalSamples    int                     `json:"total_samples"`
+	DegradedSamples int                     `json:"degraded_samples"`
+	ReportingErrors int                     `json:"reporting_errors"`
+	ShutdownOutcome string                  `json:"shutdown_outcome"`
+	EventAccounting *EventAccountingSummary `json:"event_accounting,omitempty"`
+	Notice          string                  `json:"notice"`
 }
 
 // Report is the root document of a bounded machine-readable measurement report.

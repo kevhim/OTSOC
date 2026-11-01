@@ -20,9 +20,15 @@ func RunMeasurementRunner(
 	metrics *governor.GovernorMetrics,
 	signalsFn func() governor.RuntimeSignals,
 	shutdownCoord *ShutdownCoordinator,
+	accountingFns ...func() *EventAccountingSummary,
 ) error {
 	if coordinator == nil || metrics == nil || signalsFn == nil || shutdownCoord == nil {
 		return errors.New("measurement runner requires non-nil coordinator, metrics, signalsFn, and shutdownCoord")
+	}
+
+	var getAccounting func() *EventAccountingSummary
+	if len(accountingFns) > 0 {
+		getAccounting = accountingFns[0]
 	}
 
 	measureCtx, measureCancel := context.WithTimeout(ctx, cfg.Duration)
@@ -79,6 +85,20 @@ func RunMeasurementRunner(
 			qSatPtr = &v
 		}
 
+		var qAgePtr *float64
+		if snap.QueueOldestEventAgeSeconds.Valid {
+			v := snap.QueueOldestEventAgeSeconds.Value
+			qAgePtr = &v
+		}
+
+		var bpPtr *uint64
+		if getAccounting != nil {
+			if acc := getAccounting(); acc != nil {
+				bpVal := acc.BackpressureEventsTotal
+				bpPtr = &bpVal
+			}
+		}
+
 		var errStrPtr *string
 		if stepErr != nil {
 			s := stepErr.Error()
@@ -88,25 +108,27 @@ func RunMeasurementRunner(
 		contributing := InspectContributingFiles(cfg.DBPath, cfg.EmergencySpillPath)
 
 		sample := Sample{
-			SampleIndex:            sampleIndex,
-			Timestamp:              time.Now().UTC().Format(time.RFC3339),
-			CPUPercent:             cpuPtr,
-			RSSBytes:               rssPtr,
-			PersistenceBytes:       storagePtr,
-			ContributingFiles:      contributing,
-			WriteIOBytesPerSec:     ioPtr,
-			QueueDepth:             qDepthPtr,
-			QueueCapacity:          qCapPtr,
-			QueueSaturationPercent: qSatPtr,
-			Connectivity:           string(result.Signals.NetworkState),
-			GovernorState:          string(snap.GovernorState),
-			SamplingError:          errStrPtr,
+			SampleIndex:                sampleIndex,
+			Timestamp:                  time.Now().UTC().Format(time.RFC3339),
+			CPUPercent:                 cpuPtr,
+			RSSBytes:                   rssPtr,
+			PersistenceBytes:           storagePtr,
+			ContributingFiles:          contributing,
+			WriteIOBytesPerSec:         ioPtr,
+			QueueDepth:                 qDepthPtr,
+			QueueCapacity:              qCapPtr,
+			QueueSaturationPercent:     qSatPtr,
+			QueueOldestEventAgeSeconds: qAgePtr,
+			BackpressureEventsTotal:    bpPtr,
+			Connectivity:               string(result.Signals.NetworkState),
+			GovernorState:              string(snap.GovernorState),
+			SamplingError:              errStrPtr,
 		}
 
 		moreAllowed := reporter.AddSample(sample)
-		log.Printf("[MEASUREMENT SAMPLE #%d] state=%s cpu=%v rss=%v storage=%v queue=%v network=%s",
+		log.Printf("[MEASUREMENT SAMPLE #%d] state=%s cpu=%v rss=%v storage=%v queue=%v oldestAge=%v network=%s",
 			sampleIndex, snap.GovernorState, snap.AgentCPUPercent, snap.AgentRSSBytes,
-			snap.DiskStorageUsedBytes, snap.QueueSaturationPercent, result.Signals.NetworkState)
+			snap.DiskStorageUsedBytes, snap.QueueSaturationPercent, snap.QueueOldestEventAgeSeconds, result.Signals.NetworkState)
 
 		if !moreAllowed {
 			log.Printf("[MEASUREMENT RUNNER] Reached sample limit (%d), stopping runner early", reporter.manifest.SampleLimit)
@@ -130,6 +152,10 @@ func RunMeasurementRunner(
 	snap := metrics.Snapshot()
 	log.Printf("[MEASUREMENT COMPLETE] Total samples: %d, Final state: %s, Transitions: %d",
 		sampleIndex, snap.GovernorState, snap.TotalStateTransitions)
+
+	if getAccounting != nil {
+		reporter.SetAccounting(getAccounting())
+	}
 
 	if _, finErr := reporter.Finalize(outcome); finErr != nil {
 		return fmt.Errorf("finalize report: %w", finErr)

@@ -105,13 +105,13 @@ if ($LASTEXITCODE -eq 0) {
     Add-Result -Name "Ingestion & Identity Lifecycle Tests" -Status "FAIL" -Details "Tests failed in agent/internal/ingestion"
 }
 
-# 6. Governor, Forwarder, Server, Pkg, & Measurement Report Tests
-Write-Host "`n--> [6/8] Running Core Component Unit Tests (Governor, Forwarder, Server API, Events, Reports)..." -ForegroundColor Magenta
-$coreOut = & go test ./agent/internal/governor/... ./agent/internal/forwarder/... ./agent/internal/resourcereport/... ./server/internal/api/... ./pkg/... 2>&1
+# 6. Governor, Forwarder, Server, Pkg, EventQueue & Measurement Report Tests
+Write-Host "`n--> [6/8] Running Core Component Unit Tests (Governor, Forwarder, EventQueue, Server API, Events, Reports)..." -ForegroundColor Magenta
+$coreOut = & go test ./agent/internal/governor/... ./agent/internal/forwarder/... ./agent/internal/eventqueue/... ./agent/internal/resourcereport/... ./server/internal/api/... ./pkg/... 2>&1
 if ($LASTEXITCODE -eq 0) {
-    Add-Result -Name "Core Components (Governor, Forwarder, Reports, Server API, Events)" -Status "PASS" -Details "All unit test suites passed"
+    Add-Result -Name "Core Components (Governor, Forwarder, EventQueue, Reports, Server API, Events)" -Status "PASS" -Details "All unit test suites passed"
 } else {
-    Add-Result -Name "Core Components (Governor, Forwarder, Reports, Server API, Events)" -Status "FAIL" -Details "Unit test failure in core components"
+    Add-Result -Name "Core Components (Governor, Forwarder, EventQueue, Reports, Server API, Events)" -Status "FAIL" -Details "Unit test failure in core components"
 }
 
 # 7. Pipeline Integration & Offline Sync Tests
@@ -133,14 +133,14 @@ if ($Race) {
         Add-Result -Name "Go Test -Race (Governor & Integration)" -Status "BLOCKED" -Details "C compiler (gcc) / CGO not available on local host. Verified in Linux CI (ubuntu-latest)."
     } else {
         $env:CGO_ENABLED = "1"
-        $raceOutGov = & go test -race -v -count=1 ./agent/internal/governor/... 2>&1
+        $raceOutGov = & go test -race -v -count=1 ./agent/internal/governor/... ./agent/internal/eventqueue/... 2>&1
         $raceGovExit = $LASTEXITCODE
         $raceOutInt = & go test -race -v ./agent/internal/integration -run "TestOfflineSync_Integration" 2>&1
         $raceIntExit = $LASTEXITCODE
         if ($raceGovExit -eq 0 -and $raceIntExit -eq 0) {
-            Add-Result -Name "Go Test -Race (Governor & Integration)" -Status "PASS" -Details "64-bit race conditions check passed under local UCRT64 CGO"
+            Add-Result -Name "Go Test -Race (Governor, EventQueue & Integration)" -Status "PASS" -Details "64-bit race conditions check passed under local UCRT64 CGO"
         } else {
-            Add-Result -Name "Go Test -Race (Governor & Integration)" -Status "FAIL" -Details "Race test failure detected"
+            Add-Result -Name "Go Test -Race (Governor, EventQueue & Integration)" -Status "FAIL" -Details "Race test failure detected"
         }
     }
 }

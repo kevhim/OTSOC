@@ -18,6 +18,7 @@ import (
 	"redcyberfox/agent/internal/collectors/usb"
 	"redcyberfox/agent/internal/config"
 	"redcyberfox/agent/internal/detection"
+	"redcyberfox/agent/internal/eventqueue"
 	"redcyberfox/agent/internal/forwarder"
 	"redcyberfox/agent/internal/governor"
 	"redcyberfox/agent/internal/health"
@@ -101,15 +102,26 @@ func main() {
 		log.Fatalf("Failed to start forwarder: %v", err)
 	}
 
-	// 6. Collector Initialization
-	centralEvents := make(chan *events.CanonicalEvent, 200)
+	// 5. Instrumented Event Queue & Detection Core
+	eventQ := eventqueue.New(200)
 
-	// 7. Phase 3 Detection Core (Active Deterministic Rules)
+	// Phase 3 Detection Core (Active Deterministic Rules)
 	activeRules := []detection.Rule{
 		&detection.RealIOCExecRule{},
 	}
 	log.Printf("Production detection engine initialized with %d active deterministic rules", len(activeRules))
 	detEngine := detection.NewEngine(db, activeRules)
+
+	// 6. Central Event Ingestion Engine (uses shared production Ingestion Engine)
+	ingestEngine := ingestion.NewEngine(db, ingestion.Config{
+		TenantID: cfg.TenantID,
+		SiteID:   cfg.SiteID,
+		AssetID:  deviceID,
+		OnCommitted: func(ctx context.Context, ev *events.CanonicalEvent) {
+			detEngine.Evaluate(ctx, ev)
+			fwd.Wakeup()
+		},
+	})
 
 	// Phase 4.3: Initialize resource governance infrastructure (synchronous, on-demand).
 	// Recurring endpoint background sampling is not enabled.
@@ -145,9 +157,10 @@ func main() {
 				// and sample initial runtime state. This executes synchronously on demand
 				// without background tickers, goroutines, or recurring scheduling.
 				stepRes, stepErr := coordinator.Step(ctx, governor.RuntimeSignals{
-					QueueDepth:    governor.ValidUint64{Value: uint64(len(centralEvents)), Valid: true},
-					QueueCapacity: governor.ValidUint64{Value: uint64(cap(centralEvents)), Valid: true},
-					NetworkState:  fwd.NetworkState(),
+					QueueDepth:        eventQ.Depth(),
+					QueueCapacity:     eventQ.Capacity(),
+					QueueOldestAgeSec: eventQ.OldestEventAge(),
+					NetworkState:      fwd.NetworkState(),
 				})
 				if stepErr != nil && !errors.Is(stepErr, governor.ErrMissingStorageBudget) {
 					log.Printf("Resource coordinator initial baseline sample error: %v", stepErr)
@@ -177,12 +190,28 @@ func main() {
 							resourceMetrics,
 							func() governor.RuntimeSignals {
 								return governor.RuntimeSignals{
-									QueueDepth:    governor.ValidUint64{Value: uint64(len(centralEvents)), Valid: true},
-									QueueCapacity: governor.ValidUint64{Value: uint64(cap(centralEvents)), Valid: true},
-									NetworkState:  fwd.NetworkState(),
+									QueueDepth:        eventQ.Depth(),
+									QueueCapacity:     eventQ.Capacity(),
+									QueueOldestAgeSec: eventQ.OldestEventAge(),
+									NetworkState:      fwd.NetworkState(),
 								}
 							},
 							shutdownCoord,
+							func() *resourcereport.EventAccountingSummary {
+								ingestAcc := ingestEngine.Accounting()
+								fwdAcc := fwd.Accounting()
+								return &resourcereport.EventAccountingSummary{
+									IngestedTotal:           ingestAcc.IngestedTotal,
+									CommittedTotal:          ingestAcc.CommittedTotal,
+									ForwardedTotal:          fwdAcc.ForwardedTotal,
+									FailedBeforeCommitTotal: ingestAcc.FailedBeforeCommitTotal,
+									RecoveredDLQTotal:       ingestAcc.RecoveredDLQTotal,
+									SpilledDiskTotal:        ingestAcc.SpilledDiskTotal,
+									DroppedTotal:            ingestAcc.DroppedTotal,
+									BackpressureEventsTotal: eventQ.BackpressureEventsTotal(),
+									ReconciliationValid:     ingestAcc.Reconciled(),
+								}
+							},
 						); runErr != nil {
 							log.Printf("Measurement runner error: %v", runErr)
 						}
@@ -195,31 +224,31 @@ func main() {
 
 	procCol := process.NewCollector(cfg)
 	log.Println("Starting Process Collector...")
-	if err := procCol.Start(ctx, centralEvents); err != nil {
+	if err := procCol.Start(ctx, eventQ.In()); err != nil {
 		log.Fatalf("Process collector failed to start: %v", err)
 	}
 
 	fsCol := filesystem.NewCollector(cfg)
 	log.Println("Starting Filesystem Collector...")
-	if err := fsCol.Start(ctx, centralEvents); err != nil {
+	if err := fsCol.Start(ctx, eventQ.In()); err != nil {
 		log.Fatalf("Filesystem collector failed to start: %v", err)
 	}
 
 	invCol := inventory.NewCollector(cfg)
 	log.Println("Starting Inventory Collector...")
-	if err := invCol.Start(ctx, centralEvents); err != nil {
+	if err := invCol.Start(ctx, eventQ.In()); err != nil {
 		log.Fatalf("Inventory collector failed to start: %v", err)
 	}
 
 	netCol := network.NewCollector(cfg)
 	log.Println("Starting Network Collector...")
-	if err := netCol.Start(ctx, centralEvents); err != nil {
+	if err := netCol.Start(ctx, eventQ.In()); err != nil {
 		log.Fatalf("Network collector failed to start: %v", err)
 	}
 
 	usbCol := usb.NewCollector(cfg)
 	log.Println("Starting USB Collector...")
-	if err := usbCol.Start(ctx, centralEvents); err != nil {
+	if err := usbCol.Start(ctx, eventQ.In()); err != nil {
 		log.Fatalf("USB collector failed to start: %v", err)
 	}
 
@@ -232,22 +261,11 @@ func main() {
 		}
 	}()
 
-	// 8. Central Event Ingestion Loop (uses shared production Ingestion Engine)
-	ingestEngine := ingestion.NewEngine(db, ingestion.Config{
-		TenantID: cfg.TenantID,
-		SiteID:   cfg.SiteID,
-		AssetID:  deviceID,
-		OnCommitted: func(ctx context.Context, ev *events.CanonicalEvent) {
-			detEngine.Evaluate(ctx, ev)
-			fwd.Wakeup()
-		},
-	})
-
 	var ingestWg sync.WaitGroup
 	ingestWg.Add(1)
 	go func() {
 		defer ingestWg.Done()
-		ingestEngine.Run(ctx, drainCtx, centralEvents)
+		ingestEngine.Run(ctx, drainCtx, eventQ.Out())
 	}()
 
 	go func() {
@@ -276,11 +294,12 @@ func main() {
 	netCol.Stop()
 	usbCol.Stop()
 
-	// 2. Close centralEvents channel to drain the ingestion loop
-	close(centralEvents)
+	// 2. Close event queue to drain the ingestion loop
+	eventQ.Close()
 
 	// 3. Wait for ingestion loop to finish draining and exit
 	ingestWg.Wait()
+	eventQ.WaitDrain()
 
 	// 4. Stop Forwarder (waits for forwarding loop to exit)
 	fwd.Stop()

@@ -86,4 +86,15 @@
   - Demonstrated endpoint execution producing a bounded Windows developer-host smoke-run report (`windows_smoke_report.json`), and documented the platform mismatch between live Windows process monitoring and the Linux fixture path.
   - Extracted shared request execution logic `fetchTenantData` in `dashboard/src/tenant_query.ts`, tested directly in `dashboard/src/request_isolation.test.mjs`.
 - **Milestone Status**: Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
-- **Next Bounded Implementation Task**: Event accounting and queue-age/recovery instrumentation, followed by representative Windows/Linux workloads before threshold calibration.
+
+## Phase 4.4 Event Accounting & Queue Instrumentation Checkpoint (2026-11-01)
+- **Status**: Completed on branch `fix/correctness-remediation-checkpoint`.
+- **Key Changes**:
+  - Implemented `agent/internal/eventqueue`: Bounded ring buffer queue with $O(1)$ non-destructive oldest event age tracking, capacity and saturation monitoring, natural channel backpressure, and graceful draining.
+  - Instrumented `agent/internal/ingestion/engine.go` with atomic event accounting across committed, pre-commit failure, DLQ recovery, disk spill, and drop outcomes, enforcing the pipeline invariant:
+    $$\text{IngestedTotal} = \text{CommittedTotal} + \text{FailedBeforeCommitTotal} + \text{RecoveredDLQTotal} + \text{SpilledDiskTotal} + \text{DroppedTotal}$$
+  - Instrumented `agent/internal/forwarder/forwarder.go` with atomic accounting tracking attempts, forwarded, DLQ, and retried counts.
+  - Integrated queue metrics and event accounting into `agent/cmd/endpoint/main.go` and `agent/internal/resourcereport` runner and reporter.
+  - Expanded `scripts/verify-phase4.ps1` to cover `eventqueue` in core component and race checks (9/9 PASS).
+- **Milestone Status**: Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
+- **Next Bounded Implementation Task**: Representative Linux and Windows workload benchmarks and resource governor threshold calibration.

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -471,4 +472,204 @@ func TestIngestion_EndpointIdentityLifecycleAcrossRestarts(t *testing.T) {
 		t.Errorf("Event 4 mismatch: AssetID=%s, SeqNo=%d", pending4[3].AssetID, pending4[3].SeqNo)
 	}
 	db4.Close()
+}
+
+type controllableStorage struct {
+	mu           sync.Mutex
+	failOutcome  map[string]error
+	dlqFailEvent map[string]error
+	stored       []*events.CanonicalEvent
+	dlq          []*events.CanonicalEvent
+}
+
+func newControllableStorage() *controllableStorage {
+	return &controllableStorage{
+		failOutcome:  make(map[string]error),
+		dlqFailEvent: make(map[string]error),
+	}
+}
+
+func (s *controllableStorage) Init(ctx context.Context) error { return nil }
+func (s *controllableStorage) Store(ctx context.Context, ev *events.CanonicalEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err, ok := s.failOutcome[ev.EventID]; ok && err != nil {
+		return err
+	}
+	s.stored = append(s.stored, ev)
+	return nil
+}
+func (s *controllableStorage) GetPendingEvents(ctx context.Context, limit int) ([]*events.CanonicalEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stored, nil
+}
+func (s *controllableStorage) RemoveEvent(ctx context.Context, eventID string) error { return nil }
+func (s *controllableStorage) MarkFailed(ctx context.Context, eventID string, retryAfter int, err error) error {
+	return nil
+}
+func (s *controllableStorage) MoveToDLQ(ctx context.Context, ev *events.CanonicalEvent, failureType, failureReason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err, ok := s.dlqFailEvent[ev.EventID]; ok && err != nil {
+		return err
+	}
+	s.dlq = append(s.dlq, ev)
+	return nil
+}
+func (s *controllableStorage) GetDeviceID() string { return "test-dev" }
+func (s *controllableStorage) Close() error        { return nil }
+
+func TestIngestion_EventAccountingReconciliation(t *testing.T) {
+	tmpDir := t.TempDir()
+	spillFile := filepath.Join(tmpDir, "accounting_spill.log")
+
+	store := newControllableStorage()
+	var fatalCount atomic.Uint64
+	cfg := Config{
+		RetryDelay:         1 * time.Millisecond,
+		EmergencySpillPath: spillFile,
+		OnFatal: func(ev *events.CanonicalEvent, err error) {
+			fatalCount.Add(1)
+		},
+	}
+	eng := NewEngine(store, cfg)
+	ctx := context.Background()
+
+	// 1. Path: COMMITTED (20 events)
+	for i := 1; i <= 20; i++ {
+		ev := &events.CanonicalEvent{
+			EventID:  fmt.Sprintf("commit-%d", i),
+			Severity: "INFO",
+			Source:   "test",
+		}
+		outcome := eng.ProcessEvent(ctx, ctx, ev)
+		if outcome != OutcomeCommitted {
+			t.Fatalf("expected OutcomeCommitted for %s, got %s", ev.EventID, outcome)
+		}
+	}
+
+	acc := eng.Accounting()
+	if !acc.Reconciled() {
+		t.Fatalf("invariant broken after commits: %+v", acc)
+	}
+	if acc.CommittedTotal != 20 || acc.IngestedTotal != 20 {
+		t.Fatalf("expected 20 committed and ingested, got %+v", acc)
+	}
+
+	// 2. Path: FAILED BEFORE COMMIT (10 events)
+	for i := 1; i <= 10; i++ {
+		evID := fmt.Sprintf("fail-before-%d", i)
+		store.failOutcome[evID] = storage.ErrStoreFailedBeforeCommit
+		ev := &events.CanonicalEvent{
+			EventID:  evID,
+			Severity: "LOW",
+			Source:   "test",
+		}
+		outcome := eng.ProcessEvent(ctx, ctx, ev)
+		if outcome != OutcomeFailedBeforeCommit {
+			t.Fatalf("expected OutcomeFailedBeforeCommit for %s, got %s", evID, outcome)
+		}
+	}
+
+	acc = eng.Accounting()
+	if !acc.Reconciled() {
+		t.Fatalf("invariant broken after failed before commit: %+v", acc)
+	}
+	if acc.FailedBeforeCommitTotal != 10 || acc.IngestedTotal != 30 {
+		t.Fatalf("expected 10 failed before commit and 30 ingested, got %+v", acc)
+	}
+
+	// 3. Path: RECOVERED DLQ (5 events)
+	// ErrStoreUncertain + DLQ succeeds
+	for i := 1; i <= 5; i++ {
+		evID := fmt.Sprintf("recovered-dlq-%d", i)
+		store.failOutcome[evID] = storage.ErrStoreUncertain
+		ev := &events.CanonicalEvent{
+			EventID:  evID,
+			Severity: "HIGH",
+			Source:   "test",
+		}
+		outcome := eng.ProcessEvent(ctx, ctx, ev)
+		if outcome != OutcomeRecoveredDLQ {
+			t.Fatalf("expected OutcomeRecoveredDLQ for %s, got %s", evID, outcome)
+		}
+	}
+
+	acc = eng.Accounting()
+	if !acc.Reconciled() {
+		t.Fatalf("invariant broken after DLQ recovery: %+v", acc)
+	}
+	if acc.RecoveredDLQTotal != 5 || acc.IngestedTotal != 35 {
+		t.Fatalf("expected 5 recovered DLQ and 35 ingested, got %+v", acc)
+	}
+
+	// 4. Path: SPILLED DISK (3 events)
+	// ErrStoreUncertain + DLQ fails + Emergency spill succeeds
+	for i := 1; i <= 3; i++ {
+		evID := fmt.Sprintf("spilled-disk-%d", i)
+		store.failOutcome[evID] = storage.ErrStoreUncertain
+		store.dlqFailEvent[evID] = errors.New("dlq db locked")
+		ev := &events.CanonicalEvent{
+			EventID:  evID,
+			Severity: "CRITICAL",
+			Source:   "test",
+		}
+		outcome := eng.ProcessEvent(ctx, ctx, ev)
+		if outcome != OutcomeSpilledDisk {
+			t.Fatalf("expected OutcomeSpilledDisk for %s, got %s", evID, outcome)
+		}
+	}
+
+	acc = eng.Accounting()
+	if !acc.Reconciled() {
+		t.Fatalf("invariant broken after spilled disk: %+v", acc)
+	}
+	if acc.SpilledDiskTotal != 3 || acc.IngestedTotal != 38 {
+		t.Fatalf("expected 3 spilled disk and 38 ingested, got %+v", acc)
+	}
+
+	// 5. Path: DROPPED (2 events)
+	// ErrStoreUncertain + DLQ fails + serialization failure (math.NaN) -> Drop
+	for i := 1; i <= 2; i++ {
+		evID := fmt.Sprintf("dropped-%d", i)
+		store.failOutcome[evID] = storage.ErrStoreUncertain
+		store.dlqFailEvent[evID] = errors.New("dlq db corrupt")
+		ev := &events.CanonicalEvent{
+			EventID:  evID,
+			Severity: "CRITICAL",
+			Source:   "test",
+			Metadata: map[string]interface{}{
+				"invalid": math.NaN(),
+			},
+		}
+		outcome := eng.ProcessEvent(ctx, ctx, ev)
+		if outcome != OutcomeDropped {
+			t.Fatalf("expected OutcomeDropped for %s, got %s", evID, outcome)
+		}
+	}
+
+	// Final Reconciliation Verification across all 40 events
+	acc = eng.Accounting()
+	if !acc.Reconciled() {
+		t.Fatalf("FATAL: Event accounting failed reconciliation invariant! Details: %+v", acc)
+	}
+	if acc.IngestedTotal != 40 {
+		t.Fatalf("expected 40 total ingested, got %d", acc.IngestedTotal)
+	}
+	if acc.CommittedTotal != 20 {
+		t.Fatalf("expected 20 committed, got %d", acc.CommittedTotal)
+	}
+	if acc.FailedBeforeCommitTotal != 10 {
+		t.Fatalf("expected 10 failed before commit, got %d", acc.FailedBeforeCommitTotal)
+	}
+	if acc.RecoveredDLQTotal != 5 {
+		t.Fatalf("expected 5 recovered DLQ, got %d", acc.RecoveredDLQTotal)
+	}
+	if acc.SpilledDiskTotal != 3 {
+		t.Fatalf("expected 3 spilled disk, got %d", acc.SpilledDiskTotal)
+	}
+	if acc.DroppedTotal != 2 {
+		t.Fatalf("expected 2 dropped, got %d", acc.DroppedTotal)
+	}
 }
