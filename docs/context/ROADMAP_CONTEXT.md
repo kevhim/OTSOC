@@ -66,3 +66,13 @@
   - Dashboard read contract repaired with configurable API base, encoded tenant query parameters, visible error handling, and clean OxLint verification.
   - Unified verification script `scripts/verify-phase4.ps1` added with explicit blocked-dependency accounting.
 - **Milestone Status**: Phase 4 acceptance remains **OPEN** pending low-spec hardware benchmarks, authoritative storage budget policy, real detection workloads, and safe resource adaptation.
+
+## Phase 4 Measurement-Readiness Checkpoint (2026-11-01)
+- **Status**: Completed on branch `fix/correctness-remediation-checkpoint`.
+- **Key Changes**:
+  - Audited and accounted for 7 measurement capabilities (bounded measurement runner in endpoint, global shutdown drain deadline, bounded forwarder response reads, missing standalone binaries and empirical datasets).
+  - Clarified and resolved sampling semantics: periodic background ticker removal justified under Architecture Rules 1 & 4; on-demand startup step primed without continuous background polling; bounded measurement mode provided via `-measure-duration`.
+  - Implemented and verified dashboard tenant request isolation via `queryGenRef` and `AbortController` cancellation, preventing delayed responses from overwriting current tenant state.
+  - Specified storage budget contract distinguishing SQLite soft quota, total persistence footprint, reserved headroom, physical free-disk observations, and future hard enforcement.
+  - Specified real detection workload (`RealIOCExecRule`, `LOCAL-IOC-EXEC-001`, `v1.0`), evaluated inputs, artifact bounds, and harmless fixture, distinguishing from native YARA-X rules.
+- **Milestone Status**: Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Representative low-spec hardware benchmarks, queue-age/recovery instrumentation, and safe priority adaptation remain open.

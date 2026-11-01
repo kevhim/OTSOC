@@ -195,7 +195,8 @@ func (f *Forwarder) sendEvent(ctx context.Context, event *events.CanonicalEvent)
 	defer resp.Body.Close()
 	f.networkState.Store(networkOnline)
 
-	body, _ := io.ReadAll(resp.Body)
+	// Bounded response read to prevent memory exhaustion on oversized upstream bodies
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 
 	if resp.StatusCode == http.StatusAccepted { // 202
 		if err := f.storage.RemoveEvent(ctx, event.EventID); err != nil {

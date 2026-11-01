@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 interface Event {
   event_id: string
@@ -26,6 +26,7 @@ function App() {
   const [apiBase, setApiBase] = useState<string>((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [lastFetched, setLastFetched] = useState<string | null>(null)
+  const queryGenRef = useRef<number>(0)
 
   const validationError = !tenantId.trim() ? 'tenant_id must not be empty' : null
   const displayedError = validationError || errorMessage
@@ -56,6 +57,7 @@ function App() {
     let refreshTimer: ReturnType<typeof setTimeout> | undefined
     const tenantParam = encodeURIComponent(trimmedTenant)
     const normalizedBase = apiBase.trim().replace(/\/+$/, '')
+    const currentGen = ++queryGenRef.current
 
     const getJSON = async <T,>(path: string): Promise<T[]> => {
       // Configurable API base supports separate backend host or same-origin proxy
@@ -77,20 +79,20 @@ function App() {
           getJSON<Event>(`/v1/events?tenant_id=${tenantParam}`),
           getJSON<Alert>(`/v1/alerts?tenant_id=${tenantParam}`),
         ])
-        if (!abortController.signal.aborted) {
+        if (!abortController.signal.aborted && currentGen === queryGenRef.current) {
           setEvents(nextEvents)
           setAlerts(nextAlerts)
           setErrorMessage(null)
           setLastFetched(new Date().toLocaleTimeString())
         }
       } catch (error: unknown) {
-        if (!abortController.signal.aborted) {
+        if (!abortController.signal.aborted && currentGen === queryGenRef.current) {
           console.error('Failed to fetch data:', error)
           setErrorMessage(error instanceof Error ? error.message : 'Failed to connect to backend API')
         }
       } finally {
         // Schedule only after a request finishes to avoid overlapping polls.
-        if (!abortController.signal.aborted) {
+        if (!abortController.signal.aborted && currentGen === queryGenRef.current) {
           refreshTimer = setTimeout(refresh, 2000)
         }
       }

@@ -186,4 +186,57 @@ Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
 - Authoritative storage budget policy (`StorageBudgetBytes`) remains unresolved.
 - Calibration of resource thresholds from real low-spec endpoint hardware benchmarks.
 - Explicit real detection workload and queue-age/recovery measurements.
+### 6. Remaining Acceptance Gaps (Phase 4 Remains OPEN)
+- Authoritative storage budget policy (`StorageBudgetBytes`) remains unresolved.
+- Calibration of resource thresholds from real low-spec endpoint hardware benchmarks.
+- Explicit real detection workload and queue-age/recovery measurements.
 - Safe resource adaptation and priority queue enforcement.
+
+## 2026-11-01 Phase 4 Bounded Measurement-Readiness Checkpoint (non-phase changing)
+
+A focused measurement-readiness checkpoint was completed on branch `fix/correctness-remediation-checkpoint`.
+Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
+
+### 1. Repository Provenance & Baseline Relationship
+- **Repository Path**: `D:\Desktop\OT-SOC\redcyberfox-ot-soc`
+- **Active Branch**: `fix/correctness-remediation-checkpoint`
+- **Remotes**: `origin: git@github.com:kevhim/OTSOC.git`, `otsoc: git@github.com:kevhim/OTSOC.git`
+- **Ancestry**: The previous Phase 4 reference commit `57e8b4b` on `feature/phase-4-3-4-resource-wiring` is an ancestor of `main` (merged via PR #2 at `2eb305d`). `fix/correctness-remediation-checkpoint` branched from `main` at `cd08520` (incorporating PR #2, #3, #4, and #5) and contains commits `bb02344` (correctness fixes) and `1eaa923` (UCRT64 CGO toolchain discovery for race and native detection).
+
+### 2. Accounting of Measurement Capabilities
+- **`agent/cmd/resourcebench`**: MISSING. Zero occurrences across all git branches/commits; never existed in repository.
+- **`agent/internal/resourcereport`**: MISSING. Zero occurrences across all git branches/commits; never existed in repository.
+- **Endpoint measurement options (`-measure-duration`, `-measure-interval`)**: SUPERSEDED / IMPLEMENTED. Implemented in `agent/cmd/endpoint/main.go` as a dedicated bounded measurement mode. Defaults to 0 (normal runtime remains completely passive without background tickers).
+- **Report destination isolation & bounded output**: MISSING dedicated file sink; current console logger outputs bounded `[MEASUREMENT SAMPLE #N]` snapshots.
+- **Single global shutdown drain deadline**: PRESENT. Enforced in `agent/cmd/endpoint/main.go` (10s timer on `drainCtx`) and `agent/internal/ingestion/engine.go` (global drain boundary).
+- **Bounded forwarder response reads**: PRESENT. Enforced in `agent/internal/forwarder/forwarder.go` via `io.LimitReader(resp.Body, 64*1024)` to cap HTTP response reads.
+- **Measurement documentation & raw evidence**: MISSING raw empirical datasets; provisional metrics and contract defined in `phase_4_gate_0_resource_governor.md`.
+
+### 3. Sampling Semantics & Execution Model
+- **Periodic Ticker Removal**: Commit `ba41e75` removed the unapproved 5-second background sampling ticker per Architecture Rules 1 and 4, and Gate-0 Section 10 (prohibiting unapproved background polling).
+- **Execution Model**: Normal runtime calls `Coordinator.Step` synchronously once at startup to establish CPU continuity baselines. Describing startup-only invocation as "continuous monitoring" is architecturally inaccurate.
+- **Bounded Measurement Mode**: Configured via `-measure-duration` and `-measure-interval`. Spawns a bounded goroutine invoking `governor.RunSampling`, logging structured metrics snapshots, and initiating clean shutdown upon completion. Normal production runtime (`-measure-duration 0`) remains completely passive and unaffected. Resource enforcement remains strictly observational.
+
+### 4. Dashboard Request Isolation Verification
+- **Defect/Risk**: Rapid tenant switching in the dashboard could cause delayed responses from Tenant A to arrive after Tenant B was selected, corrupting UI state with stale data.
+- **Remediation**: Added `queryGenRef` (`useRef<number>(0)`) in `dashboard/src/App.tsx`. Both `/v1/events` and `/v1/alerts` responses verify `!abortController.signal.aborted && currentGen === queryGenRef.current` before committing state.
+- **Verification**: Added `dashboard/src/request_isolation.test.mjs` verifying that delayed Tenant A responses are discarded and Tenant B responses are committed cleanly. Ran `npm --prefix dashboard test` (1/1 PASS).
+
+### 5. Storage Budget Contract Specification
+- **SQLite Soft Quota (50 MiB)**: Pruning threshold internal to SQLite (`enforceQuota` in `sqlite.go`) targeting low-priority unforwarded events (DEBUG/INFO/WARNING).
+- **Total Persistence Footprint**: Sum of physical regular-file sizes: `agent.db` + `agent.db-wal` + `agent.db-shm` + `agent_emergency_spill.log`.
+- **Reserved Headroom**: Minimum physical host disk free space reserved for host OS and industrial control processes.
+- **Physical Free-Disk Observations**: OS-level free space queries. Missing or failed measurements must be reported with `Valid: false`, never zero or infinite.
+- **Hard Enforcement (Future Work)**: In Phase 4.3, enforcement remains observational. `StorageBudgetBytes` remains 0 until calibrated against realistic OT workloads and hardware constraints.
+
+### 6. Real Detection Workload Specification
+- **Active Rule**: Production endpoint (`agent/cmd/endpoint/main.go`) loads only `RealIOCExecRule` (`LOCAL-IOC-EXEC-001`, `v1.0`, `CRITICAL`), which evaluates `ev.Metadata["executable_path"] == "/opt/malicious/bin/miner"`.
+- **Finding Generation**: Deterministic UUIDv5 finding identity based on tenant, rule ID, rule version, and evidence event ID; stored durably as `detection/finding`.
+- **Native YARA-X Separation**: Native YARA-X rules (`YaraRule`) compile under CGO with `libyara_x_capi` (v1.20.0) but are NOT loaded by default on ordinary endpoints. Active detection is not inferred from native linkage.
+
+### 7. Verification Outcomes
+- `scripts/verify-phase4.ps1 -Race -NativeDetection`: 9/9 PASS (including UCRT64 64-bit CGO race detection and native YARA-X suite).
+- `npm --prefix dashboard test`: PASS.
+- `npm --prefix dashboard run lint`: PASS (0 errors, 0 warnings).
+- `go build -v ./agent/cmd/endpoint`: PASS.
+- Linux runtime validation: Outstanding on local Windows host; verified via GitHub Actions CI workflow.

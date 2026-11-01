@@ -34,6 +34,8 @@ const (
 func main() {
 	configPath := flag.String("config", "agent.json", "path to config file")
 	identityPath := flag.String("identity", "identity.json", "path to identity file")
+	measureDuration := flag.Duration("measure-duration", 0, "run bounded resource measurement for duration, then exit (0 disables measurement mode)")
+	measureInterval := flag.Duration("measure-interval", 2*time.Second, "sampling interval for measurement mode")
 	flag.Parse()
 
 	log.Println("Starting Endpoint Agent Alpha...")
@@ -137,6 +139,34 @@ func main() {
 				}
 				log.Printf("Resource governor coordinator initialized (on-demand mode, initial step ready=%v evaluated=%v storageBlocked=%v)",
 					stepRes.Ready, stepRes.Evaluated, stepRes.StorageBlocked)
+
+				if *measureDuration > 0 {
+					log.Printf("Starting bounded measurement mode (duration: %v, interval: %v)...", *measureDuration, *measureInterval)
+					go func() {
+						measureCtx, measureCancel := context.WithTimeout(ctx, *measureDuration)
+						defer measureCancel()
+						ticker := time.NewTicker(*measureInterval)
+						defer ticker.Stop()
+						var sampleCount uint64
+						_ = governor.RunSampling(measureCtx, ticker.C, coordinator, func() governor.RuntimeSignals {
+							return governor.RuntimeSignals{
+								QueueDepth:    governor.ValidUint64{Value: uint64(len(centralEvents)), Valid: true},
+								QueueCapacity: governor.ValidUint64{Value: uint64(cap(centralEvents)), Valid: true},
+								NetworkState:  fwd.NetworkState(),
+							}
+						}, func(result governor.StepResult, stepErr error) {
+							sampleCount++
+							snap := resourceMetrics.Snapshot()
+							log.Printf("[MEASUREMENT SAMPLE #%d] state=%s cpu=%v rss=%v storage=%v queue=%v network=%s",
+								sampleCount, snap.GovernorState, snap.AgentCPUPercent, snap.AgentRSSBytes,
+								snap.DiskStorageUsedBytes, snap.QueueSaturationPercent, result.Signals.NetworkState)
+						})
+						snap := resourceMetrics.Snapshot()
+						log.Printf("[MEASUREMENT COMPLETE] Total samples: %d, Final state: %s, Transitions: %d",
+							sampleCount, snap.GovernorState, snap.TotalStateTransitions)
+						cancel()
+					}()
+				}
 			}
 		}
 	}
