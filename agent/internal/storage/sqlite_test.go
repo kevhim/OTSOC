@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"redcyberfox/pkg/events"
 )
@@ -540,4 +541,303 @@ func TestStore_ErrorWrapping_PreservesUnderlyingCause(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("Expected errors.Is(err, context.Canceled) to be true, got %v", err)
 	}
+}
+
+func TestStorage_RetryTimestamp_UTCAndMigration(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	s := NewSQLiteStorage(dbPath, "", 1024*1024*10)
+	if err := s.Init(context.Background()); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	defer s.Close()
+
+	// 1. Store a test event
+	ev := &events.CanonicalEvent{
+		EventID:  "retry-ev-1",
+		Severity: "INFO",
+		Source:   "test-retry",
+	}
+	if err := s.Store(context.Background(), ev); err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	// 2. Simulate legacy timestamp writes:
+	// 2a. Legacy timestamp with positive offset (+0530) and monotonic suffix
+	legacyTS := "2026-09-07 00:26:53.3862089 +0530 IST m=+10.022039201"
+	_, err := s.db.Exec("UPDATE events SET next_attempt_at = ? WHERE event_id = ?", legacyTS, ev.EventID)
+	if err != nil {
+		t.Fatalf("Failed to write legacy timestamp: %v", err)
+	}
+
+	// 2b. Legacy timestamp with negative offset (-0400)
+	evNeg := &events.CanonicalEvent{
+		EventID:  "retry-ev-neg",
+		Severity: "INFO",
+		Source:   "test-retry-neg",
+	}
+	if err := s.Store(context.Background(), evNeg); err != nil {
+		t.Fatalf("Store evNeg failed: %v", err)
+	}
+	legacyNegTS := "2026-09-06 14:56:53 -0400 EDT m=+5.123"
+	if _, err := s.db.Exec("UPDATE events SET next_attempt_at = ? WHERE event_id = ?", legacyNegTS, evNeg.EventID); err != nil {
+		t.Fatalf("Failed to write legacy negative offset: %v", err)
+	}
+
+	// 2c. Malformed unparseable timestamp
+	evBad := &events.CanonicalEvent{
+		EventID:  "retry-ev-bad",
+		Severity: "INFO",
+		Source:   "test-retry-bad",
+	}
+	if err := s.Store(context.Background(), evBad); err != nil {
+		t.Fatalf("Store evBad failed: %v", err)
+	}
+	if _, err := s.db.Exec("UPDATE events SET next_attempt_at = 'garbage-unparseable-date' WHERE event_id = ?", evBad.EventID); err != nil {
+		t.Fatalf("Failed to write malformed timestamp: %v", err)
+	}
+
+	// 3. Run migration
+	if err := s.migrateRetryTimestamps(context.Background()); err != nil {
+		t.Fatalf("migrateRetryTimestamps failed: %v", err)
+	}
+
+	// 3a. Verify +0530 migrated correctly
+	var migratedTS string
+	if err := s.db.QueryRow("SELECT next_attempt_at FROM events WHERE event_id = ?", ev.EventID).Scan(&migratedTS); err != nil {
+		t.Fatalf("Failed to read migrated timestamp: %v", err)
+	}
+
+	tParsed, ok := parseRetryTimestamp(migratedTS)
+	if !ok {
+		t.Fatalf("Failed to parse migrated timestamp '%s'", migratedTS)
+	}
+	expectedInstant := time.Date(2026, 9, 6, 18, 56, 53, 0, time.UTC)
+	if !tParsed.Equal(expectedInstant) {
+		t.Errorf("Expected migrated instant %v, got %v", expectedInstant, tParsed)
+	}
+
+	// 3b. Verify -0400 migrated to exact same instant
+	var migratedNegTS string
+	if err := s.db.QueryRow("SELECT next_attempt_at FROM events WHERE event_id = ?", evNeg.EventID).Scan(&migratedNegTS); err != nil {
+		t.Fatalf("Failed to read migrated negative timestamp: %v", err)
+	}
+	tNegParsed, ok := parseRetryTimestamp(migratedNegTS)
+	if !ok || !tNegParsed.Equal(expectedInstant) {
+		t.Errorf("Expected negative offset migrated to %v, got %v (raw: %s)", expectedInstant, tNegParsed, migratedNegTS)
+	}
+
+	// 3c. Verify malformed row was migrated to immediate eligibility (in past)
+	var migratedBadTS string
+	if err := s.db.QueryRow("SELECT next_attempt_at FROM events WHERE event_id = ?", evBad.EventID).Scan(&migratedBadTS); err != nil {
+		t.Fatalf("Failed to read migrated malformed timestamp: %v", err)
+	}
+	tBadParsed, ok := parseRetryTimestamp(migratedBadTS)
+	if !ok || !tBadParsed.Before(time.Now().UTC()) {
+		t.Errorf("Expected malformed timestamp to be migrated to past time, got %v", tBadParsed)
+	}
+
+	// 3d. Verify idempotency of migration: running migration again produces no errors and leaves rows valid
+	if err := s.migrateRetryTimestamps(context.Background()); err != nil {
+		t.Fatalf("Second run of migrateRetryTimestamps failed: %v", err)
+	}
+
+	// Verify all 3 events are now eligible in GetPendingEvents
+	pending, err := s.GetPendingEvents(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("GetPendingEvents failed: %v", err)
+	}
+	if len(pending) != 3 {
+		t.Errorf("Expected 3 immediately eligible events after migration, found %d", len(pending))
+	}
+
+	// 4. Test MarkFailed produces canonical UTC timestamp
+	ev2 := &events.CanonicalEvent{
+		EventID:  "retry-ev-2",
+		Severity: "INFO",
+		Source:   "test-retry-2",
+	}
+	if err := s.Store(context.Background(), ev2); err != nil {
+		t.Fatalf("Store ev2 failed: %v", err)
+	}
+
+	if err := s.MarkFailed(context.Background(), ev2.EventID, 60, errors.New("temporary error")); err != nil {
+		t.Fatalf("MarkFailed failed: %v", err)
+	}
+
+	var markedTS string
+	if err := s.db.QueryRow("SELECT next_attempt_at FROM events WHERE event_id = ?", ev2.EventID).Scan(&markedTS); err != nil {
+		t.Fatalf("Failed to read marked timestamp: %v", err)
+	}
+
+	tMarked, ok := parseRetryTimestamp(markedTS)
+	if !ok {
+		t.Fatalf("Failed to parse marked timestamp '%s'", markedTS)
+	}
+	// Marked time must be approx 60 seconds in the future
+	if time.Until(tMarked) < 30*time.Second || time.Until(tMarked) > 90*time.Second {
+		t.Errorf("Marked timestamp %v is not approximately 60s in the future", tMarked)
+	}
+}
+
+func TestStorage_RetryArithmetic_BoundedOverflow(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	s := NewSQLiteStorage(dbPath, "", 1024*1024*10)
+	if err := s.Init(context.Background()); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	defer s.Close()
+
+	ev := &events.CanonicalEvent{
+		EventID:  "overflow-retry-1",
+		Severity: "INFO",
+		Source:   "overflow-test",
+	}
+	if err := s.Store(context.Background(), ev); err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	// Set extreme attempt_count that would overflow 1 << attemptCount (e.g. 65)
+	_, err := s.db.Exec("UPDATE events SET attempt_count = 65 WHERE event_id = ?", ev.EventID)
+	if err != nil {
+		t.Fatalf("Setup attempt_count failed: %v", err)
+	}
+
+	// Must not panic or produce negative/overflow duration
+	if err := s.MarkFailed(context.Background(), ev.EventID, 0, errors.New("timeout")); err != nil {
+		t.Fatalf("MarkFailed failed on high attemptCount: %v", err)
+	}
+
+	var attemptCount int
+	var nextAttemptAt string
+	if err := s.db.QueryRow("SELECT attempt_count, next_attempt_at FROM events WHERE event_id = ?", ev.EventID).Scan(&attemptCount, &nextAttemptAt); err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+
+	if attemptCount != 66 {
+		t.Errorf("Expected attempt_count 66, got %d", attemptCount)
+	}
+	tNext, ok := parseRetryTimestamp(nextAttemptAt)
+	if !ok {
+		t.Fatalf("Expected valid timestamp, got '%s'", nextAttemptAt)
+	}
+	// For saturated backoff (3600s + max 10s jitter), delay should be bounded around 1 hour
+	delay := time.Until(tNext)
+	if delay < 3500*time.Second || delay > 3700*time.Second {
+		t.Errorf("Expected delay near 3600s, got %v", delay)
+	}
+
+	// Test extreme retryAfter (e.g. 999999999 seconds); bounded to maxRetryAfterSeconds (86400s)
+	if err := s.MarkFailed(context.Background(), ev.EventID, 999999999, errors.New("server retry-after")); err != nil {
+		t.Fatalf("MarkFailed failed on extreme retryAfter: %v", err)
+	}
+	if err := s.db.QueryRow("SELECT next_attempt_at FROM events WHERE event_id = ?", ev.EventID).Scan(&nextAttemptAt); err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	tAfter, _ := parseRetryTimestamp(nextAttemptAt)
+	afterDelay := time.Until(tAfter)
+	if afterDelay > 86500*time.Second || afterDelay < 86300*time.Second {
+		t.Errorf("Expected retryAfter bounded near 86400s, got %v", afterDelay)
+	}
+}
+
+func TestStorage_IdempotencyBeforeQuotaPruning(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	// Sizable initial quota for setup
+	s := NewSQLiteStorage(dbPath, "", 500*1024)
+	if err := s.Init(context.Background()); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	defer s.Close()
+
+	// 1. Store a low-priority DEBUG event
+	debugEv := &events.CanonicalEvent{
+		EventID:  "debug-ev-1",
+		Severity: "DEBUG",
+		Source:   "debug-source",
+		Metadata: map[string]interface{}{"data": "important diagnostic data"},
+	}
+	if err := s.Store(context.Background(), debugEv); err != nil {
+		t.Fatalf("Store debugEv failed: %v", err)
+	}
+
+	// 2. Store a high-priority event
+	critEv := &events.CanonicalEvent{
+		EventID:  "crit-ev-1",
+		Severity: "CRITICAL",
+		Source:   "crit-source",
+		Metadata: map[string]interface{}{"alert": "something critical"},
+	}
+	if err := s.Store(context.Background(), critEv); err != nil {
+		t.Fatalf("Store critEv failed: %v", err)
+	}
+
+	// Artificially restrict quota to trigger extreme pressure for any new writes
+	s.quotaBytes = 1000
+
+	// 3. Retry storing critEv (idempotent duplicate) under high storage pressure
+	// Under F05 fix: idempotency check must succeed immediately without triggering
+	// enforceQuota or deleting the debug event.
+	if err := s.Store(context.Background(), critEv); err != nil {
+		t.Fatalf("Idempotent Store failed: %v", err)
+	}
+
+	// Assert debug event was NOT pruned!
+	var debugCount int
+	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE event_id = 'debug-ev-1'").Scan(&debugCount)
+	if debugCount != 1 {
+		t.Errorf("DEBUG event was pruned during an idempotent retry! Expected 1, got %d", debugCount)
+	}
+}
+
+func TestStorage_IdentityStabilityAcrossRestarts(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	identityPath := filepath.Join(tmpDir, "identity.json")
+
+	// 1. Initial run: legacy bootstrap file exists
+	initialUUID := "original-device-uuid-1111"
+	if err := os.WriteFile(identityPath, []byte(fmt.Sprintf(`{"device_id":"%s"}`, initialUUID)), 0600); err != nil {
+		t.Fatalf("Failed to create mock identity file: %v", err)
+	}
+
+	// First initialization
+	s1 := NewSQLiteStorage(dbPath, identityPath, 1024*1024*10)
+	if err := s1.Init(context.Background()); err != nil {
+		t.Fatalf("s1.Init failed: %v", err)
+	}
+	id1 := s1.GetDeviceID()
+	if id1 != initialUUID {
+		t.Fatalf("Expected s1 device ID '%s', got '%s'", initialUUID, id1)
+	}
+	s1.Close()
+
+	// Verify identity.json was unlinked after migration
+	if _, err := os.Stat(identityPath); !os.IsNotExist(err) {
+		t.Fatalf("Expected identity.json to be removed after migration")
+	}
+
+	// 2. Second run (restart): identity.json does NOT exist
+	s2 := NewSQLiteStorage(dbPath, identityPath, 1024*1024*10)
+	if err := s2.Init(context.Background()); err != nil {
+		t.Fatalf("s2.Init failed on restart: %v", err)
+	}
+	id2 := s2.GetDeviceID()
+	if id2 != initialUUID {
+		t.Fatalf("Identity drifted on restart! Expected '%s', got '%s'", initialUUID, id2)
+	}
+	s2.Close()
+
+	// 3. Third run (repeated restart)
+	s3 := NewSQLiteStorage(dbPath, identityPath, 1024*1024*10)
+	if err := s3.Init(context.Background()); err != nil {
+		t.Fatalf("s3.Init failed on 3rd start: %v", err)
+	}
+	id3 := s3.GetDeviceID()
+	if id3 != initialUUID {
+		t.Fatalf("Identity drifted on 3rd run! Expected '%s', got '%s'", initialUUID, id3)
+	}
+	s3.Close()
 }

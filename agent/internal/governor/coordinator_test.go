@@ -926,3 +926,93 @@ func TestCoordinator_ProviderErrorsMarkMetricsUnavailableAndDiscoverable(t *test
 		}
 	})
 }
+
+// 14. Deterministic test verifying startup baseline sample and missing storage budget impact
+func TestCoordinator_StartupBaselineAndUnresolvedBudget(t *testing.T) {
+	now := time.Now()
+	cpuCalls := 0
+	mock := &flexibleMockProvider{
+		sampleCPU: func(ctx context.Context) (ValidFloat64, time.Time, error) {
+			cpuCalls++
+			if cpuCalls == 1 {
+				// Initial call: baseline establishment, measurement unavailable error-free
+				return ValidFloat64{Valid: false}, now, nil
+			}
+			// Subsequent call: valid measurement
+			return ValidFloat64{Valid: true, Value: 35.0}, now, nil
+		},
+		sampleMem: func(ctx context.Context) (ValidUint64, time.Time, error) {
+			return ValidUint64{Valid: true, Value: 120 * 1024 * 1024}, now, nil
+		},
+		sampleStorage: func(ctx context.Context) (ValidUint64, ValidFloat64, time.Time, error) {
+			return ValidUint64{Valid: true, Value: 15 * 1024 * 1024}, ValidFloat64{Valid: true, Value: 1024.0}, now, nil
+		},
+	}
+
+	gov, _ := NewGovernor(defaultTestConfig(), func() time.Time { return now }, nil)
+	metrics := NewGovernorMetrics(func() time.Time { return now })
+	coord, err := NewCoordinator(mock, gov, metrics, CoordinatorConfig{
+		StorageBudgetBytes: 0, // Unconfigured budget (endpoint mode)
+	}, func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("failed to create coordinator: %v", err)
+	}
+
+	runtimeSigs := RuntimeSignals{
+		QueueDepth:    ValidUint64{Valid: true, Value: 0},
+		QueueCapacity: ValidUint64{Valid: true, Value: 200},
+		NetworkState:  NetworkUnknown,
+	}
+
+	// 1. Initial startup baseline sample
+	res1, err1 := coord.Step(context.Background(), runtimeSigs)
+	if !errors.Is(err1, ErrMissingStorageBudget) {
+		t.Errorf("step 1 expected ErrMissingStorageBudget, got: %v", err1)
+	}
+	if res1.Ready {
+		t.Error("step 1 expected Ready to be false during CPU baseline establishment")
+	}
+	if res1.Evaluated {
+		t.Error("step 1 expected Evaluated to be false")
+	}
+	if !res1.StorageBlocked {
+		t.Error("step 1 expected StorageBlocked to be true")
+	}
+
+	// Verify metrics were still recorded despite unconfigured budget
+	snap1 := metrics.Snapshot()
+	if snap1.AgentCPUPercent.Valid {
+		t.Error("step 1 expected AgentCPUPercent to be invalid (warmup)")
+	}
+	if !snap1.AgentRSSBytes.Valid || snap1.AgentRSSBytes.Value != 120*1024*1024 {
+		t.Errorf("step 1 expected valid AgentRSSBytes=120MB, got: %v", snap1.AgentRSSBytes)
+	}
+	if !snap1.DiskStorageUsedBytes.Valid || snap1.DiskStorageUsedBytes.Value != 15*1024*1024 {
+		t.Errorf("step 1 expected valid DiskStorageUsedBytes=15MB, got: %v", snap1.DiskStorageUsedBytes)
+	}
+	if !snap1.QueueCapacityCount.Valid || snap1.QueueCapacityCount.Value != 200 {
+		t.Errorf("step 1 expected valid QueueCapacityCount=200, got: %v", snap1.QueueCapacityCount)
+	}
+	if !math.IsNaN(res1.Signals.StoragePressure) {
+		t.Errorf("step 1 expected NaN StoragePressure when budget missing, got: %v", res1.Signals.StoragePressure)
+	}
+
+	// 2. Subsequent on-demand sample with valid CPU, Memory, and Queue
+	res2, err2 := coord.Step(context.Background(), runtimeSigs)
+	if !errors.Is(err2, ErrMissingStorageBudget) {
+		t.Errorf("step 2 expected ErrMissingStorageBudget, got: %v", err2)
+	}
+	if !res2.Ready {
+		t.Error("step 2 expected Ready to be true after CPU baseline primed")
+	}
+	// Crucial invariant: missing storage budget blocks evaluation of ALL signals
+	if res2.Evaluated {
+		t.Error("step 2 expected Evaluated to be false because StorageBlocked blocks governor evaluation")
+	}
+	if !res2.StorageBlocked {
+		t.Error("step 2 expected StorageBlocked to be true")
+	}
+	if gov.CurrentState() != StateNormal {
+		t.Errorf("expected governor to remain StateNormal without false emergency, got: %v", gov.CurrentState())
+	}
+}

@@ -1,5 +1,5 @@
 {
-  "api_addr": "http://localhost:8080",
+  "api_addr": "http://localhost:8081",
   "tenant_id": "test-tenant",
   "site_id": "test-site"
 }

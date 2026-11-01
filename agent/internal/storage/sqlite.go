@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -141,6 +142,11 @@ CREATE TABLE IF NOT EXISTS dead_letter_queue (
 		return err
 	}
 
+	// F01 Migration: Normalize any legacy local-offset/monotonic retry timestamps to UTC
+	if err := s.migrateRetryTimestamps(ctx); err != nil {
+		log.Printf("Warning: failed to migrate retry timestamps: %v", err)
+	}
+
 	// Start maintenance task
 	mCtx, mCancel := context.WithCancel(context.Background())
 	s.maintenanceCancel = mCancel
@@ -218,7 +224,36 @@ func (s *SQLiteStorage) Store(ctx context.Context, event *events.CanonicalEvent)
 		return fmt.Errorf("%w: event_id must not be empty", ErrStoreFailedBeforeCommit)
 	}
 
-	// Estimate payload size for quota enforcement
+	// F05: Check idempotency BEFORE quota enforcement.
+	// A retry of an already-committed or already-dead-lettered event must not trigger
+	// destructive quota pruning of unrelated telemetry or return false quota errors.
+	var existingPayload string
+	var existingSeqNo int64
+	err := s.db.QueryRowContext(ctx, "SELECT seq_no, payload FROM events WHERE event_id = ?", event.EventID).Scan(&existingSeqNo, &existingPayload)
+	if err == nil {
+		event.SeqNo = existingSeqNo
+		payloadBytes, _ := event.Serialize()
+		if existingPayload == string(payloadBytes) {
+			return nil // Idempotent success
+		}
+		return fmt.Errorf("%w: integrity error: event_id %s already exists with different payload", ErrStoreFailedBeforeCommit, event.EventID)
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %w", ErrStoreFailedBeforeCommit, err)
+	}
+
+	err = s.db.QueryRowContext(ctx, "SELECT seq_no, payload FROM dead_letter_queue WHERE event_id = ?", event.EventID).Scan(&existingSeqNo, &existingPayload)
+	if err == nil {
+		event.SeqNo = existingSeqNo
+		payloadBytes, _ := event.Serialize()
+		if existingPayload == string(payloadBytes) {
+			return nil // Idempotent success
+		}
+		return fmt.Errorf("%w: integrity error: event_id %s already in DLQ with different payload", ErrStoreFailedBeforeCommit, event.EventID)
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %w", ErrStoreFailedBeforeCommit, err)
+	}
+
+	// Event is verified new. Now enforce soft quota before disk allocation.
 	estBytes, _ := json.Marshal(event)
 	estimatedSize := int64(len(estBytes)) + 1024
 
@@ -235,31 +270,10 @@ func (s *SQLiteStorage) Store(ctx context.Context, event *events.CanonicalEvent)
 	}
 	defer tx.Rollback()
 
-	// Idempotency checks
-	var existingPayload string
-	var existingSeqNo int64
-	err = tx.QueryRowContext(ctx, "SELECT seq_no, payload FROM events WHERE event_id = ?", event.EventID).Scan(&existingSeqNo, &existingPayload)
-	if err == nil {
-		event.SeqNo = existingSeqNo
-		payloadBytes, _ := event.Serialize()
-		if existingPayload == string(payloadBytes) {
-			return nil // Idempotent success
-		}
-		return fmt.Errorf("%w: integrity error: event_id %s already exists with different payload", ErrStoreFailedBeforeCommit, event.EventID)
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("%w: %w", ErrStoreFailedBeforeCommit, err)
-	}
-
-	err = tx.QueryRowContext(ctx, "SELECT seq_no, payload FROM dead_letter_queue WHERE event_id = ?", event.EventID).Scan(&existingSeqNo, &existingPayload)
-	if err == nil {
-		event.SeqNo = existingSeqNo
-		payloadBytes, _ := event.Serialize()
-		if existingPayload == string(payloadBytes) {
-			return nil // Idempotent success
-		}
-		return fmt.Errorf("%w: integrity error: event_id %s already in DLQ with different payload", ErrStoreFailedBeforeCommit, event.EventID)
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("%w: %w", ErrStoreFailedBeforeCommit, err)
+	// Double-check inside transaction in case of concurrent writes under different locks
+	var dummy int64
+	if checkErr := tx.QueryRowContext(ctx, "SELECT seq_no FROM events WHERE event_id = ?", event.EventID).Scan(&dummy); checkErr == nil {
+		return nil
 	}
 
 	var nextSeqNo int64
@@ -440,7 +454,7 @@ func (s *SQLiteStorage) GetPendingEvents(ctx context.Context, limit int) ([]*eve
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT event_id, device_id, seq_no, payload FROM events 
-		WHERE state = 'PENDING' AND (next_attempt_at IS NULL OR next_attempt_at <= CURRENT_TIMESTAMP)
+		WHERE state = 'PENDING' AND (next_attempt_at IS NULL OR datetime(next_attempt_at) <= CURRENT_TIMESTAMP)
 		ORDER BY seq_no ASC
 		LIMIT ?
 	`, limit)
@@ -532,6 +546,11 @@ func (s *SQLiteStorage) RemoveEvent(ctx context.Context, eventID string) error {
 	return err
 }
 
+const (
+	maxBackoffSeconds    = 3600  // 1 hour cap
+	maxRetryAfterSeconds = 86400 // 24 hours max server-specified retry-after
+)
+
 func (s *SQLiteStorage) MarkFailed(ctx context.Context, eventID string, retryAfter int, err error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -545,25 +564,143 @@ func (s *SQLiteStorage) MarkFailed(ctx context.Context, eventID string, retryAft
 	}
 
 	attemptCount++
+	if attemptCount < 0 {
+		attemptCount = 1
+	}
 
 	var nextAttemptAt time.Time
 	if retryAfter > 0 {
-		nextAttemptAt = time.Now().Add(time.Duration(retryAfter) * time.Second)
-	} else {
-		// Exponential backoff + jitter
-		// Formula: next_attempt_at = now + min(MaxBackoff, InitialBackoff * 2^attempt_count) + Jitter
-		backoff := 5 * (1 << attemptCount)
-		if backoff > 3600 { // Max 1 hour
-			backoff = 3600
+		// F13: Bounded retry-after against integer/duration overflow
+		if retryAfter > maxRetryAfterSeconds {
+			retryAfter = maxRetryAfterSeconds
 		}
-		jitter := time.Duration(time.Now().UnixNano()%10) * time.Second // Simple jitter up to 10s
-		nextAttemptAt = time.Now().Add(time.Duration(backoff)*time.Second + jitter)
+		nextAttemptAt = time.Now().UTC().Add(time.Duration(retryAfter) * time.Second)
+	} else {
+		// F13: Saturate exponential backoff arithmetic before shifting
+		// Formula: next_attempt_at = now + min(MaxBackoff, InitialBackoff * 2^attempt_count) + Jitter
+		// For attemptCount >= 10, 5 * (1 << 10) = 5120 > 3600 (maxBackoffSeconds)
+		var backoff int64
+		if attemptCount >= 10 {
+			backoff = maxBackoffSeconds
+		} else {
+			backoff = int64(5 * (1 << attemptCount))
+			if backoff > maxBackoffSeconds {
+				backoff = maxBackoffSeconds
+			}
+		}
+		jitter := time.Duration(time.Now().UnixNano()%10) * time.Second // Bounded jitter up to 10s
+		nextAttemptAt = time.Now().UTC().Add(time.Duration(backoff)*time.Second + jitter)
 	}
+
+	// F01: Format as canonical UTC text matching SQLite CURRENT_TIMESTAMP format ("YYYY-MM-DD HH:MM:SS")
+	formattedTS := nextAttemptAt.UTC().Format("2006-01-02 15:04:05")
 
 	_, updateErr := s.db.ExecContext(ctx, `
 		UPDATE events SET attempt_count = ?, next_attempt_at = ? WHERE event_id = ?
-	`, attemptCount, nextAttemptAt, eventID)
+	`, attemptCount, formattedTS, eventID)
 	return updateErr
+}
+
+// migrateRetryTimestamps normalizes legacy or local-offset retry timestamps in existing rows to UTC.
+// It uses a bounded batch and filters only non-canonical rows, ensuring bounded startup work.
+func (s *SQLiteStorage) migrateRetryTimestamps(ctx context.Context) error {
+	// Query only rows that do not match canonical 19-char format ("YYYY-MM-DD HH:MM:SS"), bounded by limit.
+	rows, err := s.db.QueryContext(ctx, "SELECT event_id, next_attempt_at FROM events WHERE next_attempt_at IS NOT NULL AND length(next_attempt_at) != 19 LIMIT 1000")
+	if err != nil {
+		return fmt.Errorf("failed to query retry timestamps: %w", err)
+	}
+	defer rows.Close()
+
+	type toUpdate struct {
+		eventID   string
+		formatted string
+	}
+	var updates []toUpdate
+
+	for rows.Next() {
+		var eventID string
+		var rawTS string
+		if err := rows.Scan(&eventID, &rawTS); err != nil {
+			return err
+		}
+		parsed, ok := parseRetryTimestamp(rawTS)
+		var newTS string
+		if ok {
+			newTS = parsed.UTC().Format("2006-01-02 15:04:05")
+		} else {
+			// Unparseable legacy string: log warning for observability and set to past UTC for immediate eligibility
+			log.Printf("Warning: unparseable legacy retry timestamp for event %s ('%s'); migrating to immediate eligibility", eventID, rawTS)
+			newTS = time.Now().UTC().Add(-1 * time.Hour).Format("2006-01-02 15:04:05")
+		}
+		updates = append(updates, toUpdate{eventID: eventID, formatted: newTS})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if len(updates) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin migration tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, "UPDATE events SET next_attempt_at = ? WHERE event_id = ?")
+	if err != nil {
+		return fmt.Errorf("failed to prepare migration update stmt: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, u := range updates {
+		if _, err := stmt.ExecContext(ctx, u.formatted, u.eventID); err != nil {
+			return fmt.Errorf("failed to migrate retry timestamp for event %s: %w", u.eventID, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// parseRetryTimestamp parses legacy and variant timestamp strings into UTC time.
+func parseRetryTimestamp(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	// Strip Go monotonic suffix " m=+..." if present
+	if idx := strings.Index(raw, " m="); idx != -1 {
+		raw = strings.TrimSpace(raw[:idx])
+	}
+
+	// 1. Standard SQLite UTC format
+	if t, err := time.ParseInLocation("2006-01-02 15:04:05", raw, time.UTC); err == nil {
+		return t.UTC(), true
+	}
+	// 2. RFC3339 formats
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t.UTC(), true
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t.UTC(), true
+	}
+	// 3. Go String() formats (with timezone name/offset)
+	layouts := []string{
+		"2006-01-02 15:04:05.999999999 -0700 MST",
+		"2006-01-02 15:04:05.999999999 -0700",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05 -0700 MST",
+		"2006-01-02 15:04:05 -0700",
+		"2006-01-02 15:04:05.999999999 +0700 MST",
+		"2006-01-02 15:04:05.999999999 +0700",
+	}
+	for _, l := range layouts {
+		if t, err := time.Parse(l, raw); err == nil {
+			return t.UTC(), true
+		}
+	}
+	return time.Time{}, false
 }
 
 func (s *SQLiteStorage) MoveToDLQ(ctx context.Context, event *events.CanonicalEvent, failureType, failureReason string) error {
