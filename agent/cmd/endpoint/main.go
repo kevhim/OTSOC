@@ -182,8 +182,11 @@ func main() {
 	}()
 
 	// 7.5 Phase 3 Detection Core
-	log.Println("Production detection rule set pending real IOC/rule gate")
-	detEngine := detection.NewEngine(db, []detection.Rule{})
+	activeRules := []detection.Rule{
+		&detection.RealIOCExecRule{},
+	}
+	log.Printf("Production detection engine initialized with %d active deterministic rules", len(activeRules))
+	detEngine := detection.NewEngine(db, activeRules)
 
 	// 8. Central Event Ingestion Loop (uses shared production Ingestion Engine)
 	ingestEngine := ingestion.NewEngine(db, ingestion.Config{

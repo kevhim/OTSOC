@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -41,7 +42,7 @@ const (
 
 func NewForwarder(apiURL, tenantID string, storage interfaces.Storage) *Forwarder {
 	return &Forwarder{
-		apiURL:   apiURL,
+		apiURL:   strings.TrimRight(apiURL, "/"),
 		tenantID: tenantID,
 		storage:  storage,
 		httpClient: &http.Client{

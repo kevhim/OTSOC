@@ -2,10 +2,14 @@ package ingestion
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -130,6 +134,109 @@ func TestIngestion_EmergencySpill_SuccessfulSpill(t *testing.T) {
 	}
 }
 
+func TestIngestion_EmergencySpill_PreservesEarlierEvents(t *testing.T) {
+	spillFile := filepath.Join(t.TempDir(), "spill.log")
+	store := &mockStorageFailures{
+		storeErr: storage.ErrStoreUncertain,
+		dlqErr:   errors.New("dlq unavailable"),
+	}
+	eng := NewEngine(store, Config{
+		RetryDelay:         1 * time.Millisecond,
+		EmergencySpillPath: spillFile,
+	})
+	ctx := context.Background()
+	for _, id := range []string{"first-event", "second-event"} {
+		ev := &events.CanonicalEvent{EventID: id, Source: "test"}
+		if got := eng.ProcessEvent(ctx, ctx, ev); got != OutcomeSpilledDisk {
+			t.Fatalf("spilling %s: got %s", id, got)
+		}
+	}
+
+	data, err := os.ReadFile(spillFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 preserved records, got %d: %s", len(lines), data)
+	}
+	for i, want := range []string{"first-event", "second-event"} {
+		var got events.CanonicalEvent
+		if err := json.Unmarshal([]byte(lines[i]), &got); err != nil {
+			t.Fatalf("invalid JSON line %d: %v", i, err)
+		}
+		if got.EventID != want {
+			t.Errorf("line %d id = %s, want %s", i, got.EventID, want)
+		}
+	}
+}
+
+func TestIngestion_EmergencySpill_ConcurrentWrites(t *testing.T) {
+	spillFile := filepath.Join(t.TempDir(), "concurrent_spill.log")
+	store := &mockStorageFailures{
+		storeErr: storage.ErrStoreUncertain,
+		dlqErr:   errors.New("dlq unavailable"),
+	}
+	eng := NewEngine(store, Config{
+		RetryDelay:         1 * time.Millisecond,
+		EmergencySpillPath: spillFile,
+	})
+
+	const numWorkers = 20
+	var wg sync.WaitGroup
+	errCh := make(chan error, numWorkers)
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			ctx := context.Background()
+			ev := &events.CanonicalEvent{
+				EventID:  fmt.Sprintf("concurrent-event-%02d", id),
+				Source:   "test-source",
+				Severity: "CRITICAL",
+			}
+			outcome := eng.ProcessEvent(ctx, ctx, ev)
+			if outcome != OutcomeSpilledDisk {
+				errCh <- fmt.Errorf("worker %d got outcome %v, want OutcomeSpilledDisk", id, outcome)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(spillFile)
+	if err != nil {
+		t.Fatalf("Failed to read spill file: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != numWorkers {
+		t.Fatalf("expected %d distinct spill lines, got %d", numWorkers, len(lines))
+	}
+
+	seen := make(map[string]bool)
+	for idx, line := range lines {
+		var ev events.CanonicalEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("corrupted JSON on line %d: %v (raw: %s)", idx, err, line)
+		}
+		if !strings.HasPrefix(ev.EventID, "concurrent-event-") {
+			t.Errorf("unexpected event ID format on line %d: %s", idx, ev.EventID)
+		}
+		seen[ev.EventID] = true
+	}
+
+	if len(seen) != numWorkers {
+		t.Errorf("expected %d unique event IDs in spill file, got %d", numWorkers, len(seen))
+	}
+}
+
 func TestIngestion_EndpointIdentityLifecycleAcrossRestarts(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
@@ -236,4 +343,3 @@ func TestIngestion_EndpointIdentityLifecycleAcrossRestarts(t *testing.T) {
 	}
 	db2.Close()
 }
-
