@@ -114,10 +114,18 @@
     1. **Idle (`windows-smoke-idle`)**: Bounded 3s run, 1s interval. 2 baseline startup events (inventory, network) ingested, committed, and forwarded cleanly. RSS 21.9 MB, CPU ~0.19%, queue depth 0, 0 dropped.
     2. **Sustained (`windows-smoke-sustained`)**: Bounded 4s run, 1s interval. Sustained 200ms file creation stream generating 26 total events. All 26 ingested, committed to SQLite, forwarded (HTTP 202 accepted), and transactionally removed. RSS 23.4 MB, WAL 1.27 MB, IO 362-453 KB/s.
     3. **Burst (`windows-smoke-burst`)**: Bounded 4s run, 1s interval. Rapid burst of 35 files generating 72 total events. All 72 ingested, committed to SQLite, forwarded, and removed without queue overflow or data loss. Peak RSS 25.78 MB, peak WAL 3.73 MB, peak write IO 3.68 MB/s.
-    4. **Offline & Reconnect (`windows-smoke-offline` / `windows-smoke-reconnect`)**: 2-phase lifecycle on identical database:
+    4. **Offline & Real Retry Recovery (`windows-smoke-offline` / `windows-smoke-reconnect`)**: 2-phase lifecycle on identical database:
        - *Offline*: 3s run against unreachable port (`http://127.0.0.1:54321`), 22 events ingested and durably committed to SQLite `state = 'PENDING'`. Forwarder attempted 22 and retried with exponential backoff (`next_attempt_at`). HTTP accepted: 0. Retained pending: 22.
-       - *Reconnect*: Server online, same DB reopened, 22 initial backlog detected. Forwarder drained all 22 backlog + 2 startup events = 24 accepted via HTTP 202, local removed: 24, remaining pending in SQLite: 0.
+       - *Real Retry Reconnect*: Server online, same DB reopened without SQL alteration, 22 initial backlog detected. Ran natively for 22s allowing the 10s–19s exponential backoff window to naturally expire. Forwarder drained all 22 backlog + 2 startup events = 24 accepted via HTTP 202, local removed: 24, remaining pending in SQLite: 0.
   - **Evidence Artifacts & Comprehensive Analysis**: Stored raw report JSON files in `docs/evidence/phase4/` and compiled complete comparative analysis in `docs/evidence/phase4/windows_workload_evidence.md`.
   - **Developer-Host Smoke Evidence Disclaimer**: Explicitly documented that developer-workstation measurements do NOT substitute for low-spec qualification. Resource governor thresholds remain observational and uncalibrated. Phase 4 remains open; Phase 5 not begun.
+
+## Phase 4 Retry Evidence Validity, Fresh Binary Provenance & Adapter-Held Event Preservation Checkpoint (2026-11-05)
+- **Status**: Completed on branch `fix/correctness-remediation-checkpoint`.
+- **Key Changes**:
+  - **Preserve Adapter-Held Events During Close**: Removed `closeAbortedAdapter`. Once an event is sent to `In()`, the adapter preserves it for admission into the ring buffer as soon as capacity frees during drain. All accepted events drain via `Out()` in exact FIFO order. Queue-retained memory strictly bounded by $\le \text{capacity} + \text{maxWaiters} + 1$. Added deterministic barrier regressions with zero data races.
+  - **Fresh Binary Provenance**: Subprocess tests compile fresh `endpoint.exe` directly into `t.TempDir()`, inspect `vcs.revision` and `vcs.modified` via `go version -m`, and validate against git state. Never reuses repository-root binary.
+  - **Real Retry Recovery & Mock Receiver**: Removed fake SQL that cleared retry deadlines. Preserved natural backoff timestamps across shutdown and restart. 22-second reconnect run verified natural deadline expiration, mock HTTP 202 acknowledgement, and local SQLite removal. Documented mock receiver boundary and harmless rule match scope.
+  - **Verification**: `scripts/verify-phase4.ps1 -Race -NativeDetection` 9/9 PASS.
 - **Milestone Status**: Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
 - **Next Bounded Implementation Task**: Execute equivalent Linux CI race & native workload evidence collection and plan representative low-spec qualification.

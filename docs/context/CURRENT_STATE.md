@@ -400,3 +400,44 @@ Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Resource governor th
 - `go test -v ./agent/internal/integration -run TestWorkload_WindowsMeasurementReports`: 4/4 PASS (17.78s).
 - `go build -v ./agent/cmd/endpoint`: PASS.
 - `go build -v ./server/cmd/api`: PASS.
+
+## 2026-11-05 Phase 4 Retry Evidence Validity, Fresh Binary Provenance & Adapter-Held Event Preservation Checkpoint (non-phase changing)
+
+A focused checkpoint fixing retry-evidence validity, enforcing fresh binary provenance, and guaranteeing adapter-held event preservation during queue closure was completed on branch `fix/correctness-remediation-checkpoint`.
+Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Resource governor thresholds remain uncalibrated and observational until representative multi-sample workloads are measured.
+
+### 1. Adapter-Held Event Preservation During Close (`agent/internal/eventqueue`)
+- **Preservation Contract**: Senders completing `q.In() <- ev` transfer ownership to the queue adapter (`inPump` / `enqueueFromAdapter`). Previously, `Close()` called `closeAbortedAdapter` which silently discarded the event if the adapter was blocked on ring admission. The abort mechanism was completely removed.
+- **Drain Sequencing**: When `Close()` is invoked, `q.closing` is set so direct `Enqueue` and `TryEnqueue` callers immediately fail with `ErrQueueClosed`. The adapter-held event (`q.adapterHeldEvent`) is preserved; as consumer goroutines drain items from `q.ring`, `admissionAvailable` signals the adapter, which admits the event into the ring before `inPump` terminates. `outPump` then drains all accepted ring events (including the adapter-held event) in exact FIFO order.
+- **Strict Memory Bounds**: Total events retained across ring, waiter allowance, and adapter remain strictly bounded by $\le \text{capacity} + \text{maxWaiters} + 1$.
+- **Synchronization Hooks for Deterministic Regression**: Added `AdapterHeldEvent()`, `AdapterWaiting()`, and `SetAdapterBlockedHook(fn func(*events.CanonicalEvent))` to allow tests to synchronize on the exact moment the adapter holds an event without flaky sleeps.
+- **Verification**: `TestEventQueue_ClosePreservesAdapterHeldEvent_DeterministicRegression` validates filling ring (2) and waiters (2), sending via `In()`, verifying adapter holds event, calling `Close()` repeatedly while consumption is paused, asserting direct waiters receive `ErrQueueClosed`, resuming consumption, and asserting all items drain in strict FIFO order (`ring-1`, `ring-2`, `adapter-held-1`). 12/12 unit tests pass under `-race` with 64-bit UCRT64 CGO.
+
+### 2. Guaranteed Fresh Binary Provenance (`agent/internal/integration/workload_reports_test.go`)
+- **Elimination of Root Binary Reuse**: Removed `getOrBuildEndpointExe` which previously relied on potentially stale repository-root `endpoint.exe`.
+- **Isolated Per-Test Build**: `buildFreshEndpointWithProvenance` always compiles a fresh `endpoint.exe` directly into `t.TempDir()`.
+- **VCS Buildinfo Inspection**: Evaluates compiled binary metadata via `go version -m <path>`, extracting `vcs.revision` and `vcs.modified`.
+- **Strict Provenance Validation**: Validates binary revision and dirty state against git status (`git rev-parse HEAD` and `git status --porcelain`). Fails visibly if metadata is missing or mismatched.
+- **Bounded Subprocess Execution**: All subprocess invocations use `exec.CommandContext` with bounded timeouts and capture combined diagnostic stdout/stderr.
+
+### 3. Real Retry Recovery & Mock Receiver Accounting
+- **Preservation of Retry Timestamps**: Completely removed `UPDATE events SET next_attempt_at = NULL` manipulation. The offline phase shuts down after 3 seconds, leaving 22 pending events with legitimate exponential backoff timestamps ($10\text{s} + 9\text{s}\text{ jitter} = 10\text{--}19\text{s}$ in the future).
+- **Natural Backoff Expiration**: The reconnect scenario runs natively for 22 seconds without modifying any database column or system clock. Within this 22s window, the forwarder's 5s background retry loop naturally discovers all 22 eligible events.
+- **Mock HTTP 202 Receiver Accounting**: Replaced `mockIngestServer` with `mockIngestReceiver`, explicitly documenting that HTTP 202 acknowledgement does not establish central durable database ingestion (PostgreSQL/Valkey).
+- **Identity & Sequence Continuity**: Recorded all 22 offline event IDs and sequence numbers prior to reconnect; asserted that every single recorded offline event arrived at the mock receiver and was deleted locally from SQLite (`count(state = 'PENDING') == 0`).
+- **Reports**: Persisted both `windows_reconnect_report.json` and `windows_retry_recovery_report.json` to `docs/evidence/phase4/`.
+
+### 4. Historical Evidence Disclaimers (`docs/evidence/phase4/windows_workload_evidence.md`)
+- Documented that historical reconnect runs manually cleared retry deadlines and were rerun under natural 22s execution.
+- Added explicit disclaimer that the mock receiver is an HTTP 202 endpoint and does not establish central durable ingestion.
+- Added explicit disclaimer that the loaded rule (`LOCAL-IOC-EXEC-001`) did not match harmless filesystem events; no detection findings were generated, and detection-match cost is not claimed.
+- Added explicit disclaimer that short developer-host smoke runs do not establish representative performance or zero loss in production OT environments.
+
+### 5. Verification Outcomes
+- `scripts/verify-phase4.ps1 -Race -NativeDetection`: 9/9 PASS.
+- `go test -v -race -count=1 ./agent/internal/eventqueue/...`: 12/12 PASS.
+- `go test -v -race -count=1 ./agent/internal/storage/...`: 21/21 PASS.
+- `go test -v -race -count=1 ./agent/internal/resourcereport/...`: 8/8 PASS.
+- `go test -v -count=1 ./agent/internal/integration -run TestWorkload_WindowsMeasurementReports`: 4/4 PASS (41.95s).
+- `go build -v ./agent/cmd/endpoint`: PASS.
+- `go build -v ./server/cmd/api`: PASS.
