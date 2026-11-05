@@ -140,6 +140,14 @@ if ($Race) {
         if ($raceGovExit -eq 0 -and $raceIntExit -eq 0) {
             Add-Result -Name "Go Test -Race (Governor, EventQueue & Integration)" -Status "PASS" -Details "64-bit race conditions check passed under local UCRT64 CGO"
         } else {
+            if ($raceGovExit -ne 0) {
+                Write-Host "Race check failure in Governor/EventQueue:" -ForegroundColor Red
+                Write-Host ($raceOutGov -join "`n") -ForegroundColor Yellow
+            }
+            if ($raceIntExit -ne 0) {
+                Write-Host "Race check failure in Integration:" -ForegroundColor Red
+                Write-Host ($raceOutInt -join "`n") -ForegroundColor Yellow
+            }
             Add-Result -Name "Go Test -Race (Governor, EventQueue & Integration)" -Status "FAIL" -Details "Race test failure detected"
         }
     }

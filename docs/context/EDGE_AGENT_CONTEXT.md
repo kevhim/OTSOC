@@ -26,12 +26,23 @@ The agent runs locally, queues events in SQLite, and forwards to central server 
 - **Detection Workload & Platform Scope**: Production endpoint loads `RealIOCExecRule` (`LOCAL-IOC-EXEC-001`, `v1.0`). Fixture matching `executable_path == "/opt/malicious/bin/miner"` is metadata matching, not YARA scanning. Live Windows collectors monitor real Windows executables and do not emit this Linux path during normal operation; production-path integration tests explicitly exercise this path and verify derived findings linked via `evidence_event_ids` in SQLite.
 
 ## Ingestion Accounting, Backpressure & Finalize-After-Drain Invariants
-- **Finalize-After-Drain Shutdown Ordering**: Measurement expiry requests termination via `resourcereport.ShutdownCoordinator` but does NOT finalize the report immediately. Final reporting occurs only AFTER collectors stop, the event queue closes, ingestion loop drains all in-flight items, and the forwarder stops. Durable storage state (`InspectDurableStorage`) is queried while the database connection is still open immediately prior to closing SQLite. Any report generation or drain error propagates to process exit code (`os.Exit(1)`).
+- **Finalize-After-Drain Shutdown Ordering**: Measurement expiry requests termination via `resourcereport.ShutdownCoordinator` but does NOT finalize the report immediately. The shared production implementation `resourcereport.ExecuteShutdown` executes:
+  1. OS collectors stop (`procCol`, `fsCol`, `invCol`, `netCol`, `usbCol`, `healthMgr`); all `Stop()` errors are captured.
+  2. Event queue closes non-blockingly (`eventQ.Close()`).
+  3. Ingestion loop finishes draining all remaining in-flight items (`ingestWg.Wait()`, `eventQ.WaitDrain()`).
+  4. Forwarder stops (`fwd.Stop()`); any `Stop()` error is captured.
+  5. Measurement runner goroutine is joined (`MeasureJoin`); any runner error is captured.
+  6. Global drain deadline check records an error if the drain deadline expired.
+  7. Durable storage state (`InspectDurableStorage`) is captured before closing SQLite.
+  8. Point-in-time accounting snapshots from ingestion and forwarder are recorded.
+  9. Report is finalized (`reporter.Finalize`). If errors occurred, outcome reflects `_WITH_ERRORS: ...`.
+  10. SQLite storage is closed (`db.Close()`); any close error is captured.
+  11. Any error during shutdown, drain, report generation, or DB close propagates to process exit code (`os.Exit(1)`).
 - **Ingestion-Outcome Reconciliation**: The accounting equation $\text{Ingested} = \text{Committed} + \text{FailedBeforeCommit} + \text{RecoveredDLQ} + \text{SpilledDisk} + \text{Dropped}$ strictly represents local ingestion-loop outcome reconciliation, guarded by `accMu sync.Mutex` for coherent point-in-time snapshots. It is NEVER labeled end-to-end reconciliation or proof of zero loss, as it does not observe upstream network hops, server-side processing, or retention pruning.
-- **Forwarder Accounting Distinctions**: Forwarder metrics distinguish HTTP request attempts (including retries) from unique events receiving HTTP 202 (`HTTPAcceptedTotal`), successful SQLite local row deletions (`LocalRemovedTotal`), and deletion failures (`LocalRemovalErrorsTotal`).
+- **Forwarder Accounting Distinctions**: Forwarder metrics distinguish HTTP request attempts (including retries) from total accepted HTTP responses (HTTP 202) received (`HTTPAcceptedTotal`, including repeats/retries), successful SQLite local row deletions (`LocalRemovedTotal`), and deletion failures (`LocalRemovalErrorsTotal`). It does NOT claim unique-event delivery.
 - **Durable Storage Inventory**: Storage inspects SQLite directly to distinguish source telemetry from derived detection findings (`payload LIKE '%"category":"detection/finding"%'`), pending events, DLQ events, and existing startup backlog. Unsupported metrics (such as historical retention pruning) remain explicitly unavailable (`nil` / JSON `null`).
 - **Backpressure Semantics**: Queue backpressure semantics strictly distinguish:
-  - `BlockedEnqueueAttemptsTotal`: counts each distinct enqueue attempt where a producer was blocked waiting for downstream capacity because the queue was at 100% capacity.
+  - `BlockedEnqueueAttemptsTotal`: instrumented directly via `Enqueue(ctx, ev)`. Tracks each enqueue attempt that blocked waiting for capacity because the queue was at 100% saturation. Supports deterministic FIFO waiter admission and context cancellation without state loss.
   - `PressureEpisodesTotal`: counts discrete transitions into the 100% saturated state (`count == capacity`).
   - `TimeSpentFullSeconds`: cumulative duration the queue spent at 100% saturation.
-  Queue-loop iterations are never counted as blocked event submissions.
+  Queue-loop iterations are never counted as blocked event submissions. Submissions via channel `In()` act as an adapter for legacy collectors.

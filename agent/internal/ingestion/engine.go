@@ -67,6 +67,7 @@ type Config struct {
 	OnDropped          func(ev *events.CanonicalEvent, reason string, err error)
 	OnDLQ              func(ev *events.CanonicalEvent, reason string)
 	OnFatal            func(ev *events.CanonicalEvent, err error)
+	BeforeProcess      func(ctx context.Context, ev *events.CanonicalEvent)
 	TestInjectError    func(ctx context.Context, ev *events.CanonicalEvent) error
 }
 
@@ -172,6 +173,10 @@ func (e *Engine) ProcessEvent(ctx, drainCtx context.Context, ev *events.Canonica
 	storeCtx := ctx
 	if ctx.Err() != nil {
 		storeCtx = drainCtx
+	}
+
+	if e.cfg.BeforeProcess != nil {
+		e.cfg.BeforeProcess(storeCtx, ev)
 	}
 
 	var storeErr error

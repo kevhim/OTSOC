@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,17 +14,21 @@ import (
 	"github.com/google/uuid"
 	"redcyberfox/agent/internal/detection"
 	"redcyberfox/agent/internal/eventqueue"
+	"redcyberfox/agent/internal/governor"
 	"redcyberfox/agent/internal/ingestion"
+	"redcyberfox/agent/internal/interfaces"
 	"redcyberfox/agent/internal/resourcereport"
 	"redcyberfox/agent/internal/storage"
 	"redcyberfox/pkg/events"
 )
 
-// TestMeasurement_FinalizeAfterDrain_QueuedEventsReconciled exercises the production shutdown contract:
-// When measurement sampling expires, remaining events in the event queue must not be abandoned or
-// excluded from the final machine-readable measurement report.
-// The report is finalized only AFTER collectors stop, the queue drains, ingestion finishes, and
-// durable storage is inspected before DB close.
+// TestMeasurement_FinalizeAfterDrain_QueuedEventsReconciled exercises the shared production shutdown:
+// 1. Holds ingestion behind an explicit barrier.
+// 2. Establishes queued events in memory.
+// 3. Triggers actual measurement expiry via RunMeasurementRunner duration timer.
+// 4. Releases the ingestion barrier.
+// 5. Executes the shared production ExecuteShutdown implementation (without duplicated test logic).
+// 6. Verifies that all queued events are drained, committed to SQLite, and accurately accounted for.
 func TestMeasurement_FinalizeAfterDrain_QueuedEventsReconciled(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "drain_agent.db")
@@ -45,20 +50,26 @@ func TestMeasurement_FinalizeAfterDrain_QueuedEventsReconciled(t *testing.T) {
 	}
 	detEngine := detection.NewEngine(db, rules)
 
-	// 3. Shared Ingestion Engine
+	// 3. Ingestion Barrier
+	barrier := make(chan struct{})
+
+	// 4. Shared Ingestion Engine with explicit barrier
 	ingestEngine := ingestion.NewEngine(db, ingestion.Config{
 		TenantID: "tenant-drain-test",
 		SiteID:   "site-drain-test",
 		AssetID:  deviceID,
+		BeforeProcess: func(ctx context.Context, ev *events.CanonicalEvent) {
+			<-barrier
+		},
 		OnCommitted: func(ctx context.Context, ev *events.CanonicalEvent) {
 			detEngine.Evaluate(ctx, ev)
 		},
 	})
 
-	// 4. Instrumented Bounded Event Queue
+	// 5. Instrumented Bounded Event Queue
 	eventQ := eventqueue.New(50)
 
-	// 5. Shutdown Coordinator
+	// 6. Shutdown Coordinator
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	drainCtx, drainCancel := context.WithCancel(context.Background())
@@ -66,12 +77,12 @@ func TestMeasurement_FinalizeAfterDrain_QueuedEventsReconciled(t *testing.T) {
 
 	shutdownCoord := resourcereport.NewShutdownCoordinator(cancel, drainCancel, 10*time.Second)
 
-	// 6. Reporter
+	// 7. Reporter and Measurement Runner
 	reportCfg := resourcereport.Config{
 		ReportPath: reportPath,
 		Profile:    "test-queued-drain-regression",
-		Duration:   time.Second,
-		Interval:   100 * time.Millisecond,
+		Duration:   50 * time.Millisecond,
+		Interval:   10 * time.Millisecond,
 		DBPath:     dbPath,
 	}
 	reportRules := []resourcereport.RuleInfo{
@@ -79,7 +90,19 @@ func TestMeasurement_FinalizeAfterDrain_QueuedEventsReconciled(t *testing.T) {
 	}
 	reporter := resourcereport.NewReporter(reportCfg, reportRules)
 
-	// 7. Start Ingestion Loop in background
+	resourceProvider, err := governor.NewSQLiteResourceProvider(dbPath, time.Now)
+	if err != nil {
+		t.Fatalf("failed to create resource provider: %v", err)
+	}
+	govMetrics := governor.NewGovernorMetrics(time.Now)
+	coord, err := governor.NewCoordinator(resourceProvider, nil, govMetrics, governor.CoordinatorConfig{
+		StorageBudgetBytes: 50 * 1024 * 1024,
+	}, time.Now)
+	if err != nil {
+		t.Fatalf("failed to create coordinator: %v", err)
+	}
+
+	// 8. Start Ingestion Loop in background
 	var ingestWg sync.WaitGroup
 	ingestWg.Add(1)
 	go func() {
@@ -87,7 +110,7 @@ func TestMeasurement_FinalizeAfterDrain_QueuedEventsReconciled(t *testing.T) {
 		ingestEngine.Run(ctx, drainCtx, eventQ.Out())
 	}()
 
-	// 8. Submit batch of 20 events into event queue
+	// 9. Submit batch of 20 events into event queue
 	const totalQueuedEvents = 20
 	for i := 1; i <= totalQueuedEvents; i++ {
 		ev := &events.CanonicalEvent{
@@ -101,76 +124,93 @@ func TestMeasurement_FinalizeAfterDrain_QueuedEventsReconciled(t *testing.T) {
 				"pid":             2000 + i,
 			},
 		}
-		eventQ.In() <- ev
+		if err := eventQ.Enqueue(context.Background(), ev); err != nil {
+			t.Fatalf("failed to enqueue event %d: %v", i, err)
+		}
 	}
 
-	// 9. Measurement expires while events are still queued / being ingested
-	// Measurement expiry triggers the shared shutdown path
-	shutdownCoord.Trigger("MEASUREMENT_COMPLETE")
-
-	// 10. Execute the shared production shutdown sequence:
-	// A) Stop accepting new events and drain the queue
-	eventQ.Close()
-
-	// B) Wait for ingestion loop to finish draining all queued events
-	ingestWg.Wait()
-	eventQ.WaitDrain()
-
-	// C) Inspect durable storage state BEFORE closing database
-	storageSnap := resourcereport.InspectDurableStorage(db.GetDB(), &initialBacklog)
-	ingestAcc := ingestEngine.Accounting()
-
-	// D) Construct final accounting summary
-	finalAccounting := &resourcereport.EventAccountingSummary{
-		IngestionOutcome: resourcereport.IngestionOutcomeSummary{
-			IngestedTotal:           ingestAcc.IngestedTotal,
-			CommittedTotal:          ingestAcc.CommittedTotal,
-			FailedBeforeCommitTotal: ingestAcc.FailedBeforeCommitTotal,
-			RecoveredDLQTotal:       ingestAcc.RecoveredDLQTotal,
-			SpilledDiskTotal:        ingestAcc.SpilledDiskTotal,
-			DroppedTotal:            ingestAcc.DroppedTotal,
-			ReconciliationValid:     ingestAcc.IngestionOutcomeReconciled(),
-		},
-		Forwarder: resourcereport.ForwarderAccountingSummary{
-			AttemptsTotal:           0,
-			HTTPAcceptedTotal:       0,
-			DLQTotal:                0,
-			RetryTotal:              0,
-			LocalRemovedTotal:       0,
-			LocalRemovalErrorsTotal: 0,
-		},
-		Queue: resourcereport.QueueAccountingSummary{
-			BlockedEnqueueAttemptsTotal: eventQ.BlockedEnqueueAttemptsTotal(),
-			PressureEpisodesTotal:       eventQ.PressureEpisodesTotal(),
-			TimeSpentFullSeconds:        eventQ.TimeSpentFullSeconds(),
-		},
-		Storage: storageSnap,
-
-		// Flat compatibility fields
-		IngestedTotal:           ingestAcc.IngestedTotal,
-		CommittedTotal:          ingestAcc.CommittedTotal,
-		ForwardedTotal:          0,
-		FailedBeforeCommitTotal: ingestAcc.FailedBeforeCommitTotal,
-		RecoveredDLQTotal:       ingestAcc.RecoveredDLQTotal,
-		SpilledDiskTotal:        ingestAcc.SpilledDiskTotal,
-		DroppedTotal:            ingestAcc.DroppedTotal,
-		BackpressureEventsTotal: eventQ.BlockedEnqueueAttemptsTotal(),
-		ReconciliationValid:     ingestAcc.IngestionOutcomeReconciled(),
+	// First event enters BeforeProcess and blocks on <-barrier.
+	// Remaining 19 events are buffered in the queue.
+	time.Sleep(20 * time.Millisecond)
+	if eventQ.Depth().Value < 18 {
+		t.Fatalf("expected queue depth >= 18 while ingestion is held behind barrier, got %d", eventQ.Depth().Value)
 	}
 
-	// E) Attach accounting and finalize the report
-	reporter.SetAccounting(finalAccounting)
-	finalReport, err := reporter.Finalize(shutdownCoord.Outcome())
+	// 10. Start actual measurement runner: will run for 50ms and trigger shutdown on expiry
+	var measureWg sync.WaitGroup
+	var measureErr error
+	measureWg.Add(1)
+	go func() {
+		defer measureWg.Done()
+		measureErr = resourcereport.RunMeasurementRunner(
+			ctx,
+			reportCfg,
+			reporter,
+			coord,
+			govMetrics,
+			func() governor.RuntimeSignals {
+				return governor.RuntimeSignals{
+					QueueDepth:        eventQ.Depth(),
+					QueueCapacity:     eventQ.Capacity(),
+					QueueOldestAgeSec: eventQ.OldestEventAge(),
+				}
+			},
+			shutdownCoord,
+			func() (uint64, uint64) {
+				return eventQ.BlockedEnqueueAttemptsTotal(), eventQ.PressureEpisodesTotal()
+			},
+		)
+	}()
+	measureJoin := func() error {
+		measureWg.Wait()
+		return measureErr
+	}
+
+	// 11. Wait for actual measurement expiry to trigger the shared shutdown path
+	select {
+	case <-ctx.Done():
+		// Measurement timer expired!
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for actual measurement expiry")
+	}
+
+	if shutdownCoord.Outcome() != "MEASUREMENT_COMPLETE" {
+		t.Fatalf("expected outcome MEASUREMENT_COMPLETE, got %s", shutdownCoord.Outcome())
+	}
+
+	// 12. Release ingestion barrier so queued events can drain to SQLite
+	close(barrier)
+
+	// 13. Execute the SHARED production shutdown sequence
+	shutdownErr := resourcereport.ExecuteShutdown(resourcereport.ShutdownParams{
+		Context:              ctx,
+		ShutdownCoord:        shutdownCoord,
+		Collectors:           nil,
+		EventQueue:           eventQ,
+		IngestWait:           &ingestWg,
+		Forwarder:            nil,
+		MeasureJoin:          measureJoin,
+		Storage:              db,
+		RawDB:                db.GetDB(),
+		InitialPendingEvents: &initialBacklog,
+		IngestionAccounting:  ingestEngine.Accounting,
+		Reporter:             reporter,
+	})
+	if shutdownErr != nil {
+		t.Fatalf("shared ExecuteShutdown returned error: %v", shutdownErr)
+	}
+
+	// 14. Assertions on Final Report and Durable Accounting
+	data, err := os.ReadFile(reportPath)
 	if err != nil {
-		t.Fatalf("failed to finalize report: %v", err)
+		t.Fatalf("failed to read written report file: %v", err)
 	}
 
-	// F) Close database
-	if err := db.Close(); err != nil {
-		t.Fatalf("failed to close storage: %v", err)
+	var finalReport resourcereport.Report
+	if err := json.Unmarshal(data, &finalReport); err != nil {
+		t.Fatalf("failed to unmarshal written report JSON: %v", err)
 	}
 
-	// 11. Assertions on Final Report and Durable Accounting
 	if finalReport.Summary.ShutdownOutcome != "MEASUREMENT_COMPLETE" {
 		t.Fatalf("expected shutdown outcome MEASUREMENT_COMPLETE, got %s", finalReport.Summary.ShutdownOutcome)
 	}
@@ -201,20 +241,79 @@ func TestMeasurement_FinalizeAfterDrain_QueuedEventsReconciled(t *testing.T) {
 	if acc.Storage.DerivedFindingsEvents == nil || *acc.Storage.DerivedFindingsEvents != 0 {
 		t.Fatalf("expected 0 derived findings, got %v", acc.Storage.DerivedFindingsEvents)
 	}
+}
 
-	// Verify report file was written to disk and unmarshals cleanly
+type failingStopper struct {
+	err error
+}
+
+func (f *failingStopper) Stop() error {
+	return f.err
+}
+
+// TestMeasurement_ShutdownCapturesErrors verifies that collector and forwarder stop failures
+// are captured, affect the final outcome string in the report, and cause ExecuteShutdown to fail.
+func TestMeasurement_ShutdownCapturesErrors(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "fail_agent.db")
+	idPath := filepath.Join(tmpDir, "identity.json")
+	reportPath := filepath.Join(tmpDir, "fail_report.json")
+
+	db := storage.NewSQLiteStorage(dbPath, idPath, 10*1024*1024)
+	if err := db.Init(context.Background()); err != nil {
+		t.Fatalf("failed to init SQLite storage: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, drainCancel := context.WithCancel(context.Background())
+	defer drainCancel()
+
+	shutdownCoord := resourcereport.NewShutdownCoordinator(cancel, drainCancel, 5*time.Second)
+	shutdownCoord.Trigger("SIGNAL_SIGINT")
+
+	reportCfg := resourcereport.Config{
+		ReportPath: reportPath,
+		Profile:    "test-fail-capture",
+		Duration:   time.Second,
+		Interval:   100 * time.Millisecond,
+		DBPath:     dbPath,
+	}
+	reporter := resourcereport.NewReporter(reportCfg, nil)
+
+	colErr := errors.New("usb collector hardware lock failure")
+	fwdErr := errors.New("forwarder flush failure")
+
+	collectors := []interfaces.Stopper{
+		&failingStopper{err: colErr},
+	}
+	fwdStopper := &failingStopper{err: fwdErr}
+
+	shutdownErr := resourcereport.ExecuteShutdown(resourcereport.ShutdownParams{
+		Context:       ctx,
+		ShutdownCoord: shutdownCoord,
+		Collectors:    collectors,
+		Forwarder:     fwdStopper,
+		Storage:       db,
+		Reporter:      reporter,
+	})
+
+	if shutdownErr == nil {
+		t.Fatalf("expected ExecuteShutdown to return aggregated error, got nil")
+	}
+
+	// Verify report outcome reflects failure
 	data, err := os.ReadFile(reportPath)
 	if err != nil {
-		t.Fatalf("failed to read written report file: %v", err)
+		t.Fatalf("failed to read report: %v", err)
 	}
 
-	var diskReport resourcereport.Report
-	if err := json.Unmarshal(data, &diskReport); err != nil {
-		t.Fatalf("failed to unmarshal written report JSON: %v", err)
+	var rep resourcereport.Report
+	if err := json.Unmarshal(data, &rep); err != nil {
+		t.Fatalf("failed to unmarshal report: %v", err)
 	}
 
-	if diskReport.Summary.EventAccounting.IngestionOutcome.CommittedTotal != totalQueuedEvents {
-		t.Fatalf("persisted report committed_total mismatch: expected %d, got %d",
-			totalQueuedEvents, diskReport.Summary.EventAccounting.IngestionOutcome.CommittedTotal)
+	if rep.Summary.ShutdownOutcome != "SIGNAL_SIGINT_WITH_ERRORS: collector stop: usb collector hardware lock failure\nforwarder stop: forwarder flush failure" {
+		t.Fatalf("unexpected shutdown outcome: %s", rep.Summary.ShutdownOutcome)
 	}
 }

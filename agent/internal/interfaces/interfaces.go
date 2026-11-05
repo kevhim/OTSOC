@@ -6,6 +6,11 @@ import (
 	"redcyberfox/pkg/events"
 )
 
+// Stopper represents any component that can be gracefully stopped and returns an error.
+type Stopper interface {
+	Stop() error
+}
+
 type Collector interface {
 	Start(ctx context.Context, out chan<- *events.CanonicalEvent) error
 	Stop() error

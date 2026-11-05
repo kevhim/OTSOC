@@ -1,6 +1,8 @@
 package eventqueue
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -67,14 +69,16 @@ func TestEventQueue_FIFOAndAge(t *testing.T) {
 func TestEventQueue_BackpressureAndBlockedEnqueueAttempts(t *testing.T) {
 	capacity := 4
 	q := New(capacity)
+	defer q.Close()
 
-	// Fill queue to capacity (4 items)
+	ctx := context.Background()
+
+	// Fill queue to capacity (4 items) via instrumented Enqueue API
 	for i := 1; i <= capacity; i++ {
-		q.In() <- &events.CanonicalEvent{EventID: fmt.Sprintf("ev-%d", i)}
+		if err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: fmt.Sprintf("ev-%d", i)}); err != nil {
+			t.Fatalf("unexpected err filling queue: %v", err)
+		}
 	}
-
-	// Allow inPump to process items into the ring buffer
-	time.Sleep(30 * time.Millisecond)
 
 	if q.Depth().Value != uint64(capacity) {
 		t.Fatalf("expected depth %d, got %d", capacity, q.Depth().Value)
@@ -89,10 +93,12 @@ func TestEventQueue_BackpressureAndBlockedEnqueueAttempts(t *testing.T) {
 		t.Fatalf("expected 0 blocked enqueue attempts while filling to capacity, got %d", q.BlockedEnqueueAttemptsTotal())
 	}
 
-	// Attempt to send 5th event: must block
+	// Attempt to send 5th event: must block in Enqueue
 	ev5Sent := make(chan struct{})
 	go func() {
-		q.In() <- &events.CanonicalEvent{EventID: "ev-5"}
+		if err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "ev-5"}); err != nil {
+			t.Errorf("unexpected err ev-5: %v", err)
+		}
 		close(ev5Sent)
 	}()
 
@@ -100,7 +106,7 @@ func TestEventQueue_BackpressureAndBlockedEnqueueAttempts(t *testing.T) {
 	case <-ev5Sent:
 		t.Fatalf("expected send of ev-5 to block on full queue, but it completed immediately")
 	case <-time.After(40 * time.Millisecond):
-		// Expected to block on unbuffered channel while queue is full
+		// Expected to block while queue is full
 	}
 
 	// Read 1 item from Out to unblock ev-5
@@ -125,8 +131,6 @@ func TestEventQueue_BackpressureAndBlockedEnqueueAttempts(t *testing.T) {
 		t.Fatalf("expected 2 pressure episodes, got %d", q.PressureEpisodesTotal())
 	}
 
-	// Allow pump to settle
-	time.Sleep(30 * time.Millisecond)
 	if q.Depth().Value != uint64(capacity) {
 		t.Fatalf("expected depth back at capacity %d, got %d", capacity, q.Depth().Value)
 	}
@@ -137,15 +141,17 @@ func TestEventQueue_BackpressureAndBlockedEnqueueAttempts(t *testing.T) {
 	}
 
 	// Drain everything
-	q.Close()
-	var drainedCount int
-	for range q.Out() {
-		drainedCount++
+	var drained []string
+	for i := 0; i < capacity; i++ {
+		out := <-q.Out()
+		drained = append(drained, out.EventID)
 	}
-	q.WaitDrain()
 
-	if drainedCount != 4 { // ev-2, ev-3, ev-4, ev-5
-		t.Fatalf("expected 4 remaining items drained, got %d", drainedCount)
+	if len(drained) != 4 { // ev-2, ev-3, ev-4, ev-5
+		t.Fatalf("expected 4 remaining items drained, got %d", len(drained))
+	}
+	if drained[0] != "ev-2" || drained[3] != "ev-5" {
+		t.Fatalf("unexpected drained items: %v", drained)
 	}
 }
 
@@ -215,5 +221,183 @@ func TestEventQueue_ConcurrentSenders(t *testing.T) {
 	// Under high contention on capacity 20 with 500 events, blocked attempts should be observed
 	if q.BlockedEnqueueAttemptsTotal() == 0 {
 		t.Fatalf("expected blocked enqueue attempts > 0 under contention")
+	}
+}
+
+func TestEventQueue_InstrumentedEnqueue_MultipleBlockedProducers(t *testing.T) {
+	capacity := 2
+	q := New(capacity)
+	defer q.Close()
+
+	ctx := context.Background()
+
+	// Fill queue to capacity (2 items)
+	if err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "ev-1"}); err != nil {
+		t.Fatalf("unexpected err ev-1: %v", err)
+	}
+	if err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "ev-2"}); err != nil {
+		t.Fatalf("unexpected err ev-2: %v", err)
+	}
+
+	if q.Depth().Value != 2 {
+		t.Fatalf("expected depth 2, got %d", q.Depth().Value)
+	}
+	if q.BlockedEnqueueAttemptsTotal() != 0 {
+		t.Fatalf("expected 0 blocked attempts before saturation, got %d", q.BlockedEnqueueAttemptsTotal())
+	}
+	if q.PressureEpisodesTotal() != 1 {
+		t.Fatalf("expected 1 pressure episode, got %d", q.PressureEpisodesTotal())
+	}
+
+	// Launch 3 concurrent producers attempting to Enqueue on full queue
+	const blockedProducers = 3
+	var startedWg sync.WaitGroup
+	var completedWg sync.WaitGroup
+	errCh := make(chan error, blockedProducers)
+
+	startedWg.Add(blockedProducers)
+	completedWg.Add(blockedProducers)
+
+	for i := 1; i <= blockedProducers; i++ {
+		go func(id int) {
+			ev := &events.CanonicalEvent{EventID: fmt.Sprintf("blocked-ev-%d", id)}
+			startedWg.Done()
+			err := q.Enqueue(ctx, ev)
+			errCh <- err
+			completedWg.Done()
+		}(i)
+	}
+
+	startedWg.Wait()
+
+	// Wait deterministically for all 3 producers to be recorded as blocked
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for q.BlockedEnqueueAttemptsTotal() < blockedProducers && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if q.BlockedEnqueueAttemptsTotal() != blockedProducers {
+		t.Fatalf("expected %d blocked enqueue attempts, got %d", blockedProducers, q.BlockedEnqueueAttemptsTotal())
+	}
+
+	// Verify all 3 producers are still blocked (no errors on errCh)
+	select {
+	case err := <-errCh:
+		t.Fatalf("producer completed prematurely with error: %v", err)
+	default:
+	}
+
+	// Dequeue 2 items from Out to allow waiting producers to be admitted
+	out1 := <-q.Out()
+	if out1.EventID != "ev-1" {
+		t.Fatalf("expected ev-1, got %s", out1.EventID)
+	}
+	out2 := <-q.Out()
+	if out2.EventID != "ev-2" {
+		t.Fatalf("expected ev-2, got %s", out2.EventID)
+	}
+
+	// Dequeue remaining items as producers are admitted
+	var admittedEvents []string
+	drainDone := make(chan struct{})
+	go func() {
+		for i := 0; i < blockedProducers; i++ {
+			admitted := <-q.Out()
+			admittedEvents = append(admittedEvents, admitted.EventID)
+		}
+		close(drainDone)
+	}()
+
+	completedWg.Wait()
+	<-drainDone
+
+	for i := 0; i < blockedProducers; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("producer failed with error: %v", err)
+		}
+	}
+
+	if len(admittedEvents) != blockedProducers {
+		t.Fatalf("expected %d admitted events, got %d", blockedProducers, len(admittedEvents))
+	}
+}
+
+func TestEventQueue_InstrumentedEnqueue_ContextCancellation(t *testing.T) {
+	capacity := 1
+	q := New(capacity)
+	defer q.Close()
+
+	if err := q.Enqueue(context.Background(), &events.CanonicalEvent{EventID: "initial-ev"}); err != nil {
+		t.Fatalf("failed initial enqueue: %v", err)
+	}
+
+	// Create cancellable context
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+
+	go func() {
+		err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "cancelled-ev"})
+		errCh <- err
+	}()
+
+	// Wait deterministically until enqueue blocks
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for q.BlockedEnqueueAttemptsTotal() < 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if q.BlockedEnqueueAttemptsTotal() != 1 {
+		t.Fatalf("expected 1 blocked enqueue attempt, got %d", q.BlockedEnqueueAttemptsTotal())
+	}
+
+	// Cancel context while producer is blocked
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for cancelled producer to return")
+	}
+
+	// Verify queue is healthy and can continue operating
+	out := <-q.Out()
+	if out.EventID != "initial-ev" {
+		t.Fatalf("expected initial-ev, got: %s", out.EventID)
+	}
+
+	// Can enqueue new event with fresh context
+	if err := q.Enqueue(context.Background(), &events.CanonicalEvent{EventID: "recovery-ev"}); err != nil {
+		t.Fatalf("failed recovery enqueue: %v", err)
+	}
+
+	out2 := <-q.Out()
+	if out2.EventID != "recovery-ev" {
+		t.Fatalf("expected recovery-ev, got: %s", out2.EventID)
+	}
+}
+
+func TestEventQueue_TryEnqueue(t *testing.T) {
+	q := New(1)
+	defer q.Close()
+
+	ok, err := q.TryEnqueue(&events.CanonicalEvent{EventID: "try-1"})
+	if !ok || err != nil {
+		t.Fatalf("expected TryEnqueue ok, got ok=%v, err=%v", ok, err)
+	}
+
+	// TryEnqueue on full queue should return false, nil without blocking
+	ok, err = q.TryEnqueue(&events.CanonicalEvent{EventID: "try-2"})
+	if ok || err != nil {
+		t.Fatalf("expected TryEnqueue false on full queue, got ok=%v, err=%v", ok, err)
+	}
+
+	<-q.Out()
+
+	ok, err = q.TryEnqueue(&events.CanonicalEvent{EventID: "try-3"})
+	if !ok || err != nil {
+		t.Fatalf("expected TryEnqueue ok after freeing slot, got ok=%v, err=%v", ok, err)
 	}
 }

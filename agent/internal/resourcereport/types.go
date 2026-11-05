@@ -87,6 +87,11 @@ type IngestionOutcomeSummary struct {
 }
 
 // ForwarderAccountingSummary summarizes upstream forwarding and local deletion outcomes.
+//
+// HTTP Accepted Accounting Contract:
+// HTTPAcceptedTotal records total accepted HTTP responses (HTTP 202) received from the upstream
+// ingest server, including any repeats/retries. It represents accepted HTTP responses, NOT a claim
+// of unique-event delivery.
 type ForwarderAccountingSummary struct {
 	AttemptsTotal           uint64 `json:"attempts_total"`
 	HTTPAcceptedTotal       uint64 `json:"http_accepted_total"`

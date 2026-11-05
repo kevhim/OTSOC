@@ -1,6 +1,8 @@
 package eventqueue
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -9,9 +11,20 @@ import (
 	"redcyberfox/pkg/events"
 )
 
+var (
+	// ErrQueueClosed indicates that the queue is closed and cannot accept new events.
+	ErrQueueClosed = errors.New("event queue is closed")
+)
+
 type item struct {
 	event      *events.CanonicalEvent
 	enqueuedAt time.Time
+}
+
+type enqueueWaiter struct {
+	ev    *events.CanonicalEvent
+	ready chan struct{}
+	err   error
 }
 
 // EventQueue is an instrumented, bounded FIFO queue with a fixed-size ring buffer.
@@ -21,13 +34,13 @@ type item struct {
 // Backpressure Semantics:
 //  1. BlockedEnqueueAttemptsTotal: Counts each distinct event enqueue attempt that
 //     was blocked waiting for downstream capacity because the queue was at maximum capacity.
+//     This metric is instrumented directly via Enqueue(ctx, ev).
 //  2. PressureEpisodesTotal: Counts each discrete transition into the 100% saturated
 //     state (count == capacity). A continuous period of saturation counts as 1 episode.
 //  3. TimeSpentFullSeconds: Measures the cumulative elapsed duration in seconds the queue
 //     remained at 100% saturation.
 type EventQueue struct {
 	mu       sync.Mutex
-	notFull  *sync.Cond
 	notEmpty *sync.Cond
 
 	capacity int
@@ -36,6 +49,7 @@ type EventQueue struct {
 	tail     int
 	count    int
 	closed   bool
+	waiters  []*enqueueWaiter
 
 	inCh      chan *events.CanonicalEvent
 	outCh     chan *events.CanonicalEvent
@@ -61,7 +75,6 @@ func New(capacity int) *EventQueue {
 		outCh:    make(chan *events.CanonicalEvent),
 		done:     make(chan struct{}),
 	}
-	q.notFull = sync.NewCond(&q.mu)
 	q.notEmpty = sync.NewCond(&q.mu)
 
 	go q.inPump()
@@ -70,6 +83,7 @@ func New(capacity int) *EventQueue {
 }
 
 // In returns the write-only channel for collectors to submit events.
+// Note: Submissions via In() are bridged internally to Enqueue(context.Background(), ev).
 func (q *EventQueue) In() chan<- *events.CanonicalEvent {
 	return q.inCh
 }
@@ -77,6 +91,110 @@ func (q *EventQueue) In() chan<- *events.CanonicalEvent {
 // Out returns the read-only channel for the ingestion engine to receive events.
 func (q *EventQueue) Out() <-chan *events.CanonicalEvent {
 	return q.outCh
+}
+
+// Enqueue provides the instrumented enqueue API. It blocks until capacity is available,
+// ctx is cancelled, or the queue is closed. If the queue is at capacity, the call
+// increments BlockedEnqueueAttemptsTotal and waits for a consumer to free a slot.
+func (q *EventQueue) Enqueue(ctx context.Context, ev *events.CanonicalEvent) error {
+	if ev == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	q.mu.Lock()
+	if q.closed {
+		q.mu.Unlock()
+		return ErrQueueClosed
+	}
+
+	// If capacity is available and no previous waiters are queued:
+	if q.count < q.capacity && len(q.waiters) == 0 {
+		wasEmpty := (q.count == 0)
+		q.ring[q.tail] = item{
+			event:      ev,
+			enqueuedAt: time.Now(),
+		}
+		q.tail = (q.tail + 1) % q.capacity
+		q.count++
+
+		if q.count == q.capacity {
+			q.pressureEpisodes.Add(1)
+			q.fullStartTime = time.Now()
+		}
+		if wasEmpty {
+			q.notEmpty.Signal()
+		}
+		q.mu.Unlock()
+		return nil
+	}
+
+	// Queue is full or prior waiters exist: this attempt is blocked.
+	q.blockedEnqueueAttempts.Add(1)
+
+	w := &enqueueWaiter{
+		ev:    ev,
+		ready: make(chan struct{}),
+	}
+	q.waiters = append(q.waiters, w)
+	q.mu.Unlock()
+
+	select {
+	case <-w.ready:
+		return w.err
+	case <-ctx.Done():
+		q.mu.Lock()
+		// Double check if w was already fulfilled just as ctx cancelled
+		select {
+		case <-w.ready:
+			q.mu.Unlock()
+			return w.err
+		default:
+		}
+
+		for i, cand := range q.waiters {
+			if cand == w {
+				q.waiters = append(q.waiters[:i], q.waiters[i+1:]...)
+				break
+			}
+		}
+		q.mu.Unlock()
+		return ctx.Err()
+	}
+}
+
+// TryEnqueue attempts to enqueue an event without blocking. Returns true if enqueued,
+// false if the queue is full, or ErrQueueClosed if closed.
+func (q *EventQueue) TryEnqueue(ev *events.CanonicalEvent) (bool, error) {
+	if ev == nil {
+		return true, nil
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if q.closed {
+		return false, ErrQueueClosed
+	}
+	if q.count < q.capacity && len(q.waiters) == 0 {
+		wasEmpty := (q.count == 0)
+		q.ring[q.tail] = item{
+			event:      ev,
+			enqueuedAt: time.Now(),
+		}
+		q.tail = (q.tail + 1) % q.capacity
+		q.count++
+		if q.count == q.capacity {
+			q.pressureEpisodes.Add(1)
+			q.fullStartTime = time.Now()
+		}
+		if wasEmpty {
+			q.notEmpty.Signal()
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 // Close gracefully stops accepting new events into the queue by closing In.
@@ -155,64 +273,21 @@ func (q *EventQueue) TimeSpentFullSeconds() float64 {
 }
 
 func (q *EventQueue) inPump() {
-	for {
-		q.mu.Lock()
-		wasFull := false
-		for q.count == q.capacity && !q.closed {
-			wasFull = true
-			q.notFull.Wait()
+	for ev := range q.inCh {
+		if err := q.Enqueue(context.Background(), ev); err != nil {
+			break
 		}
-		if q.closed {
-			q.mu.Unlock()
-			return
-		}
-		q.mu.Unlock()
-
-		var ev *events.CanonicalEvent
-		var ok bool
-
-		if wasFull {
-			// If queue was full, check if a producer was already blocked waiting to send on inCh.
-			select {
-			case ev, ok = <-q.inCh:
-				if ok {
-					q.blockedEnqueueAttempts.Add(1)
-				}
-			default:
-				ev, ok = <-q.inCh
-			}
-		} else {
-			ev, ok = <-q.inCh
-		}
-
-		if !ok {
-			q.mu.Lock()
-			q.closed = true
-			q.notEmpty.Signal()
-			q.notFull.Broadcast()
-			q.mu.Unlock()
-			return
-		}
-
-		q.mu.Lock()
-		wasEmpty := (q.count == 0)
-		q.ring[q.tail] = item{
-			event:      ev,
-			enqueuedAt: time.Now(),
-		}
-		q.tail = (q.tail + 1) % q.capacity
-		q.count++
-
-		if q.count == q.capacity {
-			q.pressureEpisodes.Add(1)
-			q.fullStartTime = time.Now()
-		}
-
-		if wasEmpty {
-			q.notEmpty.Signal()
-		}
-		q.mu.Unlock()
 	}
+
+	q.mu.Lock()
+	q.closed = true
+	for _, w := range q.waiters {
+		w.err = ErrQueueClosed
+		close(w.ready)
+	}
+	q.waiters = nil
+	q.notEmpty.Broadcast()
+	q.mu.Unlock()
 }
 
 func (q *EventQueue) outPump() {
@@ -245,8 +320,23 @@ func (q *EventQueue) outPump() {
 		}
 		q.count--
 
-		if wasFull {
-			q.notFull.Signal()
+		// If waiters are pending, immediately admit the oldest waiting producer
+		if len(q.waiters) > 0 {
+			w := q.waiters[0]
+			q.waiters = q.waiters[1:]
+
+			q.ring[q.tail] = item{
+				event:      w.ev,
+				enqueuedAt: time.Now(),
+			}
+			q.tail = (q.tail + 1) % q.capacity
+			q.count++
+
+			if q.count == q.capacity {
+				q.pressureEpisodes.Add(1)
+				q.fullStartTime = time.Now()
+			}
+			close(w.ready)
 		}
 		q.mu.Unlock()
 	}

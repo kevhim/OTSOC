@@ -297,20 +297,29 @@ Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Resource governor th
 
 ### 1. Finalize-After-Drain Lifecycle Contract
 - **Sampling vs Finalization Separation**: `resourcereport.RunMeasurementRunner` strictly separates sampling ticks from report finalization. When measurement duration expires, it triggers the shared shutdown path via `shutdownCoord.Trigger("MEASUREMENT_COMPLETE")` and returns.
-- **Ordered Drain & Shutdown Sequence (`agent/cmd/endpoint/main.go`)**:
-  1. OS signal or measurement expiry requests shared shutdown.
-  2. OS collectors (`procCol`, `fsCol`, `invCol`, `netCol`, `usbCol`) stop immediately.
-  3. Event queue closes `In()` non-blockingly via `eventQ.Close()`.
-  4. Ingestion engine drains all remaining events to durable SQLite storage (`ingestWg.Wait()`, `eventQ.WaitDrain()`).
-  5. Upstream forwarder stops (`fwd.Stop()`).
-  6. Durable storage state (`InspectDurableStorage`) and final pipeline accounting are captured BEFORE closing the database.
-  7. Final machine-readable report is persisted (`reporter.Finalize`).
-  8. SQLite database is closed (`db.Close()`).
-  9. Errors during shutdown or report writing propagate to process exit status (`os.Exit(1)`).
+- **Ordered Drain & Shutdown Sequence (`agent/internal/resourcereport/shutdown_pipeline.go`)**:
+  - Unified production shutdown implemented in `resourcereport.ExecuteShutdown` and shared between `endpoint/main.go` and integration tests without duplication:
+    1. OS signal or measurement expiry requests shared shutdown via `ShutdownCoordinator`.
+    2. OS collectors (`procCol`, `fsCol`, `invCol`, `netCol`, `usbCol`, `healthMgr`) stop; any `Stop()` errors are captured.
+    3. Event queue closes `In()` non-blockingly via `eventQ.Close()`.
+    4. Ingestion engine drains all remaining events to durable SQLite storage (`ingestWg.Wait()`, `eventQ.WaitDrain()`).
+    5. Upstream forwarder stops (`fwd.Stop()`); any `Stop()` errors are captured.
+    6. Measurement runner goroutine is joined (`MeasureJoin`); any runner errors are captured.
+    7. Global drain deadline check: errors recorded if the drain timer expired.
+    8. Durable storage state (`InspectDurableStorage`) and final pipeline accounting are captured BEFORE closing the database.
+    9. Final machine-readable report is persisted (`reporter.Finalize`). If shutdown/stop errors occurred, outcome reflects `_WITH_ERRORS: ...`.
+    10. SQLite database is closed (`db.Close()`); any close error is captured.
+    11. Any shutdown/stop/report/DB errors propagate to process exit status (`os.Exit(1)`).
 - **Production-Path Regression (`agent/internal/integration/queued_drain_report_test.go`)**:
-  - `TestMeasurement_FinalizeAfterDrain_QueuedEventsReconciled` emits a batch of events into `eventQ`.
-  - Measurement expires while events are queued.
-  - Confirms all queued events drain through ingestion, reach durable storage, and their terminal outcomes are included in the finalized report JSON.
+  - `TestMeasurement_FinalizeAfterDrain_QueuedEventsReconciled`:
+    - Holds ingestion behind an explicit barrier (`cfg.BeforeProcess`).
+    - Enqueues a batch of 20 events into `eventQ` in memory.
+    - Runs the actual measurement runner (`RunMeasurementRunner`), triggering real duration timer expiry and shared shutdown.
+    - Releases the ingestion barrier.
+    - Executes the shared `resourcereport.ExecuteShutdown` production sequence.
+    - Confirms all 20 events drain, commit to SQLite, and are reconciled in the final report JSON.
+  - `TestMeasurement_ShutdownCapturesErrors`:
+    - Verifies that collector and forwarder stop failures are captured, alter `ShutdownOutcome` with `_WITH_ERRORS`, and return an aggregated error.
 
 ### 2. Precise Accounting & Reconciliation Semantics
 - **Ingestion-Outcome Reconciliation**:
@@ -318,22 +327,23 @@ Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Resource governor th
   - It verifies local ingestion loop terminal outcomes and durability boundaries. It is NOT labeled as end-to-end delivery reconciliation and DOES NOT claim proof of zero telemetry loss across upstream network tiers or retention pruning.
 - **Explicit Component Distinctions**:
   - **Source Telemetry vs Derived Findings**: `InspectDurableStorage` explicitly separates `source_telemetry_events` from `derived_findings_events` (categorized as `detection/finding`).
-  - **Attempts vs Unique Events**: `ForwarderAccounting` separates `attempts_total` (HTTP request attempts including retries) from `http_accepted_total` (unique events receiving HTTP 202).
+  - **Accepted HTTP Responses vs Unique Events**: `HTTPAcceptedTotal` in `ForwarderAccounting` is defined strictly as total accepted HTTP responses (HTTP 202) received, including repeats/retries caused by local deletion failures or retries. It does NOT claim unique-event delivery.
   - **HTTP Acknowledgements vs Local Removals**: Separates `http_accepted_total` from `local_removed_total` (successful SQLite deletions) and `local_removal_errors_total`.
   - **Backlog & Retained State**: Records `initial_backlog_pending_events`, `durable_pending_events`, `durable_dlq_events`, and `durable_total_events`.
   - **Unsupported Metrics**: Unsupported future metrics (e.g., `pruned_events_total`) remain explicitly `nil` (`null` in JSON), never fabricated as zero.
 - **Snapshot Stability**: `IngestionEngine` and `Forwarder` guard accounting snapshots with mutexes (`accMu`), preventing live atomic counter skew and ensuring instantaneous reconciled snapshots.
 
 ### 3. Defined Backpressure Semantics (`agent/internal/eventqueue`)
-- **Blocked Enqueue Attempts (`BlockedEnqueueAttemptsTotal`)**:
-  - Counts each distinct event submission attempt where a producer had to wait because the queue was at 100% capacity.
-  - Implemented via non-blocking receive check on unblock, guaranteeing exact 1-to-1 counting per blocked producer event.
-  - Loop iterations while full are NEVER counted as blocked events.
+- **Instrumented Enqueue API (`Enqueue`, `TryEnqueue`)**:
+  - Replaces inferred channel counting with an instrumented API `Enqueue(ctx context.Context, ev *events.CanonicalEvent) error`.
+  - Directly tracks `BlockedEnqueueAttemptsTotal` when a producer attempts to enqueue into a queue at 100% capacity.
+  - Features a FIFO waiter queue with deterministic context cancellation support: producers whose contexts expire while waiting are cleanly unblocked (`ctx.Err()`) without queue corruption or dangling state.
+  - Channel `In()` is maintained as an adapter for legacy channel-based collectors.
 - **Pressure Episodes (`PressureEpisodesTotal`)**:
   - Counts discrete transitions into the saturated state (`count == capacity`). A continuous episode of saturation increments this counter exactly once.
 - **Time Spent Full (`TimeSpentFullSeconds`)**:
   - Measures the exact cumulative elapsed duration in seconds the queue spent at 100% saturation.
-- **Unit & Race Tests**: [`queue_test.go`](file:///d:/Desktop/OT-SOC/redcyberfox-ot-soc/agent/internal/eventqueue/queue_test.go) tests FIFO delivery, age progression, blocked attempt counts under capacity, pressure episodes, and concurrent senders under the race detector.
+- **Unit & Race Tests**: [`queue_test.go`](file:///d:/Desktop/OT-SOC/redcyberfox-ot-soc/agent/internal/eventqueue/queue_test.go) tests FIFO delivery, age progression, instrumented enqueue with multiple blocked concurrent producers, context cancellation unblocking, `TryEnqueue`, pressure episodes, and concurrent senders under the 64-bit UCRT64 CGO race detector.
 
 ### 4. Verification Outcomes
 - `scripts/verify-phase4.ps1 -Race -NativeDetection`: 9/9 PASS.

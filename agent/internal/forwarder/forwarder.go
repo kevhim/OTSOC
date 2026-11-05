@@ -20,6 +20,12 @@ import (
 )
 
 // ForwarderAccounting records observable metrics for forwarded events.
+//
+// HTTP Accepted Accounting Contract:
+// HTTPAcceptedTotal counts total accepted HTTP responses (HTTP 202) received from the upstream
+// ingest server, including any repeats/retries caused by local deletion failures, duplicate delivery,
+// or retried requests. It specifically represents accepted HTTP response count, NOT a count of
+// proven unique events, as deduplication requires an authoritative bounded window mechanism.
 type ForwarderAccounting struct {
 	AttemptsTotal           uint64 `json:"attempts_total"`
 	HTTPAcceptedTotal       uint64 `json:"http_accepted_total"`

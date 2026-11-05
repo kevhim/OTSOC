@@ -23,6 +23,7 @@ import (
 	"redcyberfox/agent/internal/governor"
 	"redcyberfox/agent/internal/health"
 	"redcyberfox/agent/internal/ingestion"
+	"redcyberfox/agent/internal/interfaces"
 	"redcyberfox/agent/internal/resourcereport"
 	"redcyberfox/agent/internal/storage"
 	"redcyberfox/pkg/events"
@@ -136,6 +137,7 @@ func main() {
 	// Storage pressure evaluation remains unresolved pending an authoritative persistence budget policy.
 	var coordinator *governor.Coordinator
 	var reporter *resourcereport.Reporter
+	var measureJoin func() error = func() error { return nil }
 	resourceProvider, err := governor.NewSQLiteResourceProvider(agentDBPath, time.Now)
 	if err != nil {
 		log.Printf("Resource monitoring unavailable: %v", err)
@@ -190,7 +192,16 @@ func main() {
 					reporter = resourcereport.NewReporter(reportCfg, reportRules)
 					log.Printf("Starting bounded measurement mode (duration: %v, interval: %v, report: %q)...",
 						*measureDuration, *measureInterval, *measureReport)
+					var measureWg sync.WaitGroup
+					var measureErr error
+					measureWg.Add(1)
+					measureJoin = func() error {
+						measureWg.Wait()
+						return measureErr
+					}
+
 					go func() {
+						defer measureWg.Done()
 						if runErr := resourcereport.RunMeasurementRunner(
 							ctx,
 							reportCfg,
@@ -211,6 +222,7 @@ func main() {
 							},
 						); runErr != nil {
 							log.Printf("Measurement runner error: %v", runErr)
+							measureErr = runErr
 						}
 					}()
 				}
@@ -284,82 +296,27 @@ func main() {
 	log.Println("Endpoint Agent shutdown sequence initiated.")
 
 	// Shutdown Sequence
-	// 1. Stop Collectors (stops OS collection, waits for collector to exit)
-	procCol.Stop()
-	fsCol.Stop()
-	invCol.Stop()
-	netCol.Stop()
-	usbCol.Stop()
-
-	// 2. Close event queue to drain the ingestion loop
-	eventQ.Close()
-
-	// 3. Wait for ingestion loop to finish draining and exit
-	ingestWg.Wait()
-	eventQ.WaitDrain()
-
-	// 4. Stop Forwarder (waits for forwarding loop to exit)
-	fwd.Stop()
-
-	// 5. Inspect durable storage before DB close & finalize measurement report
-	var shutdownErr error
-	if reporter != nil {
-		storageSnap := resourcereport.InspectDurableStorage(db.GetDB(), initialPendingEvents)
-		ingestAcc := ingestEngine.Accounting()
-		fwdAcc := fwd.Accounting()
-
-		finalAccounting := &resourcereport.EventAccountingSummary{
-			IngestionOutcome: resourcereport.IngestionOutcomeSummary{
-				IngestedTotal:           ingestAcc.IngestedTotal,
-				CommittedTotal:          ingestAcc.CommittedTotal,
-				FailedBeforeCommitTotal: ingestAcc.FailedBeforeCommitTotal,
-				RecoveredDLQTotal:       ingestAcc.RecoveredDLQTotal,
-				SpilledDiskTotal:        ingestAcc.SpilledDiskTotal,
-				DroppedTotal:            ingestAcc.DroppedTotal,
-				ReconciliationValid:     ingestAcc.IngestionOutcomeReconciled(),
-			},
-			Forwarder: resourcereport.ForwarderAccountingSummary{
-				AttemptsTotal:           fwdAcc.AttemptsTotal,
-				HTTPAcceptedTotal:       fwdAcc.HTTPAcceptedTotal,
-				DLQTotal:                fwdAcc.DLQTotal,
-				RetryTotal:              fwdAcc.RetryTotal,
-				LocalRemovedTotal:       fwdAcc.LocalRemovedTotal,
-				LocalRemovalErrorsTotal: fwdAcc.LocalRemovalErrorsTotal,
-			},
-			Queue: resourcereport.QueueAccountingSummary{
-				BlockedEnqueueAttemptsTotal: eventQ.BlockedEnqueueAttemptsTotal(),
-				PressureEpisodesTotal:       eventQ.PressureEpisodesTotal(),
-				TimeSpentFullSeconds:        eventQ.TimeSpentFullSeconds(),
-			},
-			Storage: storageSnap,
-
-			// Flat compatibility fields
-			IngestedTotal:           ingestAcc.IngestedTotal,
-			CommittedTotal:          ingestAcc.CommittedTotal,
-			ForwardedTotal:          fwdAcc.HTTPAcceptedTotal,
-			FailedBeforeCommitTotal: ingestAcc.FailedBeforeCommitTotal,
-			RecoveredDLQTotal:       ingestAcc.RecoveredDLQTotal,
-			SpilledDiskTotal:        ingestAcc.SpilledDiskTotal,
-			DroppedTotal:            ingestAcc.DroppedTotal,
-			BackpressureEventsTotal: eventQ.BlockedEnqueueAttemptsTotal(),
-			ReconciliationValid:     ingestAcc.IngestionOutcomeReconciled(),
-		}
-
-		reporter.SetAccounting(finalAccounting)
-		outcome := shutdownCoord.Outcome()
-		if _, err := reporter.Finalize(outcome); err != nil {
-			log.Printf("ERROR: Failed to finalize measurement report: %v", err)
-			shutdownErr = err
-		}
+	var collectors []interfaces.Stopper
+	collectors = append(collectors, procCol, fsCol, invCol, netCol, usbCol)
+	if healthMgr != nil {
+		collectors = append(collectors, healthMgr)
 	}
 
-	// 6. Close Storage
-	if err := db.Close(); err != nil {
-		log.Printf("ERROR: Failed to close storage: %v", err)
-		if shutdownErr == nil {
-			shutdownErr = err
-		}
-	}
+	shutdownErr := resourcereport.ExecuteShutdown(resourcereport.ShutdownParams{
+		Context:              ctx,
+		ShutdownCoord:        shutdownCoord,
+		Collectors:           collectors,
+		EventQueue:           eventQ,
+		IngestWait:           &ingestWg,
+		Forwarder:            fwd,
+		MeasureJoin:          measureJoin,
+		Storage:              db,
+		RawDB:                db.GetDB(),
+		InitialPendingEvents: initialPendingEvents,
+		IngestionAccounting:  ingestEngine.Accounting,
+		ForwarderAccounting:  fwd.Accounting,
+		Reporter:             reporter,
+	})
 
 	if shutdownErr != nil {
 		log.Printf("Endpoint Agent shutdown completed with errors: %v", shutdownErr)
