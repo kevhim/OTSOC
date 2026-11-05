@@ -46,17 +46,20 @@ type enqueueWaiter struct {
 //  4. Memory Boundedness: Total queue-owned events and waiter records are strictly bounded
 //     by capacity + maxWaiters. Submissions beyond this bound fail with ErrQueueAtCapacity.
 type EventQueue struct {
-	mu       sync.Mutex
-	notEmpty *sync.Cond
+	mu                 sync.Mutex
+	notEmpty           *sync.Cond
+	admissionAvailable *sync.Cond
 
-	capacity   int
-	maxWaiters int
-	ring       []item
-	head       int
-	tail       int
-	count      int
-	closed     bool
-	waiters    []*enqueueWaiter
+	capacity            int
+	maxWaiters          int
+	ring                []item
+	head                int
+	tail                int
+	count               int
+	closed              bool
+	waiters             []*enqueueWaiter
+	adapterWaiting      bool
+	closeAbortedAdapter bool
 
 	inCh      chan *events.CanonicalEvent
 	outCh     chan *events.CanonicalEvent
@@ -89,6 +92,7 @@ func New(capacity int, maxWaiters ...int) *EventQueue {
 		done:       make(chan struct{}),
 	}
 	q.notEmpty = sync.NewCond(&q.mu)
+	q.admissionAvailable = sync.NewCond(&q.mu)
 
 	go q.inPump()
 	go q.outPump()
@@ -177,6 +181,7 @@ func (q *EventQueue) Enqueue(ctx context.Context, ev *events.CanonicalEvent) err
 		for i, cand := range q.waiters {
 			if cand == w {
 				q.waiters = append(q.waiters[:i], q.waiters[i+1:]...)
+				q.admissionAvailable.Signal()
 				break
 			}
 		}
@@ -223,6 +228,22 @@ func (q *EventQueue) Close() {
 	q.closeOnce.Do(func() {
 		close(q.inCh)
 	})
+
+	q.mu.Lock()
+	for _, w := range q.waiters {
+		w.err = ErrQueueClosed
+		close(w.ready)
+	}
+	q.waiters = nil
+
+	// If the adapter was blocked waiting when Close() was called, abort it
+	if q.adapterWaiting {
+		q.closeAbortedAdapter = true
+	}
+
+	q.admissionAvailable.Broadcast()
+	q.notEmpty.Broadcast()
+	q.mu.Unlock()
 }
 
 // WaitDrain blocks until the queue buffer is completely drained and Out is closed.
@@ -311,7 +332,10 @@ func (q *EventQueue) TimeSpentFullSeconds() float64 {
 
 func (q *EventQueue) inPump() {
 	for ev := range q.inCh {
-		if err := q.Enqueue(context.Background(), ev); err != nil {
+		if ev == nil {
+			continue
+		}
+		if err := q.enqueueFromAdapter(ev); err != nil {
 			break
 		}
 	}
@@ -324,7 +348,80 @@ func (q *EventQueue) inPump() {
 	}
 	q.waiters = nil
 	q.notEmpty.Broadcast()
+	q.admissionAvailable.Broadcast()
 	q.mu.Unlock()
+}
+
+func (q *EventQueue) enqueueFromAdapter(ev *events.CanonicalEvent) error {
+	q.mu.Lock()
+
+	// 1. If capacity is immediately available and no previous waiters exist:
+	if q.count < q.capacity && len(q.waiters) == 0 {
+		wasEmpty := (q.count == 0)
+		q.ring[q.tail] = item{
+			event:      ev,
+			enqueuedAt: time.Now(),
+		}
+		q.tail = (q.tail + 1) % q.capacity
+		q.count++
+
+		if q.count == q.capacity {
+			q.pressureEpisodes.Add(1)
+			q.fullStartTime = time.Now()
+		}
+		if wasEmpty {
+			q.notEmpty.Signal()
+		}
+		q.mu.Unlock()
+		return nil
+	}
+
+	// 2. Queue is full or prior waiters exist: this adapter submission is blocked
+	q.blockedEnqueueAttempts.Add(1)
+	q.adapterWaiting = true
+
+	// Wait while queue ring is full or waiter allowance is full, until capacity frees or queue is closed
+	for (q.count >= q.capacity || len(q.waiters) >= q.maxWaiters) && !q.closeAbortedAdapter {
+		q.admissionAvailable.Wait()
+	}
+	q.adapterWaiting = false
+
+	if q.closeAbortedAdapter {
+		q.mu.Unlock()
+		return ErrQueueClosed
+	}
+
+	// If capacity is available in ring and no prior waiters exist (even during close drain):
+	if q.count < q.capacity && len(q.waiters) == 0 {
+		wasEmpty := (q.count == 0)
+		q.ring[q.tail] = item{
+			event:      ev,
+			enqueuedAt: time.Now(),
+		}
+		q.tail = (q.tail + 1) % q.capacity
+		q.count++
+
+		if q.count == q.capacity {
+			q.pressureEpisodes.Add(1)
+			q.fullStartTime = time.Now()
+		}
+		if wasEmpty {
+			q.notEmpty.Signal()
+		}
+		q.mu.Unlock()
+		return nil
+	}
+
+	// Waiter slot available: enter waiter queue
+	w := &enqueueWaiter{
+		ev:    ev,
+		ready: make(chan struct{}),
+	}
+	q.waiters = append(q.waiters, w)
+	q.mu.Unlock()
+
+	<-w.ready
+	return w.err
 }
 
 func (q *EventQueue) outPump() {
@@ -337,6 +434,8 @@ func (q *EventQueue) outPump() {
 			q.notEmpty.Wait()
 		}
 		if q.count == 0 && q.closed {
+			q.closeAbortedAdapter = true
+			q.admissionAvailable.Broadcast()
 			q.mu.Unlock()
 			return
 		}
@@ -374,6 +473,9 @@ func (q *EventQueue) outPump() {
 				q.fullStartTime = time.Now()
 			}
 			close(w.ready)
+			q.admissionAvailable.Signal()
+		} else {
+			q.admissionAvailable.Signal()
 		}
 		q.mu.Unlock()
 	}

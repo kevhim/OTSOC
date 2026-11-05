@@ -359,15 +359,19 @@ Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Resource governor th
 
 ### 1. Bounded Queue-Owned Memory (`agent/internal/eventqueue`)
 - **Explicit Waiter Admission Bounds**: In addition to the fixed ring buffer (`capacity`, default 200), `EventQueue` defines and enforces an explicit bound on the waiter admission queue: `maxWaiters int` (configured in `New(capacity, maxWaiters...)`, defaulting to `capacity` if omitted).
-- **Enforced Memory Boundedness**: When `len(q.waiters) >= q.maxWaiters`, `Enqueue` immediately rejects with `ErrQueueAtCapacity` instead of allowing unbounded slice growth. Total queue-owned events and waiter records are strictly bounded by `capacity + maxWaiters`.
+- **Enforced Memory Boundedness**: When `len(q.waiters) >= q.maxWaiters`, `Enqueue` immediately rejects with `ErrQueueAtCapacity` instead of allowing unbounded slice growth. Total queue-owned events and waiter records are strictly bounded by `capacity + maxWaiters + 1` (including at most 1 item held in the channel adapter).
+- **Mixed Channel / Direct-API Saturation Resolution**: Fixed the channel adapter (`inPump` -> `enqueueFromAdapter`) so that when direct `Enqueue` callers have saturated both the ring buffer and the waiter allowance, subsequent events received via `In()` are NOT silently discarded and do NOT terminate the queue with `ErrQueueAtCapacity`. The adapter waits via `admissionAvailable` condition variable for waiter/ring capacity, preserving FIFO ordering and strict memory bounds.
+- **Explicit Close Semantics & Deadlock Elimination**: Repaired `Close()` so that calling `Close()` while the adapter and direct callers are blocked and no consumer is progressing cleanly and immediately unblocks all pending waiters with `ErrQueueClosed`, unblocks the adapter, signals `notEmpty` so `outPump` drains accepted ring items, and closes `done` without deadlock.
 - **Observable Failure Behavior**: Preserves cancellation, FIFO order, and observable failure behavior (`ErrQueueAtCapacity` or `ErrQueueClosed`), never silently discarding submissions.
 - **Pending Submission Drain on Close**: When the queue closes while submissions are pending, pending waiters immediately receive `ErrQueueClosed` while already committed ring buffer items drain cleanly to `Out()`.
 
 ### 2. Scoped Production Backpressure Metrics
 - **Metric Scoping**: Collectors submit events via `In()`, whose adapter calls `Enqueue(context.Background(), ev)`. The metric `AdapterBlockedEnqueueAttemptsTotal` (aliased as `BlockedEnqueueAttemptsTotal` and `BackpressureEventsTotal` for backward compatibility) is explicitly documented and scoped to adapter waits against the queue rather than claiming an exact count of all concurrent OS collectors waiting on the Go channel rendezvous.
-- **Sustained Saturation & Concurrency Verification**:
+- **Sustained Saturation, Concurrency & Close Verification**:
   - `TestEventQueue_SustainedSaturationAndMemoryBounds`: Tests filling ring buffer (2 items), filling waiter queue (2 items), rejecting the 5th item with `ErrQueueAtCapacity`, dequeuing 1 item to admit the oldest waiter, admitting a new waiter into the freed slot, and verifying exact FIFO delivery of all 5 items.
   - `TestEventQueue_CloseWhileSubmissionsPending`: Tests filling ring buffer and waiter queue, closing queue while submissions are pending, asserting all pending submissions receive `ErrQueueClosed`, and verifying committed ring buffer events drain completely.
+  - `TestEventQueue_MixedAPISaturation_NoDropNoTerminate`: Tests saturating ring (2) and waiter allowance (2) via direct `Enqueue`, then submitting through `In()`, asserting adapter waits without dropping event or terminating queue, and verifying exact FIFO delivery across all 5 events once consumers progress.
+  - `TestEventQueue_CloseWhileAdapterBlocked`: Tests saturating ring and waiter allowance, submitting via `In()`, verifying adapter is blocked, closing queue while no consumer progresses, asserting immediate unblock of all waiters with `ErrQueueClosed`, and clean drain of accepted ring items without deadlock.
 
 ### 3. Truthful Report Finalization & Storage Close Sequencing
 - **Ordered Finalization Sequence (`agent/internal/resourcereport/shutdown_pipeline.go`)**:
