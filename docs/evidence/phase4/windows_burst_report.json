@@ -1,7 +1,7 @@
 {
   "manifest": {
-    "source_revision": "459dce1bfe48be0d92886e495bc3321c40cf65a1",
-    "dirty": false,
+    "source_revision": "d6fd8bd091bcbda92d760803b9233830d3bc0fe4",
+    "dirty": true,
     "os": "windows",
     "architecture": "amd64",
     "toolchain": "go1.27.0",
@@ -22,9 +22,9 @@
   "samples": [
     {
       "sample_index": 1,
-      "timestamp": "2026-11-05T07:39:04Z",
+      "timestamp": "2026-11-05T09:12:28Z",
       "cpu_percent": 0,
-      "rss_bytes": 11984896,
+      "rss_bytes": 13029376,
       "persistence_bytes": 94576,
       "contributing_files": [
         {
@@ -48,7 +48,7 @@
           "exists": false
         }
       ],
-      "write_io_bytes_per_sec": 809278.3505154639,
+      "write_io_bytes_per_sec": null,
       "queue_depth": 0,
       "queue_capacity": 200,
       "queue_saturation_percent": 0,
@@ -64,10 +64,10 @@
     },
     {
       "sample_index": 2,
-      "timestamp": "2026-11-05T07:39:05Z",
-      "cpu_percent": 0.7811688365578817,
-      "rss_bytes": 25784320,
-      "persistence_bytes": 3773736,
+      "timestamp": "2026-11-05T09:12:29Z",
+      "cpu_percent": 0.49617413563244694,
+      "rss_bytes": 25792512,
+      "persistence_bytes": 3543016,
       "contributing_files": [
         {
           "path": "agent.db",
@@ -76,7 +76,7 @@
         },
         {
           "path": "agent.db-wal",
-          "size_bytes": 3736872,
+          "size_bytes": 3506152,
           "exists": true
         },
         {
@@ -90,7 +90,7 @@
           "exists": false
         }
       ],
-      "write_io_bytes_per_sec": 3679332.717330669,
+      "write_io_bytes_per_sec": 3442160.9662658656,
       "queue_depth": 0,
       "queue_capacity": 200,
       "queue_saturation_percent": 0,
@@ -106,10 +106,10 @@
     },
     {
       "sample_index": 3,
-      "timestamp": "2026-11-05T07:39:06Z",
+      "timestamp": "2026-11-05T09:12:30Z",
       "cpu_percent": 0,
-      "rss_bytes": 25788416,
-      "persistence_bytes": 3773736,
+      "rss_bytes": 25796608,
+      "persistence_bytes": 3543016,
       "contributing_files": [
         {
           "path": "agent.db",
@@ -118,7 +118,7 @@
         },
         {
           "path": "agent.db-wal",
-          "size_bytes": 3736872,
+          "size_bytes": 3506152,
           "exists": true
         },
         {
@@ -132,7 +132,7 @@
           "exists": false
         }
       ],
-      "write_io_bytes_per_sec": 179.94013391744568,
+      "write_io_bytes_per_sec": 181.1980494680686,
       "queue_depth": 0,
       "queue_capacity": 200,
       "queue_saturation_percent": 0,
@@ -148,10 +148,10 @@
     },
     {
       "sample_index": 4,
-      "timestamp": "2026-11-05T07:39:07Z",
+      "timestamp": "2026-11-05T09:12:31Z",
       "cpu_percent": 0,
-      "rss_bytes": 25788416,
-      "persistence_bytes": 3773736,
+      "rss_bytes": 25796608,
+      "persistence_bytes": 3543016,
       "contributing_files": [
         {
           "path": "agent.db",
@@ -160,7 +160,7 @@
         },
         {
           "path": "agent.db-wal",
-          "size_bytes": 3736872,
+          "size_bytes": 3506152,
           "exists": true
         },
         {
@@ -174,7 +174,7 @@
           "exists": false
         }
       ],
-      "write_io_bytes_per_sec": 162.97273466149113,
+      "write_io_bytes_per_sec": 163.1307492955604,
       "queue_depth": 0,
       "queue_capacity": 200,
       "queue_saturation_percent": 0,
@@ -205,11 +205,11 @@
         "reconciliation_valid": true
       },
       "forwarder": {
-        "attempts_total": 72,
-        "http_accepted_total": 72,
+        "attempts_total": 61,
+        "http_accepted_total": 61,
         "dlq_total": 0,
         "retry_total": 0,
-        "local_removed_total": 72,
+        "local_removed_total": 61,
         "local_removal_errors_total": 0
       },
       "queue": {
@@ -220,16 +220,16 @@
       },
       "storage": {
         "initial_backlog_pending_events": 0,
-        "durable_pending_events": 0,
+        "durable_pending_events": 11,
         "durable_dlq_events": 0,
-        "durable_total_events": 0,
-        "source_telemetry_events": 0,
+        "durable_total_events": 11,
+        "source_telemetry_events": 11,
         "derived_findings_events": 0,
         "pruned_events_total": null
       },
       "ingested_total": 72,
       "committed_total": 72,
-      "forwarded_total": 72,
+      "forwarded_total": 61,
       "failed_before_commit_total": 0,
       "recovered_dlq_total": 0,
       "spilled_disk_total": 0,

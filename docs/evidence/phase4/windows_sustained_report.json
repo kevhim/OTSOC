@@ -1,7 +1,7 @@
 {
   "manifest": {
-    "source_revision": "459dce1bfe48be0d92886e495bc3321c40cf65a1",
-    "dirty": false,
+    "source_revision": "d6fd8bd091bcbda92d760803b9233830d3bc0fe4",
+    "dirty": true,
     "os": "windows",
     "architecture": "amd64",
     "toolchain": "go1.27.0",
@@ -22,9 +22,9 @@
   "samples": [
     {
       "sample_index": 1,
-      "timestamp": "2026-11-05T07:39:00Z",
-      "cpu_percent": 100,
-      "rss_bytes": 12013568,
+      "timestamp": "2026-11-05T09:12:23Z",
+      "cpu_percent": null,
+      "rss_bytes": 13070336,
       "persistence_bytes": 94576,
       "contributing_files": [
         {
@@ -48,7 +48,7 @@
           "exists": false
         }
       ],
-      "write_io_bytes_per_sec": 298108.0408264874,
+      "write_io_bytes_per_sec": 783704.1884816753,
       "queue_depth": 0,
       "queue_capacity": 200,
       "queue_saturation_percent": 0,
@@ -64,10 +64,10 @@
     },
     {
       "sample_index": 2,
-      "timestamp": "2026-11-05T07:39:01Z",
-      "cpu_percent": 0.638907134183583,
-      "rss_bytes": 22519808,
-      "persistence_bytes": 494216,
+      "timestamp": "2026-11-05T09:12:24Z",
+      "cpu_percent": 0.35501824296175255,
+      "rss_bytes": 23748608,
+      "persistence_bytes": 514816,
       "contributing_files": [
         {
           "path": "agent.db",
@@ -76,7 +76,7 @@
         },
         {
           "path": "agent.db-wal",
-          "size_bytes": 457352,
+          "size_bytes": 477952,
           "exists": true
         },
         {
@@ -90,7 +90,7 @@
           "exists": false
         }
       ],
-      "write_io_bytes_per_sec": 400146.9801576787,
+      "write_io_bytes_per_sec": 420944.17337938247,
       "queue_depth": 0,
       "queue_capacity": 200,
       "queue_saturation_percent": 0,
@@ -106,10 +106,10 @@
     },
     {
       "sample_index": 3,
-      "timestamp": "2026-11-05T07:39:02Z",
-      "cpu_percent": 0.0710328281408889,
-      "rss_bytes": 23027712,
-      "persistence_bytes": 947416,
+      "timestamp": "2026-11-05T09:12:25Z",
+      "cpu_percent": 0.07103702702626766,
+      "rss_bytes": 23969792,
+      "persistence_bytes": 968016,
       "contributing_files": [
         {
           "path": "agent.db",
@@ -118,7 +118,7 @@
         },
         {
           "path": "agent.db-wal",
-          "size_bytes": 910552,
+          "size_bytes": 931152,
           "exists": true
         },
         {
@@ -132,7 +132,7 @@
           "exists": false
         }
       ],
-      "write_io_bytes_per_sec": 453442.47952058783,
+      "write_io_bytes_per_sec": 453471.2837694228,
       "queue_depth": 0,
       "queue_capacity": 200,
       "queue_saturation_percent": 0,
@@ -148,10 +148,10 @@
     },
     {
       "sample_index": 4,
-      "timestamp": "2026-11-05T07:39:03Z",
-      "cpu_percent": 0.14205021322759767,
-      "rss_bytes": 23425024,
-      "persistence_bytes": 1309976,
+      "timestamp": "2026-11-05T09:12:26Z",
+      "cpu_percent": 0,
+      "rss_bytes": 24133632,
+      "persistence_bytes": 1330576,
       "contributing_files": [
         {
           "path": "agent.db",
@@ -160,7 +160,7 @@
         },
         {
           "path": "agent.db-wal",
-          "size_bytes": 1273112,
+          "size_bytes": 1293712,
           "exists": true
         },
         {
@@ -174,7 +174,7 @@
           "exists": false
         }
       ],
-      "write_io_bytes_per_sec": 362751.15216359746,
+      "write_io_bytes_per_sec": 362445.44059043215,
       "queue_depth": 0,
       "queue_capacity": 200,
       "queue_saturation_percent": 0,

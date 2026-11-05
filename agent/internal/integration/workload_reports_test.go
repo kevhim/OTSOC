@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,19 +21,30 @@ import (
 
 	"redcyberfox/agent/internal/config"
 	"redcyberfox/agent/internal/resourcereport"
+	"redcyberfox/pkg/events"
 )
 
-type mockIngestServer struct {
-	srv           *httptest.Server
-	receivedCount atomic.Uint64
+// mockIngestReceiver represents a local test HTTP receiver returning HTTP 202 Accepted.
+// Contract Note: This mock verifies upstream HTTP forwarder request transmission and local event removal
+// upon acknowledgement; it does NOT establish central durable ingestion or database persistence.
+type mockIngestReceiver struct {
+	srv            *httptest.Server
+	mu             sync.Mutex
+	receivedCount  atomic.Uint64
+	receivedEvents []*events.CanonicalEvent
 }
 
-func newMockIngestServer() *mockIngestServer {
-	m := &mockIngestServer{}
+func newMockIngestReceiver() *mockIngestReceiver {
+	m := &mockIngestReceiver{}
 	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/ingest" {
-			_, _ = io.ReadAll(r.Body)
+			body, _ := io.ReadAll(r.Body)
 			m.receivedCount.Add(1)
+			if ev, err := events.Deserialize(body); err == nil {
+				m.mu.Lock()
+				m.receivedEvents = append(m.receivedEvents, ev)
+				m.mu.Unlock()
+			}
 			w.WriteHeader(http.StatusAccepted)
 			_, _ = w.Write([]byte(`{"status":"accepted"}`))
 			return
@@ -40,24 +54,103 @@ func newMockIngestServer() *mockIngestServer {
 	return m
 }
 
-func (m *mockIngestServer) Close() {
+func (m *mockIngestReceiver) Close() {
 	if m.srv != nil {
 		m.srv.Close()
 	}
 }
 
-func getOrBuildEndpointExe(t *testing.T, repoRoot string) string {
+func (m *mockIngestReceiver) ReceivedEvents() []*events.CanonicalEvent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	res := make([]*events.CanonicalEvent, len(m.receivedEvents))
+	copy(res, m.receivedEvents)
+	return res
+}
+
+type BinaryProvenance struct {
+	ExePath        string
+	SourceRevision string
+	Dirty          bool
+	Toolchain      string
+}
+
+// buildFreshEndpointWithProvenance compiles a fresh endpoint binary directly into an isolated
+// temporary test directory and validates its embedded build metadata against git provenance.
+// Never reuses repository-root binaries.
+func buildFreshEndpointWithProvenance(t *testing.T, repoRoot string) BinaryProvenance {
 	t.Helper()
-	endpointExe := filepath.Join(repoRoot, "endpoint.exe")
-	if _, err := os.Stat(endpointExe); os.IsNotExist(err) {
-		cmd := exec.Command("go", "build", "-v", "-o", endpointExe, "./agent/cmd/endpoint")
-		cmd.Dir = repoRoot
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("failed to build endpoint.exe: %v\n%s", err, string(out))
+	binDir := t.TempDir()
+	endpointExe := filepath.Join(binDir, "endpoint.exe")
+
+	// 1. Discover expected git revision and dirty status
+	gitRevCmd := exec.Command("git", "rev-parse", "HEAD")
+	gitRevCmd.Dir = repoRoot
+	revOut, err := gitRevCmd.Output()
+	if err != nil {
+		t.Fatalf("failed to obtain git revision from %s: %v", repoRoot, err)
+	}
+	expectedRevision := strings.TrimSpace(string(revOut))
+
+	gitStatusCmd := exec.Command("git", "status", "--porcelain")
+	gitStatusCmd.Dir = repoRoot
+	statusOut, err := gitStatusCmd.Output()
+	if err != nil {
+		t.Fatalf("failed to obtain git status from %s: %v", repoRoot, err)
+	}
+	expectedDirty := len(strings.TrimSpace(string(statusOut))) > 0
+
+	// 2. Build fresh binary directly into isolated temp directory
+	buildCmd := exec.Command("go", "build", "-v", "-o", endpointExe, "./agent/cmd/endpoint")
+	buildCmd.Dir = repoRoot
+	buildOut, err := buildCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("failed to build fresh endpoint.exe in %s: %v\nOutput: %s", binDir, err, string(buildOut))
+	}
+
+	// 3. Inspect binary metadata via 'go version -m <exe>'
+	versionCmd := exec.Command("go", "version", "-m", endpointExe)
+	versionCmd.Dir = repoRoot
+	versionOut, err := versionCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("failed to read build info from %s: %v\nOutput: %s", endpointExe, err, string(versionOut))
+	}
+
+	// 4. Validate binary build metadata against recorded provenance
+	var actualRevision string
+	var actualDirty bool
+	var actualToolchain string
+	lines := strings.Split(string(versionOut), "\n")
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if strings.HasPrefix(trimmed, "endpoint.exe: ") {
+			actualToolchain = strings.TrimPrefix(trimmed, "endpoint.exe: ")
+		} else if strings.HasPrefix(trimmed, "build\tvcs.revision=") {
+			actualRevision = strings.TrimPrefix(trimmed, "build\tvcs.revision=")
+		} else if strings.HasPrefix(trimmed, "build\tvcs.modified=") {
+			actualDirty = (strings.TrimPrefix(trimmed, "build\tvcs.modified=") == "true")
 		}
 	}
-	return endpointExe
+
+	if actualRevision == "" {
+		t.Fatalf("binary provenance unavailable: build metadata missing vcs.revision in %s\n%s", endpointExe, string(versionOut))
+	}
+	if !strings.HasPrefix(expectedRevision, actualRevision) && !strings.HasPrefix(actualRevision, expectedRevision) {
+		t.Fatalf("binary provenance mismatch: expected revision %s, binary has %s", expectedRevision, actualRevision)
+	}
+	if actualDirty != expectedDirty {
+		t.Fatalf("binary provenance mismatch: expected dirty=%v, binary has dirty=%v", expectedDirty, actualDirty)
+	}
+
+	t.Logf("Fresh binary provenance verified: %s (rev: %s, dirty: %v, toolchain: %s)",
+		endpointExe, actualRevision, actualDirty, actualToolchain)
+
+	return BinaryProvenance{
+		ExePath:        endpointExe,
+		SourceRevision: actualRevision,
+		Dirty:          actualDirty,
+		Toolchain:      actualToolchain,
+	}
 }
 
 func copyReportEvidence(t *testing.T, srcPath, destName, repoRoot string) {
@@ -84,7 +177,10 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to resolve repo root: %v", err)
 	}
-	endpointExe := getOrBuildEndpointExe(t, repoRoot)
+
+	// Always compile a fresh endpoint into an isolated test temporary directory
+	provenance := buildFreshEndpointWithProvenance(t, repoRoot)
+	endpointExe := provenance.ExePath
 
 	// -------------------------------------------------------------
 	// 1. Idle Workload Scenario
@@ -96,7 +192,7 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 			t.Fatalf("failed to create watched dir: %v", err)
 		}
 
-		mockSrv := newMockIngestServer()
+		mockSrv := newMockIngestReceiver()
 		defer mockSrv.Close()
 
 		cfg := config.Config{
@@ -117,7 +213,10 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		duration := 3 * time.Second
 		interval := 1 * time.Second
 
-		cmd := exec.Command(endpointExe,
+		ctx, cancel := context.WithTimeout(context.Background(), duration+10*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, endpointExe,
 			"-config="+cfgPath,
 			"-identity="+idPath,
 			"-measure-report="+reportPath,
@@ -171,7 +270,7 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 			t.Fatalf("failed to create watched dir: %v", err)
 		}
 
-		mockSrv := newMockIngestServer()
+		mockSrv := newMockIngestReceiver()
 		defer mockSrv.Close()
 
 		cfg := config.Config{
@@ -192,7 +291,10 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		duration := 4 * time.Second
 		interval := 1 * time.Second
 
-		cmd := exec.Command(endpointExe,
+		ctx, cancel := context.WithTimeout(context.Background(), duration+10*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, endpointExe,
 			"-config="+cfgPath,
 			"-identity="+idPath,
 			"-measure-report="+reportPath,
@@ -273,7 +375,7 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 			t.Fatalf("failed to create watched dir: %v", err)
 		}
 
-		mockSrv := newMockIngestServer()
+		mockSrv := newMockIngestReceiver()
 		defer mockSrv.Close()
 
 		cfg := config.Config{
@@ -294,7 +396,10 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		duration := 4 * time.Second
 		interval := 1 * time.Second
 
-		cmd := exec.Command(endpointExe,
+		ctx, cancel := context.WithTimeout(context.Background(), duration+10*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, endpointExe,
 			"-config="+cfgPath,
 			"-identity="+idPath,
 			"-measure-report="+reportPath,
@@ -347,9 +452,9 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------
-	// 4. Offline & Reconnect Workload Scenario
+	// 4. Offline & Real Retry Recovery Scenario
 	// -------------------------------------------------------------
-	t.Run("Scenario_OfflineAndReconnect", func(t *testing.T) {
+	t.Run("Scenario_OfflineAndRealRetryRecovery", func(t *testing.T) {
 		scenarioDir := t.TempDir()
 		watchedDir := filepath.Join(scenarioDir, "watched")
 		if err := os.MkdirAll(watchedDir, 0755); err != nil {
@@ -375,7 +480,10 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		duration := 3 * time.Second
 		interval := 1 * time.Second
 
-		cmdOffline := exec.Command(endpointExe,
+		ctxOffline, cancelOffline := context.WithTimeout(context.Background(), duration+10*time.Second)
+		defer cancelOffline()
+
+		cmdOffline := exec.CommandContext(ctxOffline, endpointExe,
 			"-config="+cfgPath,
 			"-identity="+idPath,
 			"-measure-report="+offlineReportPath,
@@ -427,23 +535,57 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 
 		copyReportEvidence(t, offlineReportPath, "windows_offline_report.json", repoRoot)
 
-		// Reset exponential backoff in agent.db to simulate backoff elapsed on reconnect
+		// -------------------------------------------------------------
+		// Inspect & Record Offline Event IDs, Sequence Numbers & Deadlines
+		// NOTE: next_attempt_at is 100% PRESERVED across restart. NO SQL clears or modifies it!
+		// -------------------------------------------------------------
+		type offlineRecord struct {
+			EventID       string
+			SeqNo         int64
+			NextAttemptAt string
+		}
+		var recordedOffline []offlineRecord
+		var maxNextAttemptStr string
+
 		rawDB, err := sql.Open("sqlite", filepath.Join(scenarioDir, "agent.db"))
 		if err != nil {
 			t.Fatalf("failed to open agent.db: %v", err)
 		}
-		if _, err := rawDB.Exec("UPDATE events SET next_attempt_at = NULL WHERE state = 'PENDING'"); err != nil {
+		rows, err := rawDB.Query("SELECT event_id, seq_no, COALESCE(next_attempt_at, '') FROM events WHERE state = 'PENDING' ORDER BY seq_no ASC")
+		if err != nil {
 			rawDB.Close()
-			t.Fatalf("failed to clear next_attempt_at: %v", err)
+			t.Fatalf("failed to query pending events from agent.db: %v", err)
 		}
+		for rows.Next() {
+			var r offlineRecord
+			if err := rows.Scan(&r.EventID, &r.SeqNo, &r.NextAttemptAt); err != nil {
+				rows.Close()
+				rawDB.Close()
+				t.Fatalf("failed to scan pending event: %v", err)
+			}
+			recordedOffline = append(recordedOffline, r)
+			if r.NextAttemptAt > maxNextAttemptStr {
+				maxNextAttemptStr = r.NextAttemptAt
+			}
+		}
+		rows.Close()
 		_ = rawDB.Close()
 
-		// Part B: Reconnect phase (server online, drain SQLite backlog)
-		mockSrv := newMockIngestServer()
-		defer mockSrv.Close()
+		if len(recordedOffline) == 0 {
+			t.Fatalf("expected offline pending events recorded in sqlite, got 0")
+		}
+		t.Logf("Preserved %d offline pending events in SQLite (furthest next_attempt_at: %s)",
+			len(recordedOffline), maxNextAttemptStr)
+
+		// -------------------------------------------------------------
+		// Part B: Real Retry Recovery Phase
+		// Upstream receiver online. Runs long enough for retry deadlines to elapse naturally.
+		// -------------------------------------------------------------
+		mockReceiver := newMockIngestReceiver()
+		defer mockReceiver.Close()
 
 		reconnectCfg := config.Config{
-			APIAddr:      mockSrv.srv.URL,
+			APIAddr:      mockReceiver.srv.URL,
 			TenantID:     "tenant-smoke-offline",
 			SiteID:       "site-smoke-offline",
 			MonitorPaths: []string{watchedDir},
@@ -455,19 +597,28 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 
 		reconnectReportPath := filepath.Join(scenarioDir, "report_reconnect.json")
 
-		cmdReconnect := exec.Command(endpointExe,
+		// Maximum exponential backoff for attempt 1 is 10s + 9s jitter = 19s from the offline send.
+		// A bounded native run of 22s ensures the 5-second forwarder ticker fires after all retry
+		// deadlines have elapsed, demonstrating true wall-clock retry recovery without test clock manipulation.
+		recDuration := 22 * time.Second
+		recInterval := 2 * time.Second
+
+		ctxReconnect, cancelReconnect := context.WithTimeout(context.Background(), recDuration+15*time.Second)
+		defer cancelReconnect()
+
+		cmdReconnect := exec.CommandContext(ctxReconnect, endpointExe,
 			"-config="+cfgPath,
 			"-identity="+idPath,
 			"-measure-report="+reconnectReportPath,
 			"-measure-profile=windows-smoke-reconnect",
-			"-measure-duration="+duration.String(),
-			"-measure-interval="+interval.String(),
+			"-measure-duration="+recDuration.String(),
+			"-measure-interval="+recInterval.String(),
 		)
 		cmdReconnect.Dir = scenarioDir
 
 		outputRec, err := cmdReconnect.CombinedOutput()
 		if err != nil {
-			t.Fatalf("endpoint.exe failed in reconnect phase: %v\nOutput: %s", err, string(outputRec))
+			t.Fatalf("endpoint.exe failed in real retry recovery phase: %v\nOutput: %s", err, string(outputRec))
 		}
 
 		reconnectReportData, err := os.ReadFile(reconnectReportPath)
@@ -483,21 +634,58 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		if recRep.Summary.EventAccounting == nil {
 			t.Fatalf("expected event accounting in reconnect report")
 		}
+		expectedBacklogCount := uint64(len(recordedOffline))
 		if recRep.Summary.EventAccounting.Storage.InitialBacklogPendingEvents == nil ||
-			*recRep.Summary.EventAccounting.Storage.InitialBacklogPendingEvents < 10 {
-			t.Errorf("expected at least 10 initial backlog pending events, got %v",
-				recRep.Summary.EventAccounting.Storage.InitialBacklogPendingEvents)
-		}
-		if recRep.Summary.EventAccounting.Forwarder.HTTPAcceptedTotal < 10 {
-			t.Errorf("expected at least 10 forwarded and accepted events on reconnect, got %d",
-				recRep.Summary.EventAccounting.Forwarder.HTTPAcceptedTotal)
-		}
-		if recRep.Summary.EventAccounting.Storage.DurablePendingEvents == nil ||
-			*recRep.Summary.EventAccounting.Storage.DurablePendingEvents != 0 {
-			t.Errorf("expected 0 remaining pending events after reconnect drain, got %v",
-				recRep.Summary.EventAccounting.Storage.DurablePendingEvents)
+			*recRep.Summary.EventAccounting.Storage.InitialBacklogPendingEvents != expectedBacklogCount {
+			t.Errorf("expected %d initial backlog pending events, got %v",
+				expectedBacklogCount, recRep.Summary.EventAccounting.Storage.InitialBacklogPendingEvents)
 		}
 
+		// Verify all recorded offline events were transmitted to mock receiver
+		receivedList := mockReceiver.ReceivedEvents()
+		receivedMap := make(map[string]int64)
+		for _, ev := range receivedList {
+			receivedMap[ev.EventID] = ev.SeqNo
+		}
+
+		for _, rec := range recordedOffline {
+			gotSeq, exists := receivedMap[rec.EventID]
+			if !exists {
+				t.Errorf("offline event %s (seq: %d) was not received by mock receiver on retry", rec.EventID, rec.SeqNo)
+			} else if gotSeq != rec.SeqNo {
+				t.Errorf("event %s seq mismatch: expected %d, got %d", rec.EventID, rec.SeqNo, gotSeq)
+			}
+		}
+
+		// Verify all pending events were locally removed from SQLite
+		dbCheck, err := sql.Open("sqlite", filepath.Join(scenarioDir, "agent.db"))
+		if err != nil {
+			t.Fatalf("failed to open agent.db for post-reconnect check: %v", err)
+		}
+		var remainingPending int
+		if err := dbCheck.QueryRow("SELECT COUNT(*) FROM events WHERE state = 'PENDING'").Scan(&remainingPending); err != nil {
+			dbCheck.Close()
+			t.Fatalf("failed to query remaining pending count: %v", err)
+		}
+		_ = dbCheck.Close()
+
+		if remainingPending != 0 {
+			t.Errorf("expected 0 remaining pending events in SQLite after retry recovery, got %d", remainingPending)
+		}
+
+		if recRep.Summary.EventAccounting.Storage.DurablePendingEvents == nil ||
+			*recRep.Summary.EventAccounting.Storage.DurablePendingEvents != 0 {
+			t.Errorf("expected report durable_pending_events=0, got %v",
+				*recRep.Summary.EventAccounting.Storage.DurablePendingEvents)
+		}
+
+		if recRep.Summary.EventAccounting.Forwarder.HTTPAcceptedTotal < expectedBacklogCount {
+			t.Errorf("expected at least %d http accepted events on reconnect, got %d",
+				expectedBacklogCount, recRep.Summary.EventAccounting.Forwarder.HTTPAcceptedTotal)
+		}
+
+		// Persist report as both windows_reconnect_report.json and windows_retry_recovery_report.json
 		copyReportEvidence(t, reconnectReportPath, "windows_reconnect_report.json", repoRoot)
+		copyReportEvidence(t, reconnectReportPath, "windows_retry_recovery_report.json", repoRoot)
 	})
 }

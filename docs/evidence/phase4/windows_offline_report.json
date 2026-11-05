@@ -1,7 +1,7 @@
 {
   "manifest": {
-    "source_revision": "459dce1bfe48be0d92886e495bc3321c40cf65a1",
-    "dirty": false,
+    "source_revision": "d6fd8bd091bcbda92d760803b9233830d3bc0fe4",
+    "dirty": true,
     "os": "windows",
     "architecture": "amd64",
     "toolchain": "go1.27.0",
@@ -22,9 +22,9 @@
   "samples": [
     {
       "sample_index": 1,
-      "timestamp": "2026-11-05T07:39:08Z",
+      "timestamp": "2026-11-05T09:12:32Z",
       "cpu_percent": 0,
-      "rss_bytes": 12238848,
+      "rss_bytes": 13004800,
       "persistence_bytes": 94576,
       "contributing_files": [
         {
@@ -48,7 +48,7 @@
           "exists": false
         }
       ],
-      "write_io_bytes_per_sec": 599718.9972639207,
+      "write_io_bytes_per_sec": 478591.9114011669,
       "queue_depth": 0,
       "queue_capacity": 200,
       "queue_saturation_percent": 0,
@@ -64,9 +64,9 @@
     },
     {
       "sample_index": 2,
-      "timestamp": "2026-11-05T07:39:09Z",
-      "cpu_percent": 0.5679633226915787,
-      "rss_bytes": 23228416,
+      "timestamp": "2026-11-05T09:12:33Z",
+      "cpu_percent": 0.14200762371449702,
+      "rss_bytes": 24006656,
       "persistence_bytes": 980376,
       "contributing_files": [
         {
@@ -90,7 +90,7 @@
           "exists": false
         }
       ],
-      "write_io_bytes_per_sec": 885698.2718748099,
+      "write_io_bytes_per_sec": 886129.9349853199,
       "queue_depth": 0,
       "queue_capacity": 200,
       "queue_saturation_percent": 0,
@@ -106,9 +106,9 @@
     },
     {
       "sample_index": 3,
-      "timestamp": "2026-11-05T07:39:10Z",
+      "timestamp": "2026-11-05T09:12:34Z",
       "cpu_percent": 0,
-      "rss_bytes": 23281664,
+      "rss_bytes": 24006656,
       "persistence_bytes": 980376,
       "contributing_files": [
         {
@@ -132,7 +132,7 @@
           "exists": false
         }
       ],
-      "write_io_bytes_per_sec": 179.9907304773804,
+      "write_io_bytes_per_sec": 181.03120978056617,
       "queue_depth": 0,
       "queue_capacity": 200,
       "queue_saturation_percent": 0,
