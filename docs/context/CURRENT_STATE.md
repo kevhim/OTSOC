@@ -382,9 +382,21 @@ Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Resource governor th
 - **Simulated DB Close Failure Test (`agent/internal/integration/queued_drain_report_test.go`)**:
   - `TestMeasurement_ShutdownCapturesDBCloseFailure`: Wraps `Storage` with a failing mock on `Close()`, runs `ExecuteShutdown`, asserts that the returned error contains `simulated db close failure`, and reads the persisted report JSON from disk to assert that `ShutdownOutcome` truthfully recorded `MEASUREMENT_COMPLETE_WITH_ERRORS: storage close: simulated db close failure: disk I/O lock`.
 
-### 4. Verification Outcomes
+### 4. Bounded Windows Workload Measurement Reports (`docs/evidence/phase4/`)
+- **Native Endpoint Subprocess Execution (`TestWorkload_WindowsMeasurementReports`)**: Exercises the compiled production binary (`endpoint.exe`) in isolated test directories under 4 distinct scenarios:
+  1. `windows_idle_report.json`: 3s duration, 1s interval. Baseline background collection (inventory + network), 2 events ingested/committed/forwarded/removed. RSS: 21.9 MB, CPU: ~0.19%, Queue Depth: 0, 0 dropped. Reconciled valid.
+  2. `windows_sustained_report.json`: 4s duration, 1s interval. Sustained 200ms file creation stream (26 events total). Ingested: 26, Committed: 26, HTTP Accepted: 26, Local Removed: 26. RSS: 23.4 MB, WAL: 1.27 MB, IO: 362-453 KB/s. Reconciled valid.
+  3. `windows_burst_report.json`: 4s duration, 1s interval. Rapid burst of 35 files (72 events total). Ingested: 72, Committed: 72, HTTP Accepted: 72, Local Removed: 72. RSS: 25.78 MB, WAL: 3.73 MB, Peak Write IO: 3.68 MB/s. Reconciled valid.
+  4. `windows_offline_report.json` & `windows_reconnect_report.json`: 2-phase lifecycle on identical database:
+     - Offline Phase: 3s duration against unreachable port (`54321`), 22 events ingested and durably committed to SQLite `state = 'PENDING'`. Forwarder attempted 22 and retried 22 with exponential backoff (`next_attempt_at`). HTTP accepted: 0. Retained pending: 22.
+     - Reconnect Phase: Server online, same DB reopened, 22 initial backlog detected. Forwarder drained all 22 backlog + 2 startup events = 24 accepted via HTTP 202, local removed: 24, remaining pending in SQLite: 0.
+- **Evidence Documentation**: Synthesized and recorded in `docs/evidence/phase4/windows_workload_evidence.md`.
+- **Developer-Host Smoke Evidence Disclaimer**: All reports explicitly labeled as developer-host smoke evidence. Representative low-spec qualification and governor threshold calibration remain open. Phase 4 remains open; Phase 5 not begun.
+
+### 5. Verification Outcomes
 - `scripts/verify-phase4.ps1 -Race -NativeDetection`: 9/9 PASS.
 - `npm --prefix dashboard test`: 1/1 PASS.
 - `npm --prefix dashboard run lint`: 0 errors, 0 warnings.
+- `go test -v ./agent/internal/integration -run TestWorkload_WindowsMeasurementReports`: 4/4 PASS (17.78s).
 - `go build -v ./agent/cmd/endpoint`: PASS.
 - `go build -v ./server/cmd/api`: PASS.
