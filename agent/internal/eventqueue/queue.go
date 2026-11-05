@@ -14,6 +14,8 @@ import (
 var (
 	// ErrQueueClosed indicates that the queue is closed and cannot accept new events.
 	ErrQueueClosed = errors.New("event queue is closed")
+	// ErrQueueAtCapacity indicates that the ring buffer and the waiter admission queue are both at maximum capacity.
+	ErrQueueAtCapacity = errors.New("event queue admission limit reached")
 )
 
 type item struct {
@@ -27,29 +29,34 @@ type enqueueWaiter struct {
 	err   error
 }
 
-// EventQueue is an instrumented, bounded FIFO queue with a fixed-size ring buffer.
+// EventQueue is an instrumented, bounded FIFO queue with a fixed-size ring buffer and a bounded admission queue.
 // It exposes non-destructive queue depth, capacity, oldest event age, and precisely
 // defined backpressure metrics to the Resource Governor and Measurement Reporter.
 //
-// Backpressure Semantics:
-//  1. BlockedEnqueueAttemptsTotal: Counts each distinct event enqueue attempt that
-//     was blocked waiting for downstream capacity because the queue was at maximum capacity.
-//     This metric is instrumented directly via Enqueue(ctx, ev).
+// Backpressure Semantics & Scoping:
+//  1. AdapterBlockedEnqueueAttemptsTotal (BlockedEnqueueAttemptsTotal): Counts each discrete
+//     event enqueue attempt where the input pump/adapter or direct caller was blocked waiting
+//     for downstream queue capacity. When collectors submit via the channel adapter In(),
+//     this metric counts the adapter's blocked enqueue waits against the queue, rather than
+//     an exact count of all concurrent OS collectors waiting on the Go channel rendezvous.
 //  2. PressureEpisodesTotal: Counts each discrete transition into the 100% saturated
 //     state (count == capacity). A continuous period of saturation counts as 1 episode.
 //  3. TimeSpentFullSeconds: Measures the cumulative elapsed duration in seconds the queue
 //     remained at 100% saturation.
+//  4. Memory Boundedness: Total queue-owned events and waiter records are strictly bounded
+//     by capacity + maxWaiters. Submissions beyond this bound fail with ErrQueueAtCapacity.
 type EventQueue struct {
 	mu       sync.Mutex
 	notEmpty *sync.Cond
 
-	capacity int
-	ring     []item
-	head     int
-	tail     int
-	count    int
-	closed   bool
-	waiters  []*enqueueWaiter
+	capacity   int
+	maxWaiters int
+	ring       []item
+	head       int
+	tail       int
+	count      int
+	closed     bool
+	waiters    []*enqueueWaiter
 
 	inCh      chan *events.CanonicalEvent
 	outCh     chan *events.CanonicalEvent
@@ -62,18 +69,24 @@ type EventQueue struct {
 	fullStartTime          time.Time
 }
 
-// New creates an initialized EventQueue with fixed capacity.
-// Defaults to 200 if capacity is <= 0.
-func New(capacity int) *EventQueue {
+// New creates an initialized EventQueue with fixed capacity and bounded waiter capacity.
+// Defaults capacity to 200 if <= 0. If maxWaiters is omitted or <= 0, defaults to capacity.
+func New(capacity int, maxWaiters ...int) *EventQueue {
 	if capacity <= 0 {
 		capacity = 200
 	}
+	waiterCap := capacity
+	if len(maxWaiters) > 0 && maxWaiters[0] > 0 {
+		waiterCap = maxWaiters[0]
+	}
+
 	q := &EventQueue{
-		capacity: capacity,
-		ring:     make([]item, capacity),
-		inCh:     make(chan *events.CanonicalEvent),
-		outCh:    make(chan *events.CanonicalEvent),
-		done:     make(chan struct{}),
+		capacity:   capacity,
+		maxWaiters: waiterCap,
+		ring:       make([]item, capacity),
+		inCh:       make(chan *events.CanonicalEvent),
+		outCh:      make(chan *events.CanonicalEvent),
+		done:       make(chan struct{}),
 	}
 	q.notEmpty = sync.NewCond(&q.mu)
 
@@ -95,7 +108,8 @@ func (q *EventQueue) Out() <-chan *events.CanonicalEvent {
 
 // Enqueue provides the instrumented enqueue API. It blocks until capacity is available,
 // ctx is cancelled, or the queue is closed. If the queue is at capacity, the call
-// increments BlockedEnqueueAttemptsTotal and waits for a consumer to free a slot.
+// increments AdapterBlockedEnqueueAttemptsTotal and waits for a consumer to free a slot,
+// provided waiter queue bounds are not exceeded. Returns ErrQueueAtCapacity if the wait queue is full.
 func (q *EventQueue) Enqueue(ctx context.Context, ev *events.CanonicalEvent) error {
 	if ev == nil {
 		return nil
@@ -131,7 +145,13 @@ func (q *EventQueue) Enqueue(ctx context.Context, ev *events.CanonicalEvent) err
 		return nil
 	}
 
-	// Queue is full or prior waiters exist: this attempt is blocked.
+	// Queue is full or prior waiters exist: verify waiter queue memory bound
+	if len(q.waiters) >= q.maxWaiters {
+		q.mu.Unlock()
+		return ErrQueueAtCapacity
+	}
+
+	// Increment adapter/caller blocked attempt count
 	q.blockedEnqueueAttempts.Add(1)
 
 	w := &enqueueWaiter{
@@ -210,14 +230,26 @@ func (q *EventQueue) WaitDrain() {
 	<-q.done
 }
 
-// Depth returns the current number of events buffered in the queue.
+// Depth returns the current number of events buffered in the queue ring.
 func (q *EventQueue) Depth() governor.ValidUint64 {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return governor.ValidUint64{Value: uint64(q.count), Valid: true}
 }
 
-// Capacity returns the maximum configured capacity of the queue.
+// WaitersCount returns the number of blocked producers currently waiting in the admission buffer.
+func (q *EventQueue) WaitersCount() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.waiters)
+}
+
+// MaxWaiters returns the configured maximum capacity of the waiter admission buffer.
+func (q *EventQueue) MaxWaiters() int {
+	return q.maxWaiters
+}
+
+// Capacity returns the maximum configured capacity of the queue ring.
 func (q *EventQueue) Capacity() governor.ValidUint64 {
 	return governor.ValidUint64{Value: uint64(q.capacity), Valid: true}
 }
@@ -245,15 +277,20 @@ func (q *EventQueue) OldestEventAge() governor.ValidFloat64 {
 	return governor.ValidFloat64{Value: age, Valid: true}
 }
 
-// BlockedEnqueueAttemptsTotal returns the count of event enqueue attempts that
-// were blocked waiting for queue capacity because the queue was at maximum capacity.
-func (q *EventQueue) BlockedEnqueueAttemptsTotal() uint64 {
+// AdapterBlockedEnqueueAttemptsTotal returns the count of event enqueue attempts where
+// the input adapter or direct caller had to wait for queue capacity.
+func (q *EventQueue) AdapterBlockedEnqueueAttemptsTotal() uint64 {
 	return q.blockedEnqueueAttempts.Load()
 }
 
-// BackpressureEventsTotal is an alias for BlockedEnqueueAttemptsTotal for backward compatibility.
+// BlockedEnqueueAttemptsTotal is an alias for AdapterBlockedEnqueueAttemptsTotal for backward compatibility.
+func (q *EventQueue) BlockedEnqueueAttemptsTotal() uint64 {
+	return q.AdapterBlockedEnqueueAttemptsTotal()
+}
+
+// BackpressureEventsTotal is an alias for AdapterBlockedEnqueueAttemptsTotal for backward compatibility.
 func (q *EventQueue) BackpressureEventsTotal() uint64 {
-	return q.BlockedEnqueueAttemptsTotal()
+	return q.AdapterBlockedEnqueueAttemptsTotal()
 }
 
 // PressureEpisodesTotal returns the count of discrete episodes where queue saturation reached 100%.

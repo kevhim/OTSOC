@@ -33,16 +33,16 @@ The agent runs locally, queues events in SQLite, and forwards to central server 
   4. Forwarder stops (`fwd.Stop()`); any `Stop()` error is captured.
   5. Measurement runner goroutine is joined (`MeasureJoin`); any runner error is captured.
   6. Global drain deadline check records an error if the drain deadline expired.
-  7. Durable storage state (`InspectDurableStorage`) is captured before closing SQLite.
-  8. Point-in-time accounting snapshots from ingestion and forwarder are recorded.
-  9. Report is finalized (`reporter.Finalize`). If errors occurred, outcome reflects `_WITH_ERRORS: ...`.
-  10. SQLite storage is closed (`db.Close()`); any close error is captured.
-  11. Any error during shutdown, drain, report generation, or DB close propagates to process exit code (`os.Exit(1)`).
+  7. Durable storage state (`InspectDurableStorage`) and point-in-time accounting snapshots from ingestion and forwarder are recorded BEFORE closing SQLite.
+  8. SQLite storage is closed (`params.Storage.Close()`); any close error is captured into shutdown errors.
+  9. Report is finalized (`reporter.Finalize`). If errors occurred during collector stop, forwarder stop, measurement run, drain timeout, or storage close, outcome truthfully reflects `_WITH_ERRORS: ...`.
+  10. Any error during shutdown, drain, report generation, or DB close propagates to process exit code (`os.Exit(1)`).
 - **Ingestion-Outcome Reconciliation**: The accounting equation $\text{Ingested} = \text{Committed} + \text{FailedBeforeCommit} + \text{RecoveredDLQ} + \text{SpilledDisk} + \text{Dropped}$ strictly represents local ingestion-loop outcome reconciliation, guarded by `accMu sync.Mutex` for coherent point-in-time snapshots. It is NEVER labeled end-to-end reconciliation or proof of zero loss, as it does not observe upstream network hops, server-side processing, or retention pruning.
 - **Forwarder Accounting Distinctions**: Forwarder metrics distinguish HTTP request attempts (including retries) from total accepted HTTP responses (HTTP 202) received (`HTTPAcceptedTotal`, including repeats/retries), successful SQLite local row deletions (`LocalRemovedTotal`), and deletion failures (`LocalRemovalErrorsTotal`). It does NOT claim unique-event delivery.
 - **Durable Storage Inventory**: Storage inspects SQLite directly to distinguish source telemetry from derived detection findings (`payload LIKE '%"category":"detection/finding"%'`), pending events, DLQ events, and existing startup backlog. Unsupported metrics (such as historical retention pruning) remain explicitly unavailable (`nil` / JSON `null`).
-- **Backpressure Semantics**: Queue backpressure semantics strictly distinguish:
-  - `BlockedEnqueueAttemptsTotal`: instrumented directly via `Enqueue(ctx, ev)`. Tracks each enqueue attempt that blocked waiting for capacity because the queue was at 100% saturation. Supports deterministic FIFO waiter admission and context cancellation without state loss.
+- **Bounded Queue Memory & Backpressure Semantics**:
+  - `maxWaiters`: Queue-owned memory is bounded by `capacity + maxWaiters`. Submissions beyond `maxWaiters` fail immediately with `ErrQueueAtCapacity`. No unbounded slice growth.
+  - `AdapterBlockedEnqueueAttemptsTotal` (aliased as `BlockedEnqueueAttemptsTotal`): counts each discrete event enqueue attempt where the input pump/adapter or direct caller was blocked waiting for queue capacity. It is explicitly scoped to adapter waits against the queue rather than claiming an exact count of all concurrent OS collectors waiting on the Go channel rendezvous.
   - `PressureEpisodesTotal`: counts discrete transitions into the 100% saturated state (`count == capacity`).
   - `TimeSpentFullSeconds`: cumulative duration the queue spent at 100% saturation.
-  Queue-loop iterations are never counted as blocked event submissions. Submissions via channel `In()` act as an adapter for legacy collectors.
+  - Deterministic FIFO waiter admission, context cancellation without state loss, and immediate rejection with `ErrQueueClosed` on queue closure.

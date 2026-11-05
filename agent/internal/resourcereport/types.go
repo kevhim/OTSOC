@@ -102,10 +102,18 @@ type ForwarderAccountingSummary struct {
 }
 
 // QueueAccountingSummary summarizes in-memory queue metrics.
+//
+// Backpressure Accounting Scoping:
+// AdapterBlockedEnqueueAttemptsTotal (and its backward-compatibility alias BlockedEnqueueAttemptsTotal)
+// counts discrete enqueue attempts where the input adapter (inPump) or direct caller was blocked
+// waiting for downstream queue capacity. When collectors submit via the channel adapter In(),
+// this metric counts the adapter's blocked waits, rather than an exact count of all concurrent OS
+// collectors waiting on the Go channel rendezvous.
 type QueueAccountingSummary struct {
-	BlockedEnqueueAttemptsTotal uint64  `json:"blocked_enqueue_attempts_total"`
-	PressureEpisodesTotal       uint64  `json:"pressure_episodes_total"`
-	TimeSpentFullSeconds        float64 `json:"time_spent_full_seconds"`
+	AdapterBlockedEnqueueAttemptsTotal uint64  `json:"adapter_blocked_enqueue_attempts_total"`
+	BlockedEnqueueAttemptsTotal        uint64  `json:"blocked_enqueue_attempts_total"`
+	PressureEpisodesTotal              uint64  `json:"pressure_episodes_total"`
+	TimeSpentFullSeconds               float64 `json:"time_spent_full_seconds"`
 }
 
 // EventAccountingSummary aggregates all verified accounting boundaries into the final report.

@@ -99,5 +99,13 @@
   - **Instrumented Enqueue & Deterministic Backpressure**: Replaced inferred channel counting with instrumented `Enqueue(ctx, ev)` and `TryEnqueue(ev)` on `agent/internal/eventqueue`. Handles multiple concurrent blocked producers and context cancellation via FIFO waiter queue with zero data races. Tested under full-queue pressure, 10 concurrent producers, and cancellation under 64-bit UCRT64 CGO race detector.
   - **Queued Event Drain Regression**: Updated `agent/internal/integration/queued_drain_report_test.go` to hold ingestion behind an explicit barrier (`cfg.BeforeProcess`), buffer 20 events in memory, trigger actual measurement expiry via `RunMeasurementRunner` duration timer, release ingestion barrier, execute shared `ExecuteShutdown`, and verify durable SQLite commitment and report accounting without duplicating shutdown code.
   - **Verification**: `scripts/verify-phase4.ps1 -Race -NativeDetection` 9/9 PASS, dashboard request isolation tests PASS, native endpoint build PASS.
+
+## Phase 4 Queue Memory Bounding, Production Metric Scoping & Truthful DB Close Checkpoint (2026-11-05)
+- **Status**: Completed on branch `fix/correctness-remediation-checkpoint`.
+- **Key Changes**:
+  - **Bounded Queue Memory**: Added `maxWaiters int` to `EventQueue` (defaulting to `capacity`). Submissions beyond `maxWaiters` fail with `ErrQueueAtCapacity`. Total queue-owned memory strictly bounded by `capacity + maxWaiters`.
+  - **Production Metric Scoping**: Scoped `AdapterBlockedEnqueueAttemptsTotal` (and aliases) to input adapter waits against the queue rather than an exact count of all concurrent OS collectors waiting on the Go channel rendezvous. Tested sustained saturation, concurrent producers, cancellation, and close with pending submissions.
+  - **Truthful Report Finalization**: Durable storage inventory captured before DB close, DB close executed and captured, report finalized after DB close incorporating DB close results into `ShutdownOutcome` on disk (`<OUTCOME>_WITH_ERRORS: storage close: ...`). Verified simulated close failure produces both a failed report outcome on disk and a non-zero exit code (`os.Exit(1)`).
+  - **Verification**: `scripts/verify-phase4.ps1 -Race -NativeDetection` 9/9 PASS, dashboard lint & build PASS, native endpoint and server API build PASS.
 - **Milestone Status**: Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
-- **Next Bounded Implementation Task**: Representative Linux and Windows workload benchmarks and resource governor threshold calibration.
+- **Next Bounded Implementation Task**: Collect reproducible multi-sample workload evidence for baseline calibration.

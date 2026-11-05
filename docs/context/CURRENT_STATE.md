@@ -351,3 +351,36 @@ Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Resource governor th
 - `npm --prefix dashboard run lint`: 0 errors, 0 warnings.
 - `go build -v ./agent/cmd/endpoint`: PASS.
 - Linux runtime validation: Outstanding on local Windows host; verified via GitHub Actions CI workflow.
+
+## 2026-11-05 Phase 4 Queue Memory Bounding, Production Metric Scoping & Truthful DB Close Checkpoint (non-phase changing)
+
+A focused checkpoint completing the queue memory bound, production metric scoping, and truthful storage finalization contract was completed on branch `fix/correctness-remediation-checkpoint`.
+Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Resource governor thresholds remain uncalibrated and observational until representative multi-sample workloads are measured.
+
+### 1. Bounded Queue-Owned Memory (`agent/internal/eventqueue`)
+- **Explicit Waiter Admission Bounds**: In addition to the fixed ring buffer (`capacity`, default 200), `EventQueue` defines and enforces an explicit bound on the waiter admission queue: `maxWaiters int` (configured in `New(capacity, maxWaiters...)`, defaulting to `capacity` if omitted).
+- **Enforced Memory Boundedness**: When `len(q.waiters) >= q.maxWaiters`, `Enqueue` immediately rejects with `ErrQueueAtCapacity` instead of allowing unbounded slice growth. Total queue-owned events and waiter records are strictly bounded by `capacity + maxWaiters`.
+- **Observable Failure Behavior**: Preserves cancellation, FIFO order, and observable failure behavior (`ErrQueueAtCapacity` or `ErrQueueClosed`), never silently discarding submissions.
+- **Pending Submission Drain on Close**: When the queue closes while submissions are pending, pending waiters immediately receive `ErrQueueClosed` while already committed ring buffer items drain cleanly to `Out()`.
+
+### 2. Scoped Production Backpressure Metrics
+- **Metric Scoping**: Collectors submit events via `In()`, whose adapter calls `Enqueue(context.Background(), ev)`. The metric `AdapterBlockedEnqueueAttemptsTotal` (aliased as `BlockedEnqueueAttemptsTotal` and `BackpressureEventsTotal` for backward compatibility) is explicitly documented and scoped to adapter waits against the queue rather than claiming an exact count of all concurrent OS collectors waiting on the Go channel rendezvous.
+- **Sustained Saturation & Concurrency Verification**:
+  - `TestEventQueue_SustainedSaturationAndMemoryBounds`: Tests filling ring buffer (2 items), filling waiter queue (2 items), rejecting the 5th item with `ErrQueueAtCapacity`, dequeuing 1 item to admit the oldest waiter, admitting a new waiter into the freed slot, and verifying exact FIFO delivery of all 5 items.
+  - `TestEventQueue_CloseWhileSubmissionsPending`: Tests filling ring buffer and waiter queue, closing queue while submissions are pending, asserting all pending submissions receive `ErrQueueClosed`, and verifying committed ring buffer events drain completely.
+
+### 3. Truthful Report Finalization & Storage Close Sequencing
+- **Ordered Finalization Sequence (`agent/internal/resourcereport/shutdown_pipeline.go`)**:
+  - Step 7: Inspects durable SQLite storage (`InspectDurableStorage`) and takes instantaneous snapshots of ingestion and forwarder accounting BEFORE closing storage.
+  - Step 8: Closes the SQLite database (`params.Storage.Close()`) and captures any close error into `shutdownErrors`.
+  - Step 9: Finalizes the report (`reporter.Finalize(outcome)`), incorporating any DB close error into `ShutdownOutcome` on disk (e.g. `<OUTCOME>_WITH_ERRORS: storage close: ...`).
+  - Step 10: Propagates any collected shutdown error (including storage close failures) into the final returned error and process exit status (`os.Exit(1)`).
+- **Simulated DB Close Failure Test (`agent/internal/integration/queued_drain_report_test.go`)**:
+  - `TestMeasurement_ShutdownCapturesDBCloseFailure`: Wraps `Storage` with a failing mock on `Close()`, runs `ExecuteShutdown`, asserts that the returned error contains `simulated db close failure`, and reads the persisted report JSON from disk to assert that `ShutdownOutcome` truthfully recorded `MEASUREMENT_COMPLETE_WITH_ERRORS: storage close: simulated db close failure: disk I/O lock`.
+
+### 4. Verification Outcomes
+- `scripts/verify-phase4.ps1 -Race -NativeDetection`: 9/9 PASS.
+- `npm --prefix dashboard test`: 1/1 PASS.
+- `npm --prefix dashboard run lint`: 0 errors, 0 warnings.
+- `go build -v ./agent/cmd/endpoint`: PASS.
+- `go build -v ./server/cmd/api`: PASS.

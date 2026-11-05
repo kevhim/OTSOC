@@ -40,9 +40,9 @@ type ShutdownParams struct {
 // 4. Stop forwarder: stops background forwarding loop. Captures any stop errors.
 // 5. Join measurement runner: ensures measurement goroutine has fully exited. Captures runner errors.
 // 6. Check drain timer: captures error if the global shutdown drain deadline expired.
-// 7. Inspect durable storage: queries SQLite row counts before closing DB.
-// 8. Capture accounting snapshots and finalize report: updates outcome and writes report file.
-// 9. Close storage: closes SQLite database. Captures any close errors.
+// 7. Inspect durable storage: queries SQLite row counts and captures accounting snapshots before closing DB.
+// 8. Close storage: closes SQLite database. Captures any close errors.
+// 9. Finalize report: incorporates all errors (including DB close) into the final outcome and writes report file.
 // 10. Aggregates all errors. Failures affect the final outcome and return non-nil error.
 func ExecuteShutdown(params ShutdownParams) error {
 	var shutdownErrors []error
@@ -93,7 +93,8 @@ func ExecuteShutdown(params ShutdownParams) error {
 		shutdownErrors = append(shutdownErrors, err)
 	}
 
-	// 7. Inspect durable storage before DB close & finalize measurement report
+	// 7. Inspect durable storage & capture point-in-time accounting BEFORE closing storage
+	var finalAccounting *EventAccountingSummary
 	if params.Reporter != nil {
 		rawDB := params.RawDB
 		if rawDB == nil && params.Storage != nil {
@@ -133,13 +134,14 @@ func ExecuteShutdown(params ShutdownParams) error {
 		var qAcc QueueAccountingSummary
 		if params.EventQueue != nil {
 			qAcc = QueueAccountingSummary{
-				BlockedEnqueueAttemptsTotal: params.EventQueue.BlockedEnqueueAttemptsTotal(),
-				PressureEpisodesTotal:       params.EventQueue.PressureEpisodesTotal(),
-				TimeSpentFullSeconds:        params.EventQueue.TimeSpentFullSeconds(),
+				AdapterBlockedEnqueueAttemptsTotal: params.EventQueue.AdapterBlockedEnqueueAttemptsTotal(),
+				BlockedEnqueueAttemptsTotal:        params.EventQueue.BlockedEnqueueAttemptsTotal(),
+				PressureEpisodesTotal:              params.EventQueue.PressureEpisodesTotal(),
+				TimeSpentFullSeconds:               params.EventQueue.TimeSpentFullSeconds(),
 			}
 		}
 
-		finalAccounting := &EventAccountingSummary{
+		finalAccounting = &EventAccountingSummary{
 			IngestionOutcome: ingestAcc,
 			Forwarder:        fwdAcc,
 			Queue:            qAcc,
@@ -156,7 +158,18 @@ func ExecuteShutdown(params ShutdownParams) error {
 			BackpressureEventsTotal: qAcc.BlockedEnqueueAttemptsTotal,
 			ReconciliationValid:     ingestAcc.ReconciliationValid,
 		}
+	}
 
+	// 8. Close Storage (captures close error before report finalization)
+	if params.Storage != nil {
+		if err := params.Storage.Close(); err != nil {
+			log.Printf("ERROR: [Shutdown] Failed to close storage: %v", err)
+			shutdownErrors = append(shutdownErrors, fmt.Errorf("storage close: %w", err))
+		}
+	}
+
+	// 9. Finalize measurement report WITH DB-close outcome and all errors included
+	if params.Reporter != nil {
 		params.Reporter.SetAccounting(finalAccounting)
 
 		outcome := "UNKNOWN"
@@ -170,14 +183,6 @@ func ExecuteShutdown(params ShutdownParams) error {
 		if _, err := params.Reporter.Finalize(outcome); err != nil {
 			log.Printf("ERROR: [Shutdown] Failed to finalize measurement report: %v", err)
 			shutdownErrors = append(shutdownErrors, fmt.Errorf("finalize report: %w", err))
-		}
-	}
-
-	// 8. Close Storage
-	if params.Storage != nil {
-		if err := params.Storage.Close(); err != nil {
-			log.Printf("ERROR: [Shutdown] Failed to close storage: %v", err)
-			shutdownErrors = append(shutdownErrors, fmt.Errorf("storage close: %w", err))
 		}
 	}
 

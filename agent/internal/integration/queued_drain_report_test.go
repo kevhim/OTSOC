@@ -317,3 +317,84 @@ func TestMeasurement_ShutdownCapturesErrors(t *testing.T) {
 		t.Fatalf("unexpected shutdown outcome: %s", rep.Summary.ShutdownOutcome)
 	}
 }
+
+type failingCloseStorage struct {
+	*storage.SQLiteStorage
+	closeErr error
+}
+
+func (f *failingCloseStorage) Close() error {
+	_ = f.SQLiteStorage.Close() // close real DB to avoid resource leak
+	return f.closeErr
+}
+
+// TestMeasurement_ShutdownCapturesDBCloseFailure verifies that a database close failure
+// is truthfully captured into the finalized measurement report outcome and returns an error
+// ensuring non-zero process exit.
+func TestMeasurement_ShutdownCapturesDBCloseFailure(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "fail_close.db")
+	idPath := filepath.Join(tmpDir, "identity.json")
+	reportPath := filepath.Join(tmpDir, "fail_close_report.json")
+
+	realDB := storage.NewSQLiteStorage(dbPath, idPath, 10*1024*1024)
+	if err := realDB.Init(context.Background()); err != nil {
+		t.Fatalf("failed to init SQLite storage: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, drainCancel := context.WithCancel(context.Background())
+	defer drainCancel()
+
+	shutdownCoord := resourcereport.NewShutdownCoordinator(cancel, drainCancel, 5*time.Second)
+	shutdownCoord.Trigger("MEASUREMENT_COMPLETE")
+
+	reportCfg := resourcereport.Config{
+		ReportPath: reportPath,
+		Profile:    "test-db-close-failure",
+		Duration:   time.Second,
+		Interval:   100 * time.Millisecond,
+		DBPath:     dbPath,
+	}
+	reporter := resourcereport.NewReporter(reportCfg, nil)
+
+	simulatedCloseErr := errors.New("simulated db close failure: disk I/O lock")
+	failingDB := &failingCloseStorage{
+		SQLiteStorage: realDB,
+		closeErr:      simulatedCloseErr,
+	}
+
+	shutdownErr := resourcereport.ExecuteShutdown(resourcereport.ShutdownParams{
+		Context:       ctx,
+		ShutdownCoord: shutdownCoord,
+		Storage:       failingDB,
+		RawDB:         realDB.GetDB(),
+		Reporter:      reporter,
+	})
+
+	// 1. Assert ExecuteShutdown returns non-nil error (ensuring os.Exit(1) in production)
+	if shutdownErr == nil {
+		t.Fatalf("expected ExecuteShutdown to return error on DB close failure, got nil")
+	}
+	if !errors.Is(shutdownErr, simulatedCloseErr) {
+		t.Fatalf("expected errors.Is simulatedCloseErr, got: %v", shutdownErr)
+	}
+
+	// 2. Assert final report on disk truthfully recorded the DB close failure
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("failed to read persisted report: %v", err)
+	}
+
+	var rep resourcereport.Report
+	if err := json.Unmarshal(data, &rep); err != nil {
+		t.Fatalf("failed to unmarshal persisted report JSON: %v", err)
+	}
+
+	expectedSubstring := "MEASUREMENT_COMPLETE_WITH_ERRORS: storage close: simulated db close failure: disk I/O lock"
+	if rep.Summary.ShutdownOutcome != expectedSubstring {
+		t.Fatalf("truthful report outcome mismatch:\nexpected: %s\ngot:      %s",
+			expectedSubstring, rep.Summary.ShutdownOutcome)
+	}
+}
