@@ -137,3 +137,4 @@ activeRules := append([]detection.Rule{&detection.RealIOCExecRule{}}, dynamicRul
 
 ### Summary of Scope
 Until this design change is implemented and integrated into the endpoint binary, all native YARA-X qualification evidence remains scoped strictly to **component integration testing** (`agent/internal/integration/workload_detection_yarax_test.go`), while full-binary workload reports evaluate standard process/network collector activity with `RealIOCExecRule`.
+
