@@ -21,30 +21,53 @@
 --> [6/8] Running Core Component Unit Tests (Governor, Forwarder, EventQueue, Server API, Events, Reports)...
 [PASS] Core Components (Governor, Forwarder, EventQueue, Reports, Server API, Events) - All unit test suites passed
 
---> [7/8] Running Pipeline Integration & Offline Sync Tests...
+--> [7/10] Running Pipeline Integration & Offline Sync Tests...
 [PASS] Integration & Offline Sync Tests - Pipeline end-to-end and offline sync recovery passed
 
---> [8/8] Evaluating -Race and -NativeDetection checks...
+--> [8/10] Running Latency Percentiles Statistics Tests...
+[PASS] Latency Percentiles Statistics - Nearest-rank method, unsorted inputs, and boundary cases verified
+
+--> [9/10] Running Diagnostic Retention, Error Propagation & Exclusive Export Tests...
+[PASS] Diagnostic Retention & Exclusive Export - Exclusive writes, failure retention, cleanup survival, and error 
+propagation verified
+
+--> [10/10] Running Delivery Failure Boundaries & Crash Subprocess Tests...
+[PASS] Delivery Boundaries & Crash Regressions - Offline backoff, retry recovery, and OS process crash recovery 
+verified
+
+--> Evaluating Optional / Mandatory -Race and -NativeDetection checks...
 Probing local 64-bit CGO / UCRT64 race detector...
 [PASS] Go Test -Race (Governor, EventQueue & Integration) - 64-bit race conditions check passed under local UCRT64 CGO
 Probing local YARA-X C API (pkg-config yara_x_capi)...
 [PASS] Native Detection (YARA-X C API) - Native YARA-X detection suite passed with libyara_x_capi (1.20.0)
+[PASS] Native YARA-X Component Workload - Component workload and evidence export verified (libyara_x_capi 1.20.0)
+[PASS] Go Test -Race (YARA-X Component Workload) - Zero race conditions in YARA-X component workload under CGO
 
 ==========================================================
                    VERIFICATION SUMMARY                   
 ==========================================================
-Gofmt Format Check                               | PASS     | All files formatted cleanly
-Go Vet Static Analysis                           | PASS     | No issues detected
-Dashboard Lint & Build                           | PASS     | 0 lint errors/warnings, Vite build succeeded
-Storage Unit & Regression Tests                  | PASS     | Deterministic clock seam, date boundaries, and DLQ 
+Gofmt Format Check                                 | PASS     | All files formatted cleanly
+Go Vet Static Analysis                             | PASS     | No issues detected
+Dashboard Lint & Build                             | PASS     | 0 lint errors/warnings, Vite build succeeded
+Storage Unit & Regression Tests                    | PASS     | Deterministic clock seam, date boundaries, and DLQ 
 idempotency passed
-Ingestion & Identity Lifecycle Tests             | PASS     | Authoritative SQLite identity & conflicting legacy 
+Ingestion & Identity Lifecycle Tests               | PASS     | Authoritative SQLite identity & conflicting legacy 
 recovery verified
 Core Components (Governor, Forwarder, EventQueue, Reports, Server API, Events) | PASS     | All unit test suites passed
-Integration & Offline Sync Tests                 | PASS     | Pipeline end-to-end and offline sync recovery passed
+Integration & Offline Sync Tests                   | PASS     | Pipeline end-to-end and offline sync recovery passed
+Latency Percentiles Statistics                     | PASS     | Nearest-rank method, unsorted inputs, and boundary 
+cases verified
+Diagnostic Retention & Exclusive Export            | PASS     | Exclusive writes, failure retention, cleanup survival, 
+and error propagation verified
+Delivery Boundaries & Crash Regressions            | PASS     | Offline backoff, retry recovery, and OS process crash 
+recovery verified
 Go Test -Race (Governor, EventQueue & Integration) | PASS     | 64-bit race conditions check passed under local UCRT64 
 CGO
-Native Detection (YARA-X C API)                  | PASS     | Native YARA-X detection suite passed with libyara_x_capi 
-(1.20.0)
+Native Detection (YARA-X C API)                    | PASS     | Native YARA-X detection suite passed with 
+libyara_x_capi (1.20.0)
+Native YARA-X Component Workload                   | PASS     | Component workload and evidence export verified 
+(libyara_x_capi 1.20.0)
+Go Test -Race (YARA-X Component Workload)          | PASS     | Zero race conditions in YARA-X component workload 
+under CGO
 ==========================================================
-Verification check SUCCEEDED (All runnable checks passed; blocked dependencies logged).
+Verification check SUCCEEDED (All qualification checks passed cleanly).
