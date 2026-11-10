@@ -605,3 +605,45 @@ Phase 4 remains **OPEN**; Phase 5 has not begun.
 - `go test -race -v ./agent/internal/integration -run "TestWorkload_YaraX|TestDeliveryBoundary|TestSubprocess"` (with CGO): 14/14 PASS.
 - `go build -o endpoint.exe ./agent/cmd/endpoint`: PASS.
 
+## 2026-11-10 Phase 4 Platform Test Compilation Separation, Strict YARA-X Provenance, Bounded Crash Output & Cleanup Survival Checkpoint (non-phase changing)
+
+A focused qualification hardening checkpoint was completed on branch `fix/correctness-remediation-checkpoint`.
+**Final Qualification Decision**: `PHASE 4 PARTIAL — REMAINING QUALIFICATION GAPS`.
+Phase 4 remains **OPEN**; Phase 5 has not begun.
+
+### 1. Platform-Specific Test Compilation Separation
+- **Defect Addressed**: `provenance_test.go` previously referenced Windows-only `syscall` identifiers (`CreateFile`, `UTF16PtrFromString`) inside runtime `runtime.GOOS == "windows"` branches. In Go, runtime conditions do not skip compile-time type checking and symbol resolution, causing Linux cross-compilation (`GOOS=linux go test -c ./agent/internal/integration`) to fail with undefined symbols.
+- **Remediation**:
+  - Moved platform-specific unreadable file fixtures into build-tagged files:
+    - `agent/internal/integration/provenance_windows_test.go` (`//go:build windows`): Windows Win32 `syscall.CreateFile` with `shareMode = 0` (exclusive lock failing subsequent opens with `ERROR_SHARING_VIOLATION`).
+    - `agent/internal/integration/provenance_unix_test.go` (`//go:build !windows`): broken symlink (`/nonexistent/...`), ensuring deterministic `ENOENT` failure on `os.ReadFile` even when executed as root in Docker/CI containers where DAC `0000` permissions are bypassed.
+  - Kept shared test files (`provenance_test.go`) completely free of platform-specific symbols.
+  - Verified Windows compilation and Linux cross-compilation separately. Cross-compilation verified with `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c ./agent/internal/integration`.
+  - Disclosed anti-inference rule: cross-compilation is compilation evidence only; Linux runtime validation requires execution in a native Linux environment (CI `ubuntu-latest`).
+
+### 2. Strict YARA-X Evidence Provenance & Dual Boundary Verification
+- **Dual Checkpoint Verification**: `TestWorkload_YaraX_ComponentIntegration_PositiveVersusHarmlessDetection` in `workload_detection_yarax_test.go` enforces pre-collection and post-collection boundary verification via `CheckSourceBoundary`.
+- **Committed Clean Baseline Enforcement**: For accepted qualification evidence export (`EVIDENCE_EXPORT_DIR` or `EVIDENCE_EXPORT_TO_REPO=true`), the harness strictly requires a clean committed working tree (`dirty: false`). If dirty changes exist or revision changes during collection, the run is invalidated, export is refused, and failure diagnostics are retained.
+- **Pre-Export Assertion Verification**: All assertions (Phases A through E, finding identity, causal linkage, reopen durability, performance invariants) are strictly evaluated before evidence export.
+- **Historical Evidence Preservation**: Historical dirty smoke run (`docs/evidence/phase4/runs/yarax_20261110_090634/yarax_component_evidence.json`) is preserved. Clean evidence from commit `b31da96` is exported to `docs/evidence/phase4/runs/yarax_20261110_093542_b31da96c/yarax_component_evidence.json` with `source_revision: b31da96...`, `dirty: false`, zero event loss, and full nearest-rank latency percentiles.
+
+### 3. Bounded Crash Subprocess Output & Noisy Child Regression
+- **Bounded Buffers**: Replaced unbounded `*bytes.Buffer` in `ManagedCrashProcess` (`delivery_boundaries_test.go`) with thread-safe `*boundedBuffer` (`CrashStreamLimitBytes = 64 KB`). Added accessors (`Stdout`, `Stderr`, `StdoutTruncated`, `StderrTruncated`, `Truncated`, `ExitCode`, `Diagnostics`).
+- **Termination vs Cleanup Distiction**: Forced termination via `Process.Kill` is distinguished from cleanup failure (`timeout waiting for crash subprocess reap`).
+- **Noisy Child Subprocess Regression**: Implemented `TestCrashBoundary_NoisyChildProcess_BoundedOutputAndReap` using child helper mode `noisy_child`. The child emits continuous high-volume output; the test proves output is capped at the configured limit, truncation is flagged (`Truncated() == true`), the `[OUTPUT TRUNCATED]` notice is present, and the child is reaped within 5s with zero process leaks.
+
+### 4. Component Evidence Cleanup Survival & Typed Structures
+- **Typed Evidence Model**: Defined `YaraXComponentEvidence` and `ExportYaraXComponentEvidence` with staging and exclusive export to target directories (`WriteEvidenceExclusive`).
+- **Cleanup Survival Subtest**: Replaced dummy JSON testing in `TestWorkload_YaraX_ComponentEvidenceExport` with an isolated subtest (`t.Run("StageAndExportInSubtest")`). Staging artifacts are created in `subT.TempDir()`; export writes to a persistent parent directory. After subtest returns and testing framework runs `t.Cleanup()`, the test asserts:
+  1. Staging directory no longer exists.
+  2. Exported evidence in persistent directory remains readable and complete with required provenance and timing fields.
+  3. Repeated export strictly refuses overwrite.
+  4. Write failure handling is verified when export destination is unwritable.
+
+### 5. Strengthened Mandatory Verification Suite (`scripts/verify-phase4.ps1`)
+- **Omission & Pattern Mismatch Detection**: Added checks in `scripts/verify-phase4.ps1` detecting Go test output containing `[no tests to run]` or `warning: no tests to run`, preventing unexecuted test suites from passing.
+- **Linux Cross-Compilation Check**: Added step [11/11] verifying that `./agent/internal/integration` cross-compiles cleanly for Linux.
+- **Dependency & Runtime Gate Transparency**: Explicitly reports Linux runtime execution gate as `BLOCKED` (requires native Linux runner). Explicitly identifies CGO-disabled omission of native YARA-X tests when `-NativeDetection` is omitted.
+- **Verification Outcomes**: 13/13 runnable checks PASS, 1 BLOCKED dependency (Linux runtime execution gate). Full verification transcript saved to `docs/evidence/phase4/verification_latest.txt`.
+
+
