@@ -56,3 +56,12 @@ The agent runs locally, queues events in SQLite, and forwards to central server 
 - **Exclusive Evidence Export**: Automatic overwriting of canonical reports is removed. Evidence is exported only into unique run directories via `ExportEvidenceRun` using exclusive file creation (`WriteEvidenceExclusive` with `os.O_EXCL | os.O_CREATE`). When `EVIDENCE_EXPORT_DIR` is set externally, zero writes are made to the repository root.
 - **Toolchain Provenance Parsing**: Toolchain provenance is extracted via `ParseBinaryProvenanceOutput` handling both Windows and POSIX absolute executable paths, strictly requiring `toolchain`, `revision`, and `vcs.modified` presence without silent defaulting.
 - **Degraded Measurement Truthfulness**: Degraded measurement samples (`sampling_error: storage budget is unconfigured or unresolved`) are reported truthfully while `StorageBudgetBytes` remains 0; no artificial budget or error suppression is permitted. Sampling count variations at timer boundaries are documented based on exact raw JSON samples.
+- **Delivery Guarantees & Failure Boundaries (`docs/architecture/DELIVERY_GUARANTEES.md`)**:
+  - The edge agent provides at-least-once delivery to the HTTP ingress endpoint (`/v1/ingest`).
+  - Local SQLite removal occurs strictly upon receiving HTTP 202 Accepted.
+  - HTTP 202 represents edge transport acceptance by the gateway; durable persistence across central storage is a central platform responsibility.
+  - Verified across 7 failure boundaries: receiver unavailable, receiver reconnecting, upload timeout, duplicate ack/retry, agent restart with pending events, abrupt process termination during forwarding, and ack without durable receiver persistence (`delivery_boundaries_test.go`).
+- **Low-Spec Hardware Qualification Boundary (`docs/evidence/phase4/low_spec_acceptance_criteria.md`)**:
+  - Workstation smoke results (i5-10300H) must NOT be extrapolated to qualify low-spec field nodes.
+  - Acceptance thresholds are defined for 2 vCPU / 2-4 GB RAM / eMMC gateways (CPU $\le 5\%$, RSS $\le 100 \text{ MB}$, zero event loss).
+  - Target low-spec qualification remains OPEN until executed on representative physical or containerized hardware.

@@ -59,6 +59,13 @@ type Forwarder struct {
 	localRemovalErrorsTotal uint64
 }
 
+// SetHTTPTimeout configures the timeout for the internal HTTP client.
+func (f *Forwarder) SetHTTPTimeout(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.httpClient.Timeout = d
+}
+
 // Accounting returns a synchronized snapshot of forwarder accounting statistics.
 func (f *Forwarder) Accounting() ForwarderAccounting {
 	f.accMu.Lock()

@@ -541,3 +541,53 @@ Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Resource governor th
 - `go test -v -count=1 ./agent/internal/integration -run TestWorkload_WindowsMeasurementReports`: 4/4 PASS (75.71s; exported to `docs/evidence/phase4/runs/run_20261110_064202_a56298ce/`).
 - `go build -v ./agent/cmd/endpoint`: PASS.
 - `go build -v ./server/cmd/api`: PASS.
+
+## 2026-11-10 Phase 4 Remaining Qualification Gates & Delivery Failure Boundary Validation Checkpoint (non-phase changing)
+
+A comprehensive qualification audit and verification session addressing all Phase 4 remaining gates was completed on branch `fix/correctness-remediation-checkpoint`.
+**Final Qualification Decision**: `PHASE 4 PARTIAL — REMAINING QUALIFICATION GAPS`.
+Phase 4 remains **OPEN**; Phase 5 has not begun.
+
+### 1. Degraded Resource Samples Investigation (`degraded_samples_investigation.md`)
+- **Root Cause Established**: Traced degraded sample status (`degraded_samples = total_samples`) to `agent/cmd/endpoint/main.go:163` where `CoordinatorConfig{StorageBudgetBytes: 0}` is configured. Because `CalculateStoragePressure(used, 0)` refuses to fabricate a budget, it returns `ErrMissingStorageBudget` ("storage budget is unconfigured or unresolved"), populating `sample.SamplingError` and triggering `r.degradedSamples++` in `reporter.go:51-53`.
+- **Resource Counter Audit**:
+  - Valid: `CPUPercent` (`GetProcessTimes`), `RSSBytes` (`GetProcessMemoryInfo`), `PersistenceBytes` (`os.Stat` sum), `ContributingFiles` (file-by-file breakdown), `WriteIOBytesPerSec` (`GetProcessIoCounters` rate), `QueueDepth`, `QueueCapacity`, `QueueSaturationPercent`, `QueueOldestEventAgeSeconds`, `BlockedEnqueueAttemptsTotal`, `PressureEpisodesTotal`, `GovernorState`, `Connectivity`.
+  - Missing/Blocked: `StoragePressure` (cannot compute ratio without authoritative budget).
+  - Estimated: Zero.
+  - Inactive/Null: `EventsDroppedTotal`, `EventsAggregatedTotal`, `PrunedEventsTotal`.
+- **Non-Concealment Compliance**: Degraded samples are reported truthfully without artificial budget injection or error filtering.
+
+### 2. Realistic YARA-X Detection Workload (`workload_detection_yarax_test.go`)
+- **Native Detection Execution**: Built and executed `TestWorkload_YaraX_PositiveVersusHarmlessDetection` using native `libyara_x_capi` (v1.20.0).
+- **Comparative Overhead Analysis**:
+  - Harmless Workload (30 events): 25.2 ms total duration, 425 µs avg latency, 778 KB storage growth, 0 findings.
+  - Positive Detection Workload (30 events): 35.5 ms total duration, 868 µs avg latency, 1,582 KB storage growth, exactly 30 derived findings persisted with deterministic UUIDv5 identities.
+  - Storage Amplification: 2.03x (source telemetry + derived finding event persistence).
+  - Event Loss: Strictly 0 events lost; 100% durable event accounting.
+
+### 3. Delivery Failure Boundary Validation (`delivery_boundaries_test.go`, `DELIVERY_GUARANTEES.md`)
+- **7 Deterministic Boundary Tests Implemented & Passing**:
+  1. `TestDeliveryBoundary_ReceiverUnavailable`: Connection refused transport failure; network transitions to OFFLINE; events preserved PENDING with retry backoff.
+  2. `TestDeliveryBoundary_ReceiverReconnecting`: Server recovers; network transitions to ONLINE; backlog drained and removed upon HTTP 202.
+  3. `TestDeliveryBoundary_TimeoutDuringUpload`: Partial upload timeout; event preserved PENDING; network transitions to OFFLINE.
+  4. `TestDeliveryBoundary_DuplicateAckAndRetry`: Lost response / duplicate ACK; retried with same `event_id` and `seq_no`; idempotently accepted by receiver.
+  5. `TestDeliveryBoundary_AgentRestartWithPendingSQLiteEvents`: Process terminates with pending events; storage reopened; all 5 events preserved with exact `event_id` and monotonic `seq_no`.
+  6. `TestDeliveryBoundary_AbruptTerminationDuringForwarding`: Process crashes during deletion transaction; SQLite rollback preserves event in PENDING state.
+  7. `TestDeliveryBoundary_AckWithoutDurableReceiverPersistence`: Edge contract verified; event deleted locally upon HTTP 202; demarcation of edge vs central platform durability documented.
+- **Delivery Guarantees Documented**: Full formal specification in `docs/architecture/DELIVERY_GUARANTEES.md`.
+
+### 4. Target Low-Spec Hardware Acceptance Criteria (`low_spec_acceptance_criteria.md`)
+- **Formal Thresholds Defined**: Profile established for 2 vCPU / 2-4 GB RAM / eMMC OT edge gateways: steady-state CPU $\le 5\%$, burst CPU $\le 20\%$, RSS $\le 100 \text{ MB}$, storage growth $\le 10 \text{ MB/hr}$, write I/O $\le 500 \text{ KB/s}$, queue saturation $< 50\%$, detection latency $\le 50 \text{ ms}$, zero event loss.
+- **Anti-Extrapolation Rule**: Mandates that multi-core development workstation results (i5-10300H) must NOT be extrapolated to qualify low-spec field hardware.
+
+### 5. Linux Platform Differences & CI Validation (`linux_platform_differences.md`)
+- **Platform Mechanics Analyzed**: Subprocess lifecycle (Job Objects vs POSIX process groups/signals), filesystem locking (mandatory Win32 vs advisory POSIX), timing resolution (15.6 ms vs high-res monotonic), SQLite WAL mapping, and event ingestion (ReadDirectoryChangesW vs inotify).
+- **Anti-Inference Rule**: Windows results must not be used to infer Linux runtime safety.
+
+### 6. Verification Outcomes
+- `go vet ./agent/... ./server/... ./pkg/...`: PASS.
+- `go test -v ./agent/internal/integration -run "TestDeliveryBoundary|TestWorkloadDemonstration|TestProvenance"`: 8/8 PASS.
+- `go test -v ./agent/internal/integration -run "TestWorkload_YaraX|TestDeliveryBoundary|TestSubprocess"` (with CGO): 14/14 PASS.
+- `go test -race -v ./agent/internal/integration -run "TestWorkload_YaraX|TestDeliveryBoundary|TestSubprocess"` (with CGO): 14/14 PASS.
+- `go build -o endpoint.exe ./agent/cmd/endpoint`: PASS.
+
