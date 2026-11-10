@@ -69,3 +69,4 @@ The RedCyberFox Edge Agent is designed for dual deployment:
   - `ubuntu-latest` is a high-spec cloud virtual machine (2-core / 7 GB RAM on modern Xeon/EPYC).
   - It does **not** represent an embedded Linux OT device (e.g. ARM Cortex-A53 or Intel Atom with slow eMMC flash storage).
   - Therefore, **Linux Qualification on target low-spec hardware remains OPEN**.
+

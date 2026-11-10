@@ -118,3 +118,4 @@ To prevent misleading claims of "lossless delivery" or "end-to-end zero loss":
 | `attempts_total` | Cumulative HTTP transport attempts initiated by the forwarder. |
 | `retry_total` | Count of failed attempts rescheduled for future transmission. |
 | `dlq_total` | Count of non-retryable events moved to local dead-letter queue (e.g. HTTP 400 Bad Request). |
+

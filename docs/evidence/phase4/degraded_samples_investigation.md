@@ -141,3 +141,4 @@ In accordance with this directive:
 2. **No Error Suppression**: `runner.go` and `reporter.go` continue to record `SamplingError` and increment `DegradedSamples` whenever `stepErr != nil`.
 3. **Truthful Reporting**: Reports will continue to report `degraded_samples = total_samples` until an authoritative budget policy is established.
 4. **Phase 4 Impact**: This constitutes one of the explicit qualification gaps that prevents Phase 4 from closing prematurely.
+
