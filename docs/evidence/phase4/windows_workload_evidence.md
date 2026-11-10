@@ -97,7 +97,10 @@ In all measurement reports, samples report:
 "governor_state": "NORMAL",
 "sampling_error": "storage budget is unconfigured or unresolved"
 ```
-and `degraded_samples` equals `total_samples` (e.g. 11/11 in reconnect, 3/3 in idle).
+and `degraded_samples` equals `total_samples` (e.g. 12/12 in reconnect, 5/5 in sustained, 4/4 in burst, 3/3 in idle/offline).
+
+### Sampling Count Variations at Timer Boundaries
+Sampling counts can vary at timer boundaries depending on whether initial sample collection precedes or coincides with the interval ticker, and whether the final sample is recorded immediately prior to measurement shutdown (e.g., 5 samples across a 4.0s run with a 1.0s interval, or 12 samples across a 22.0s run with a 2.0s interval). All sample counts in this document reflect the exact number of discrete samples captured in the raw JSON reports.
 
 ### Distinguishing Available Signals from Unresolved Policy
 1. **Available Raw Resource Signals**:
@@ -120,9 +123,10 @@ and `degraded_samples` equals `total_samples` (e.g. 11/11 in reconnect, 3/3 in i
 ### 1. Idle Workload Scenario (`windows-smoke-idle`)
 - **Profile**: `windows-smoke-idle` | **Duration**: 3,000 ms | **Sampling Interval**: 1,000 ms (3 samples)
 - **Workload**: No artificial filesystem activity. OS background collectors initialized.
-- **Durable Storage**: `agent.db` (4 KB), `agent.db-wal` (185 KB), `agent.db-shm` (32 KB).
-- **Process Memory (RSS)**: Initial 12.11 MB, steady-state 21.91 MB.
-- **CPU Utilization**: 0.00% to 0.50% (mean ~0.19%).
+- **Durable Storage**: `agent.db` (4 KB), `agent.db-wal` (201 KB), `agent.db-shm` (32 KB); peak 237.20 KB.
+- **Process Memory (RSS)**: Initial 12.11 MB, peak 70.70 MB during collector initialization.
+- **CPU Utilization**: 0.00% to 1.25% (mean ~0.42%).
+- **Write IO Throughput**: Peaked at 339.60 KB/s.
 - **Queue Metrics**: Depth: 0, Saturation: 0.0%, Blocked Attempts: 0, Pressure Episodes: 0, Time Spent Full: 0.0s.
 - **Accounting Reconciliation**:
   - Ingested: 2 (1 inventory snapshot + 1 network snapshot)
@@ -133,12 +137,12 @@ and `degraded_samples` equals `total_samples` (e.g. 11/11 in reconnect, 3/3 in i
   - Final Shutdown Outcome: `MEASUREMENT_COMPLETE`
 
 ### 2. Sustained Workload Scenario (`windows-smoke-sustained`)
-- **Profile**: `windows-smoke-sustained` | **Duration**: 4,000 ms | **Sampling Interval**: 1,000 ms (4 samples)
+- **Profile**: `windows-smoke-sustained` | **Duration**: 4,000 ms | **Sampling Interval**: 1,000 ms (5 samples: indices 0..4)
 - **Workload**: Steady file creation stream (1 file written every 200 ms to monitored directory; 12 files).
-- **Durable Storage**: `agent.db` (4 KB), `agent.db-wal` expanded to 1,273 KB (1.27 MB), `agent.db-shm` (32 KB).
-- **Process Memory (RSS)**: Initial 12.01 MB, peak 23.41 MB.
-- **CPU Utilization**: 0.07% to 0.64% (excluding baseline prime sample).
-- **Write IO Throughput**: 298.1 KB/s to 453.4 KB/s.
+- **Durable Storage**: `agent.db` (4 KB), `agent.db-wal` expanded to 1,259 KB (1.26 MB), `agent.db-shm` (32 KB); peak 1,295.37 KB.
+- **Process Memory (RSS)**: Initial 12.01 MB, peak 22.89 MB.
+- **CPU Utilization**: 0.00% to 0.47% (mean ~0.19%).
+- **Write IO Throughput**: Peaked at 803.04 KB/s.
 - **Queue Metrics**: Depth: 0 (smooth real-time processing), Saturation: 0.0%, Blocked Attempts: 0, Pressure Episodes: 0.
 - **Accounting Reconciliation**:
   - Ingested: 26 (2 baseline + 24 filesystem events)
@@ -151,10 +155,10 @@ and `degraded_samples` equals `total_samples` (e.g. 11/11 in reconnect, 3/3 in i
 ### 3. Burst Workload Scenario (`windows-smoke-burst`)
 - **Profile**: `windows-smoke-burst` | **Duration**: 4,000 ms | **Sampling Interval**: 1,000 ms (4 samples)
 - **Workload**: Sudden burst of 35 files created concurrently in monitored directory.
-- **Durable Storage**: `agent.db` (4 KB), `agent.db-wal` expanded to 3,736 KB (3.73 MB), `agent.db-shm` (32 KB).
-- **Process Memory (RSS)**: Initial 11.98 MB, peak 25.79 MB.
-- **CPU Utilization**: 0.00% to 0.78%.
-- **Write IO Throughput**: Peaked at 3,679.3 KB/s (3.68 MB/s).
+- **Durable Storage**: `agent.db` (4 KB), `agent.db-wal` expanded to 3,677 KB (3.68 MB), `agent.db-shm` (32 KB); peak 3,713.45 KB.
+- **Process Memory (RSS)**: Initial 11.98 MB, peak 24.72 MB.
+- **CPU Utilization**: 0.00% to 0.50% (mean ~0.25%).
+- **Write IO Throughput**: Peaked at 3,620.51 KB/s (3.62 MB/s).
 - **Queue Metrics**: Depth: 0 after consumer drain, Saturation: 0.0%, Blocked Attempts: 0, Pressure Episodes: 0.
 - **Accounting Reconciliation**:
   - Ingested: 72 (2 baseline + 70 file create/modify events)
@@ -172,7 +176,10 @@ Executed in two consecutive phases using the **exact same SQLite database and id
 - **Profile**: `windows-smoke-offline` | **Duration**: 3,000 ms | **Sampling Interval**: 1,000 ms (3 samples)
 - **Workload**: Upstream server offline (unreachable port `http://127.0.0.1:54321`), 10 files created in monitored directory.
 - **Connectivity State**: Transitioned from `UNKNOWN` to `OFFLINE`.
-- **Durable Storage**: `agent.db-wal` expanded to 918 KB (0.92 MB).
+- **Durable Storage**: `agent.db-wal` expanded to 945 KB; peak 981.54 KB.
+- **Process Memory (RSS)**: Initial 12.00 MB, peak 22.81 MB.
+- **CPU Utilization**: 0.00% to 0.74% (mean ~0.50%).
+- **Write IO Throughput**: Peaked at 889.55 KB/s.
 - **Accounting Reconciliation**:
   - Ingested: 22 (2 baseline + 20 filesystem events)
   - Committed: 22 | Failed Before Commit: 0 | Dropped: 0
@@ -183,8 +190,12 @@ Executed in two consecutive phases using the **exact same SQLite database and id
   - Final Shutdown Outcome: `MEASUREMENT_COMPLETE`
 
 #### Phase 4B: Reconnection & Real Retry Recovery
-- **Profile**: `windows-smoke-reconnect` | **Duration**: 22,000 ms | **Sampling Interval**: 2,000 ms (11 samples)
+- **Profile**: `windows-smoke-reconnect` | **Duration**: 22,000 ms | **Sampling Interval**: 2,000 ms (12 samples: indices 0..11)
 - **Workload**: Upstream mock receiver online (`http://127.0.0.1:<port>`), same SQLite database reopened without modifying any row or column.
+- **Process Memory (RSS)**: Initial 12.02 MB, peak 22.61 MB.
+- **CPU Utilization**: 0.00% to 0.22% (mean ~0.05%).
+- **Write IO Throughput**: Peaked at 1,923.82 KB/s during WAL checkpoint / deletion transactions.
+- **Durable Storage**: Shrank from 981.54 KB down to 811.90 KB.
 - **Retry Mechanism**: The forwarder runs a background retry loop every 5 seconds. Within the 22-second execution window, the 10s–19s exponential backoff window naturally elapsed without any SQL clock resetting or test intervention.
 - **Event Identity & Ordering Verification**:
   - The test harness recorded the exact IDs and sequence numbers of all 22 offline-buffered events before starting Phase 4B.
@@ -208,12 +219,12 @@ Executed in two consecutive phases using the **exact same SQLite database and id
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Profile** | `windows-smoke-idle` | `windows-smoke-sustained` | `windows-smoke-burst` | `windows-smoke-offline` | `windows-smoke-reconnect` |
 | **Duration** | 3.0 s | 4.0 s | 4.0 s | 3.0 s | 22.0 s |
-| **Total Samples** | 3 | 4 | 4 | 3 | 11 |
-| **Degraded Samples** | 3 (Storage Unresolved) | 4 (Storage Unresolved) | 4 (Storage Unresolved) | 3 (Storage Unresolved) | 11 (Storage Unresolved) |
-| **Peak RSS Memory** | 21.91 MB | 23.41 MB | 25.79 MB | 23.27 MB | 22.90 MB |
-| **Peak Storage Size** | 222 KB | 1,309 KB | 3,773 KB | 955 KB | 296 KB |
-| **Peak Write IO** | 271 KB/s | 453 KB/s | 3,679 KB/s | 860 KB/s | 292 KB/s |
-| **Mean Process CPU** | ~0.19% | ~0.26% | ~0.28% | ~0.21% | ~0.07% |
+| **Total Samples** | 3 | 5 | 4 | 3 | 12 |
+| **Degraded Samples** | 3 (Storage Unresolved) | 5 (Storage Unresolved) | 4 (Storage Unresolved) | 3 (Storage Unresolved) | 12 (Storage Unresolved) |
+| **Peak RSS Memory** | 70.70 MB | 22.89 MB | 24.72 MB | 22.81 MB | 22.61 MB |
+| **Peak Storage Size** | 237 KB | 1,295 KB | 3,713 KB | 982 KB | 812 KB |
+| **Peak Write IO** | 340 KB/s | 803 KB/s | 3,621 KB/s | 890 KB/s | 1,924 KB/s |
+| **Mean Process CPU** | ~0.42% | ~0.19% | ~0.25% | ~0.50% | ~0.05% |
 | **Ingested Events** | 2 | 26 | 72 | 22 | 2 |
 | **Committed Events** | 2 | 26 | 72 | 22 | 2 |
 | **HTTP Accepted** | 2 | 26 | 72 | 0 | 24 |

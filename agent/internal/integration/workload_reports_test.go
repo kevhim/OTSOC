@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -72,74 +71,47 @@ func (m *mockIngestReceiver) ReceivedEvents() []*events.CanonicalEvent {
 // buildFreshEndpointWithProvenance compiles a fresh endpoint binary directly into an isolated
 // temporary test directory and validates its embedded build metadata against git provenance.
 // All external commands execute with explicit timeouts and capture diagnostic output.
-func buildFreshEndpointWithProvenance(t *testing.T, repoRoot string, tracker *runTracker) BinaryProvenance {
+func buildFreshEndpointWithProvenance(t *testing.T, repoRoot string, tracker *runTracker, preCheck SourceBoundaryCheck) BinaryProvenance {
 	t.Helper()
 	binDir := t.TempDir()
 	endpointExe := filepath.Join(binDir, "endpoint.exe")
 
-	// 1. Discover expected git revision and dirty status with explicit 5s timeout
-	ctxRev, cancelRev := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelRev()
-	startRev := time.Now()
-	revOut, err := ExecCommandWithTimeout(ctxRev, repoRoot, "git", "rev-parse", "HEAD")
-	if tracker != nil {
-		tracker.Record("git", []string{"rev-parse", "HEAD"}, repoRoot, 5*time.Second, time.Since(startRev), err)
-	}
-	if err != nil {
-		t.Fatalf("failed to obtain git revision from %s: %v", repoRoot, err)
-	}
-	expectedRevision := strings.TrimSpace(string(revOut))
-
-	ctxStatus, cancelStatus := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelStatus()
-	startStatus := time.Now()
-	statusOut, err := ExecCommandWithTimeout(ctxStatus, repoRoot, "git", "status", "--porcelain")
-	if tracker != nil {
-		tracker.Record("git", []string{"status", "--porcelain"}, repoRoot, 5*time.Second, time.Since(startStatus), err)
-	}
-	if err != nil {
-		t.Fatalf("failed to obtain git status from %s: %v", repoRoot, err)
-	}
-	expectedDirty := len(strings.TrimSpace(string(statusOut))) > 0
-
-	// 2. Build fresh binary directly into isolated temp directory with explicit 90s timeout
+	// 1. Build fresh binary directly into isolated temp directory with explicit 90s timeout
 	ctxBuild, cancelBuild := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancelBuild()
-	startBuild := time.Now()
-	buildOut, err := ExecCommandWithTimeout(ctxBuild, repoRoot, "go", "build", "-v", "-o", endpointExe, "./agent/cmd/endpoint")
+	recBuild, err := RunBoundedCommand(ctxBuild, repoRoot, 90*time.Second, "go", "build", "-v", "-o", endpointExe, "./agent/cmd/endpoint")
 	if tracker != nil {
-		tracker.Record("go", []string{"build", "-v", "-o", endpointExe, "./agent/cmd/endpoint"}, repoRoot, 90*time.Second, time.Since(startBuild), err)
+		tracker.Record(recBuild)
 	}
 	if err != nil {
-		t.Fatalf("failed to build fresh endpoint.exe in %s: %v\nOutput: %s", binDir, err, string(buildOut))
+		t.Fatalf("failed to build fresh endpoint.exe in %s: %v\nOutput: %s", binDir, err, recBuild.CombinedOutput)
 	}
 
-	// 3. Inspect binary metadata via 'go version -m <exe>' with explicit 10s timeout
+	// 2. Inspect binary metadata via 'go version -m <exe>' with explicit 10s timeout
 	ctxVersion, cancelVersion := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelVersion()
-	startVersion := time.Now()
-	versionOut, err := ExecCommandWithTimeout(ctxVersion, repoRoot, "go", "version", "-m", endpointExe)
+	recVersion, err := RunBoundedCommand(ctxVersion, repoRoot, 10*time.Second, "go", "version", "-m", endpointExe)
 	if tracker != nil {
-		tracker.Record("go", []string{"version", "-m", endpointExe}, repoRoot, 10*time.Second, time.Since(startVersion), err)
+		tracker.Record(recVersion)
 	}
 	if err != nil {
-		t.Fatalf("failed to read build info from %s: %v\nOutput: %s", endpointExe, err, string(versionOut))
+		t.Fatalf("failed to read build info from %s: %v\nOutput: %s", endpointExe, err, recVersion.CombinedOutput)
 	}
 
-	// 4. Validate binary build metadata against recorded provenance
-	actualRevision, actualDirty, actualToolchain, err := ParseBinaryProvenanceOutput(string(versionOut))
+	// 3. Validate binary build metadata against recorded provenance
+	actualRevision, actualDirty, actualToolchain, err := ParseBinaryProvenanceOutput(recVersion.CombinedOutput)
 	if err != nil {
 		t.Fatalf("binary provenance parsing failed for %s: %v", endpointExe, err)
 	}
 
-	if !strings.HasPrefix(expectedRevision, actualRevision) && !strings.HasPrefix(actualRevision, expectedRevision) {
-		t.Fatalf("binary provenance mismatch: expected revision %s, binary has %s", expectedRevision, actualRevision)
+	if !strings.HasPrefix(preCheck.Revision, actualRevision) && !strings.HasPrefix(actualRevision, preCheck.Revision) {
+		t.Fatalf("binary provenance mismatch: expected revision %s, binary has %s", preCheck.Revision, actualRevision)
 	}
-	if actualDirty != expectedDirty {
-		t.Fatalf("binary provenance mismatch: expected dirty=%v, binary has dirty=%v", expectedDirty, actualDirty)
+	if actualDirty != preCheck.Dirty {
+		t.Fatalf("binary provenance mismatch: expected dirty=%v, binary has dirty=%v", preCheck.Dirty, actualDirty)
 	}
 
-	// 5. Compute binary SHA-256
+	// 4. Compute binary SHA-256
 	sha, err := ComputeFileSHA256(endpointExe)
 	if err != nil {
 		t.Fatalf("failed to compute binary SHA-256 for %s: %v", endpointExe, err)
@@ -167,30 +139,13 @@ type runTracker struct {
 	commands []CommandExecutionRecord
 }
 
-func (r *runTracker) Record(name string, args []string, dir string, timeout time.Duration, dur time.Duration, err error) {
-	if r == nil {
+func (r *runTracker) Record(rec *CommandExecutionRecord) {
+	if r == nil || rec == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	rec := CommandExecutionRecord{
-		Command:    name,
-		Args:       args,
-		WorkingDir: dir,
-		Timeout:    timeout,
-		DurationMs: dur.Milliseconds(),
-		ExitCode:   0,
-	}
-	if err != nil {
-		rec.ErrorMessage = err.Error()
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			rec.ExitCode = exitErr.ExitCode()
-		} else {
-			rec.ExitCode = 1
-		}
-	}
-	r.commands = append(r.commands, rec)
+	r.commands = append(r.commands, *rec)
 }
 
 func (r *runTracker) Commands() []CommandExecutionRecord {
@@ -235,11 +190,33 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		t.Fatalf("failed to resolve repo root: %v", err)
 	}
 
+	requireClean := os.Getenv("EVIDENCE_EXPORT_TO_REPO") == "true" || os.Getenv("EVIDENCE_REQUIRE_CLEAN") == "true"
 	tracker := &runTracker{}
 
+	ctxCheck := context.Background()
+
+	// Checkpoint 1: Pre-compilation source boundary check
+	check1, err := CheckSourceBoundary(ctxCheck, repoRoot, "pre-compilation")
+	if err != nil {
+		t.Fatalf("pre-compilation source boundary check failed: %v", err)
+	}
+	if requireClean && check1.Dirty {
+		t.Fatalf("qualification evidence requires a clean committed source checkout, but working tree is dirty:\n%s", check1.StatusNotes)
+	}
+
 	// Always compile a fresh endpoint into an isolated test temporary directory
-	provenance := buildFreshEndpointWithProvenance(t, repoRoot, tracker)
+	provenance := buildFreshEndpointWithProvenance(t, repoRoot, tracker, check1)
 	endpointExe := provenance.ExePath
+
+	// Checkpoint 2: Post-compilation source boundary check
+	check2, err := CheckSourceBoundary(ctxCheck, repoRoot, "post-compilation")
+	if err != nil {
+		t.Fatalf("post-compilation source boundary check failed: %v", err)
+	}
+	if check2.Revision != check1.Revision || (requireClean && check2.Dirty) {
+		t.Fatalf("source instability detected post-compilation: rev1=%s, rev2=%s, dirty1=%v, dirty2=%v\nNotes: %s",
+			check1.Revision, check2.Revision, check1.Dirty, check2.Dirty, check2.StatusNotes)
+	}
 
 	// Unique run identifier and run directory
 	shortRev := provenance.SourceRevision
@@ -310,13 +287,11 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		startCmd := time.Now()
-		out, err := ExecCommandWithTimeout(ctx, scenarioDir, endpointExe, args...)
-		tracker.Record(endpointExe, args, scenarioDir, timeout, time.Since(startCmd), err)
+		rec, err := RunBoundedCommand(ctx, scenarioDir, timeout, endpointExe, args...)
+		tracker.Record(rec)
 		if err != nil {
 			t.Fatalf("endpoint.exe failed in idle scenario: %v", err)
 		}
-		_ = out
 
 		reportData, err := os.ReadFile(reportPath)
 		if err != nil {
@@ -401,12 +376,10 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		cmd := exec.CommandContext(ctx, endpointExe, args...)
-		cmd.Dir = scenarioDir
-
-		startCmd := time.Now()
-		if err := cmd.Start(); err != nil {
-			tracker.Record(endpointExe, args, scenarioDir, timeout, time.Since(startCmd), err)
+		proc, err := StartManagedSubprocess(ctx, scenarioDir, timeout, DefaultMaxOutputBytes, endpointExe, args...)
+		if err != nil {
+			rec, _ := proc.Wait()
+			tracker.Record(rec)
 			t.Fatalf("failed to start endpoint.exe in sustained scenario: %v", err)
 		}
 
@@ -432,13 +405,10 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 			}
 		}()
 
-		err = cmd.Wait()
+		rec, err := proc.Wait()
 		close(stopSustained)
-		tracker.Record(endpointExe, args, scenarioDir, timeout, time.Since(startCmd), err)
+		tracker.Record(rec)
 		if err != nil {
-			if ctx.Err() == context.DeadlineExceeded {
-				t.Fatalf("endpoint.exe timed out in sustained scenario after %v: %v", timeout, err)
-			}
 			t.Fatalf("endpoint.exe failed in sustained scenario: %v", err)
 		}
 
@@ -525,12 +495,10 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		cmd := exec.CommandContext(ctx, endpointExe, args...)
-		cmd.Dir = scenarioDir
-
-		startCmd := time.Now()
-		if err := cmd.Start(); err != nil {
-			tracker.Record(endpointExe, args, scenarioDir, timeout, time.Since(startCmd), err)
+		proc, err := StartManagedSubprocess(ctx, scenarioDir, timeout, DefaultMaxOutputBytes, endpointExe, args...)
+		if err != nil {
+			rec, _ := proc.Wait()
+			tracker.Record(rec)
 			t.Fatalf("failed to start endpoint.exe in burst scenario: %v", err)
 		}
 
@@ -541,12 +509,9 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 			_ = os.WriteFile(filePath, []byte(fmt.Sprintf("burst payload %d", i)), 0644)
 		}
 
-		err = cmd.Wait()
-		tracker.Record(endpointExe, args, scenarioDir, timeout, time.Since(startCmd), err)
+		rec, err := proc.Wait()
+		tracker.Record(rec)
 		if err != nil {
-			if ctx.Err() == context.DeadlineExceeded {
-				t.Fatalf("endpoint.exe timed out in burst scenario after %v: %v", timeout, err)
-			}
 			t.Fatalf("endpoint.exe failed in burst scenario: %v", err)
 		}
 
@@ -630,12 +595,10 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		ctxOffline, cancelOffline := context.WithTimeout(context.Background(), timeoutOffline)
 		defer cancelOffline()
 
-		cmdOffline := exec.CommandContext(ctxOffline, endpointExe, argsOffline...)
-		cmdOffline.Dir = scenarioDir
-
-		startOffline := time.Now()
-		if err := cmdOffline.Start(); err != nil {
-			tracker.Record(endpointExe, argsOffline, scenarioDir, timeoutOffline, time.Since(startOffline), err)
+		procOffline, err := StartManagedSubprocess(ctxOffline, scenarioDir, timeoutOffline, DefaultMaxOutputBytes, endpointExe, argsOffline...)
+		if err != nil {
+			rec, _ := procOffline.Wait()
+			tracker.Record(rec)
 			t.Fatalf("failed to start endpoint.exe for offline phase: %v", err)
 		}
 
@@ -646,12 +609,9 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 			_ = os.WriteFile(filePath, []byte(fmt.Sprintf("offline content %d", i)), 0644)
 		}
 
-		err = cmdOffline.Wait()
-		tracker.Record(endpointExe, argsOffline, scenarioDir, timeoutOffline, time.Since(startOffline), err)
+		recOffline, err := procOffline.Wait()
+		tracker.Record(recOffline)
 		if err != nil {
-			if ctxOffline.Err() == context.DeadlineExceeded {
-				t.Fatalf("endpoint.exe timed out in offline phase after %v: %v", timeoutOffline, err)
-			}
 			t.Fatalf("endpoint.exe failed in offline phase: %v", err)
 		}
 
@@ -769,13 +729,11 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		ctxReconnect, cancelReconnect := context.WithTimeout(context.Background(), timeoutReconnect)
 		defer cancelReconnect()
 
-		startReconnect := time.Now()
-		outRec, err := ExecCommandWithTimeout(ctxReconnect, scenarioDir, endpointExe, argsReconnect...)
-		tracker.Record(endpointExe, argsReconnect, scenarioDir, timeoutReconnect, time.Since(startReconnect), err)
+		recReconnect, err := RunBoundedCommand(ctxReconnect, scenarioDir, timeoutReconnect, endpointExe, argsReconnect...)
+		tracker.Record(recReconnect)
 		if err != nil {
 			t.Fatalf("endpoint.exe failed in real retry recovery phase: %v", err)
 		}
-		_ = outRec
 
 		reconnectReportData, err := os.ReadFile(reconnectReportPath)
 		if err != nil {
@@ -851,21 +809,34 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------
+	// Checkpoint 3: Post-Workload Source Boundary Stability Check
+	// -------------------------------------------------------------
+	check3, err := CheckSourceBoundary(ctxCheck, repoRoot, "post-workload")
+	if err != nil {
+		t.Fatalf("post-workload source boundary check failed: %v", err)
+	}
+	if check3.Revision != check1.Revision || (requireClean && check3.Dirty) {
+		t.Fatalf("source instability detected post-workload: rev1=%s, rev3=%s, dirty1=%v, dirty3=%v\nNotes: %s",
+			check1.Revision, check3.Revision, check1.Dirty, check3.Dirty, check3.StatusNotes)
+	}
+
+	// -------------------------------------------------------------
 	// Write Provenance Manifest and Command Execution Logs
 	// -------------------------------------------------------------
 	provManifest := RunProvenanceManifest{
-		RunID:            runID,
-		TimestampUTC:     time.Now().UTC().Format(time.RFC3339),
-		SourceRevision:   provenance.SourceRevision,
-		Dirty:            provenance.Dirty,
-		BinaryProvenance: provenance,
-		HostOS:           provenance.OS,
-		HostArch:         provenance.Architecture,
-		LogicalCPUs:      provenance.LogicalCPUs,
-		GoToolchain:      provenance.Toolchain,
-		ExecutedCommands: tracker.Commands(),
-		WorkloadRecipes:  recipes,
-		GeneratedReports: generatedReports,
+		RunID:                runID,
+		TimestampUTC:         time.Now().UTC().Format(time.RFC3339),
+		SourceRevision:       provenance.SourceRevision,
+		Dirty:                provenance.Dirty,
+		SourceBoundaryChecks: []SourceBoundaryCheck{check1, check2, check3},
+		BinaryProvenance:     provenance,
+		HostOS:               provenance.OS,
+		HostArch:             provenance.Architecture,
+		LogicalCPUs:          provenance.LogicalCPUs,
+		GoToolchain:          provenance.Toolchain,
+		ExecutedCommands:     tracker.Commands(),
+		WorkloadRecipes:      recipes,
+		GeneratedReports:     generatedReports,
 	}
 
 	provJSON, err := json.MarshalIndent(provManifest, "", "  ")
@@ -884,11 +855,29 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 	logLines = append(logLines, fmt.Sprintf("Toolchain: %s", provenance.Toolchain))
 	logLines = append(logLines, fmt.Sprintf("Binary SHA256: %s", provenance.SHA256))
 	logLines = append(logLines, "")
+	logLines = append(logLines, "=== SOURCE BOUNDARY STABILITY CHECKS ===")
+	for i, chk := range provManifest.SourceBoundaryChecks {
+		logLines = append(logLines, fmt.Sprintf("[%d] Checkpoint: %-17s | Rev: %s | Dirty: %-5v | Valid: %v",
+			i+1, chk.Checkpoint, chk.Revision, chk.Dirty, chk.Valid))
+		if chk.StatusNotes != "" {
+			logLines = append(logLines, fmt.Sprintf("    Notes: %s", chk.StatusNotes))
+		}
+	}
+	logLines = append(logLines, "Note: Boundary checks establish boundary-state consistency; they cannot prove no transient edit occurred between checkpoints.")
+	logLines = append(logLines, "")
 	logLines = append(logLines, "=== EXECUTED COMMANDS ===")
 	for i, cmd := range tracker.Commands() {
-		status := "SUCCESS"
-		if cmd.ExitCode != 0 || cmd.ErrorMessage != "" {
-			status = fmt.Sprintf("FAILED (exit=%d: %s)", cmd.ExitCode, cmd.ErrorMessage)
+		status := string(cmd.Outcome)
+		if cmd.ExitCode != nil {
+			status = fmt.Sprintf("%s (exit=%d)", cmd.Outcome, *cmd.ExitCode)
+		} else {
+			status = fmt.Sprintf("%s (process not started)", cmd.Outcome)
+		}
+		if cmd.ErrorMessage != "" && cmd.Outcome != OutcomeSuccess {
+			status = fmt.Sprintf("%s: %s", status, cmd.ErrorMessage)
+		}
+		if cmd.Truncated {
+			status += " [OUTPUT TRUNCATED]"
 		}
 		logLines = append(logLines, fmt.Sprintf("[%02d] %s %s", i+1, cmd.Command, strings.Join(cmd.Args, " ")))
 		logLines = append(logLines, fmt.Sprintf("     Dir: %s | Timeout: %v | Duration: %dms | Status: %s",
@@ -902,41 +891,15 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 	t.Logf("All evidence staged exclusively in: %s (%d reports, provenance.json, commands.log)",
 		stagingRunDir, len(generatedReports))
 
-	// If requested or if running in evidence-export mode, export run to repo runs directory
+	// If requested or if running in evidence-export mode, export run exclusively to target directory
 	exportTarget := os.Getenv("EVIDENCE_EXPORT_DIR")
 	if exportTarget == "" && os.Getenv("EVIDENCE_EXPORT_TO_REPO") == "true" {
 		exportTarget = filepath.Join(repoRoot, "docs", "evidence", "phase4", "runs", runID)
 	}
 	if exportTarget != "" {
-		if err := os.MkdirAll(exportTarget, 0755); err != nil {
-			t.Fatalf("failed to create export target dir: %v", err)
-		}
-		entries, err := os.ReadDir(stagingRunDir)
-		if err != nil {
-			t.Fatalf("failed to read staging dir: %v", err)
-		}
-		for _, entry := range entries {
-			src := filepath.Join(stagingRunDir, entry.Name())
-			dest := filepath.Join(exportTarget, entry.Name())
-			data, err := os.ReadFile(src)
-			if err != nil {
-				t.Fatalf("failed to read staged file %s: %v", src, err)
-			}
-			if err := WriteEvidenceExclusive(dest, data); err != nil {
-				t.Fatalf("failed to export evidence file %s: %v", dest, err)
-			}
+		if err := ExportEvidenceRun(stagingRunDir, exportTarget); err != nil {
+			t.Fatalf("failed to export evidence run exclusively to %s: %v", exportTarget, err)
 		}
 		t.Logf("Exported evidence run exclusively to: %s", exportTarget)
-
-		// Also update canonical reports in docs/evidence/phase4/
-		canonicalDir := filepath.Join(repoRoot, "docs", "evidence", "phase4")
-		for _, reportName := range generatedReports {
-			src := filepath.Join(stagingRunDir, reportName)
-			dest := filepath.Join(canonicalDir, reportName)
-			data, err := os.ReadFile(src)
-			if err == nil {
-				_ = os.WriteFile(dest, data, 0644)
-			}
-		}
 	}
 }

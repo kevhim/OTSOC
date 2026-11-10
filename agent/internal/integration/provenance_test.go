@@ -2,7 +2,10 @@ package integration
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -136,5 +139,207 @@ func TestExecCommandWithTimeout_ReportsDeadline(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "timed out") {
 		t.Errorf("expected timeout message in error, got: %v", err)
+	}
+}
+
+func TestSubprocess_SuccessfulOutputCapture(t *testing.T) {
+	ctx := context.Background()
+	rec, err := RunBoundedCommand(ctx, ".", 10*time.Second, "go", "version")
+	if err != nil {
+		t.Fatalf("expected successful execution, got: %v", err)
+	}
+	if rec.Outcome != OutcomeSuccess {
+		t.Errorf("expected outcome SUCCESS, got %s", rec.Outcome)
+	}
+	if !rec.ProcessStarted {
+		t.Errorf("expected ProcessStarted=true")
+	}
+	if rec.ExitCode == nil || *rec.ExitCode != 0 {
+		t.Errorf("expected ExitCode=0, got %v", rec.ExitCode)
+	}
+	if !strings.Contains(rec.CombinedOutput, "go version") {
+		t.Errorf("expected combined output to contain 'go version', got:\n%s", rec.CombinedOutput)
+	}
+	if rec.Truncated {
+		t.Errorf("expected Truncated=false")
+	}
+}
+
+func TestSubprocess_KnownNonzeroExitCode_WrappedErrors(t *testing.T) {
+	ctx := context.Background()
+	var name string
+	var args []string
+	expectedCode := 42
+	if runtime.GOOS == "windows" {
+		name = "cmd"
+		args = []string{"/c", "exit 42"}
+	} else {
+		name = "sh"
+		args = []string{"-c", "exit 42"}
+	}
+
+	rec, err := RunBoundedCommand(ctx, ".", 5*time.Second, name, args...)
+	if err == nil {
+		t.Fatalf("expected non-zero exit command to return an error, but err was nil")
+	}
+	if rec.Outcome != OutcomeNonzeroExit {
+		t.Errorf("expected outcome NONZERO_EXIT, got %s", rec.Outcome)
+	}
+	if !rec.ProcessStarted {
+		t.Errorf("expected ProcessStarted=true")
+	}
+	if rec.ExitCode == nil || *rec.ExitCode != expectedCode {
+		t.Errorf("expected ExitCode=%d, got %v", expectedCode, rec.ExitCode)
+	}
+
+	// Verify errors.As correctly unwraps a wrapped *exec.ExitError
+	wrappedErr := fmt.Errorf("contextual outer wrapper: %w", err)
+	var exitErr *exec.ExitError
+	if !errors.As(wrappedErr, &exitErr) {
+		t.Fatalf("errors.As failed to extract *exec.ExitError from wrapped error: %v", wrappedErr)
+	}
+	if exitErr.ExitCode() != expectedCode {
+		t.Errorf("expected exit code %d from errors.As, got %d", expectedCode, exitErr.ExitCode())
+	}
+}
+
+func TestSubprocess_LaunchFailure(t *testing.T) {
+	ctx := context.Background()
+	nonExistentBin := "non_existent_executable_12345_xyz.exe"
+	rec, err := RunBoundedCommand(ctx, ".", 5*time.Second, nonExistentBin)
+	if err == nil {
+		t.Fatalf("expected launch failure error, but err was nil")
+	}
+	if rec.Outcome != OutcomeLaunchFailure {
+		t.Errorf("expected outcome LAUNCH_FAILURE, got %s", rec.Outcome)
+	}
+	if rec.ProcessStarted {
+		t.Errorf("expected ProcessStarted=false")
+	}
+	if rec.ExitCode != nil {
+		t.Errorf("expected ExitCode=nil when process never started, got %v", *rec.ExitCode)
+	}
+	if rec.ErrorMessage == "" {
+		t.Errorf("expected error message recorded in execution record")
+	}
+}
+
+func TestSubprocess_Timeout(t *testing.T) {
+	ctx := context.Background()
+	var name string
+	var args []string
+	if runtime.GOOS == "windows" {
+		name = "powershell"
+		args = []string{"-NoProfile", "-Command", "Start-Sleep -Milliseconds 1500"}
+	} else {
+		name = "sleep"
+		args = []string{"1.5"}
+	}
+
+	rec, err := RunBoundedCommand(ctx, ".", 100*time.Millisecond, name, args...)
+	if err == nil {
+		t.Fatalf("expected timeout error, but command succeeded")
+	}
+	if rec.Outcome != OutcomeTimeout {
+		t.Errorf("expected outcome TIMEOUT, got %s", rec.Outcome)
+	}
+	if !rec.ProcessStarted {
+		t.Errorf("expected ProcessStarted=true for timed out process")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("expected timeout message in error, got: %v", err)
+	}
+}
+
+func TestSubprocess_OutputTruncation(t *testing.T) {
+	maxBytes := 64
+	buf := newBoundedBuffer(maxBytes)
+	largeData := strings.Repeat("A", 128)
+	_, writeErr := buf.Write([]byte(largeData))
+	if writeErr != nil {
+		t.Fatalf("unexpected write error on buffer: %v", writeErr)
+	}
+	if !buf.IsTruncated() {
+		t.Errorf("expected buffer to be truncated")
+	}
+	if !strings.Contains(buf.String(), fmt.Sprintf("[OUTPUT TRUNCATED: exceeded limit of %d bytes]", maxBytes)) {
+		t.Errorf("expected truncation marker in output, got: %s", buf.String())
+	}
+}
+
+func TestExportEvidenceRun_RefusesOverwriteAndPreservesUnrelatedFiles(t *testing.T) {
+	stagingDir := t.TempDir()
+	targetDir := t.TempDir()
+
+	// Write staged files
+	if err := os.WriteFile(filepath.Join(stagingDir, "report_a.json"), []byte(`{"run":"staged_a"}`), 0644); err != nil {
+		t.Fatalf("failed to write staged file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stagingDir, "report_b.json"), []byte(`{"run":"staged_b"}`), 0644); err != nil {
+		t.Fatalf("failed to write staged file: %v", err)
+	}
+
+	// In targetDir, establish an unrelated file and a colliding file
+	unrelatedPath := filepath.Join(targetDir, "unrelated.txt")
+	unrelatedContent := "important unrelated project artifact - do not modify or delete"
+	if err := os.WriteFile(unrelatedPath, []byte(unrelatedContent), 0644); err != nil {
+		t.Fatalf("failed to write unrelated file: %v", err)
+	}
+
+	collidingPath := filepath.Join(targetDir, "report_a.json")
+	collidingContent := `{"run":"preexisting_a"}`
+	if err := os.WriteFile(collidingPath, []byte(collidingContent), 0644); err != nil {
+		t.Fatalf("failed to write colliding file: %v", err)
+	}
+
+	// Attempt export
+	err := ExportEvidenceRun(stagingDir, targetDir)
+	if err == nil {
+		t.Fatalf("expected ExportEvidenceRun to fail due to existing file, but succeeded")
+	}
+	if !strings.Contains(err.Error(), "refusing to overwrite") {
+		t.Errorf("expected 'refusing to overwrite' error, got: %v", err)
+	}
+
+	// Assert unrelated file is completely untouched
+	gotUnrelated, err := os.ReadFile(unrelatedPath)
+	if err != nil {
+		t.Fatalf("failed to read unrelated file: %v", err)
+	}
+	if string(gotUnrelated) != unrelatedContent {
+		t.Errorf("unrelated file was corrupted: expected %q, got %q", unrelatedContent, string(gotUnrelated))
+	}
+
+	// Assert colliding file is completely untouched
+	gotColliding, err := os.ReadFile(collidingPath)
+	if err != nil {
+		t.Fatalf("failed to read colliding file: %v", err)
+	}
+	if string(gotColliding) != collidingContent {
+		t.Errorf("colliding file was overwritten: expected %q, got %q", collidingContent, string(gotColliding))
+	}
+}
+
+func TestCheckSourceBoundary_ValidAndRecordsStatus(t *testing.T) {
+	repoRoot, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatalf("failed to resolve repo root: %v", err)
+	}
+
+	check, err := CheckSourceBoundary(context.Background(), repoRoot, "unit-test-boundary")
+	if err != nil {
+		t.Fatalf("unexpected boundary check error: %v", err)
+	}
+	if !check.Valid {
+		t.Errorf("expected check to be valid")
+	}
+	if check.Checkpoint != "unit-test-boundary" {
+		t.Errorf("expected checkpoint 'unit-test-boundary', got %s", check.Checkpoint)
+	}
+	if check.Revision == "" {
+		t.Errorf("expected non-empty revision")
+	}
+	if check.TimestampUTC == "" {
+		t.Errorf("expected non-empty timestamp")
 	}
 }

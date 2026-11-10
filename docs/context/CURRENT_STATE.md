@@ -494,3 +494,40 @@ Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Resource governor th
 - `go test -v -count=1 ./agent/internal/integration -run TestWorkload_WindowsMeasurementReports`: 4/4 PASS (40.58s).
 - `go build -v ./agent/cmd/endpoint`: PASS.
 - `go build -v ./server/cmd/api`: PASS.
+
+## 2026-11-10 Phase 4 Evidence Export Protection, Source Stability Boundaries & Diagnostic Capture Checkpoint (non-phase changing)
+
+A focused checkpoint implementing overwrite-free evidence export, multi-checkpoint source stability verification, unified subprocess diagnostic capture, and raw evidence reconciliation was completed on branch `fix/correctness-remediation-checkpoint`.
+Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Resource governor thresholds remain uncalibrated and observational until representative multi-sample workloads are measured on constrained OT hardware.
+
+### 1. Overwrite Path Elimination & Safe Evidence Export (`workload_reports_test.go`)
+- **Canonical Overwrite Elimination**: Completely removed automatic overwriting of canonical reports (`docs/evidence/phase4/*.json`) in `workload_reports_test.go`.
+- **Exclusive Run Export**: Extracted `ExportEvidenceRun` in `provenance_helpers.go`, exporting files exclusively via `WriteEvidenceExclusive` into unique run directories. If any target file already exists, export fails immediately and leaves unrelated files untouched.
+- **External Export Safety**: When `EVIDENCE_EXPORT_DIR` is set to an external path, zero writes are made to the repository root.
+- **Error Propagation**: All export, file creation, write, and close errors are explicitly checked and propagated; no errors are discarded with `_ = ...`.
+- **Regression**: Added `TestExportEvidenceRun_RefusesOverwriteAndPreservesUnrelatedFiles` asserting export refusal on existing files and non-corruption of adjacent unrelated artifacts.
+
+### 2. Multi-Boundary Source Tree Stability Verification
+- **Tri-Boundary Stability Checks**: Implemented `CheckSourceBoundary` verifying git revision and uncommitted status across 3 discrete checkpoints:
+  1. `pre-compilation`: Verifies clean committed checkout before building (`dirty: false` required for qualification runs).
+  2. `post-compilation`: Verifies source revision and status did not mutate during compilation.
+  3. `post-workload`: Verifies source revision and status did not mutate during scenario execution prior to export.
+- **Fail Visibly & Preserve State**: If revision changes or working tree becomes dirty, the run is marked invalid, fails visibly, and refuses export into repo runs. The harness never invokes `git reset`, `git clean`, or `git stash`.
+- **Boundary Semantics Disclosure**: Documented that boundary checks establish consistency at discrete checkpoints; they do not prove that no transient edit occurred between checkpoints. An isolated committed checkout should be used for qualification evidence.
+- **Regression**: Added `TestCheckSourceBoundary_ValidAndRecordsStatus`.
+
+### 3. Unified Subprocess Lifecycle & Diagnostic Capture (`ManagedSubprocess`)
+- **Consistent Execution Abstraction**: Unified git, compilation, inspection, and workload executions under `StartManagedSubprocess` and `RunBoundedCommand`.
+- **Truthful Exit Codes & Outcomes**:
+  - `ExitCode` is typed as `*int` and set to `nil` when the process never started (exit codes are never fabricated).
+  - Preserves wrapped `*exec.ExitError` exit codes via `errors.As`.
+  - Distinguishes `SUCCESS`, `NONZERO_EXIT`, `TIMEOUT`, `CANCELLED`, and `LAUNCH_FAILURE`.
+- **Bounded Buffer Capture**: Stdout and stderr are captured into thread-safe bounded buffers (`DefaultMaxOutputBytes = 256 KB`), appending an explicit `[OUTPUT TRUNCATED]` marker if exceeded.
+- **Diagnostics**: Records all command invocations, working directories, timeouts, durations, outcomes, and real exit codes in `commands.log` and `provenance.json`.
+- **Regressions**: Added 5 focused unit tests covering output capture, wrapped exit code extraction, launch failure, timeout, and truncation.
+
+### 4. Raw Evidence & Documentation Reconciliation
+- **Reconciled Sample Counts**: Corrected documentation from earlier historical values (4 sustained, 11 reconnect) to match the exact raw JSON evidence from clean run `run_20261110_054251_8240a569` (5 sustained samples, 12 reconnect samples).
+- **Timer Boundary Variation Explanation**: Documented that sampling counts vary at timer boundaries depending on whether initial sample collection precedes or coincides with the interval ticker, and whether the final sample is recorded immediately prior to shutdown.
+- **Metric Verification**: Checked all published memory (RSS), persistence storage bytes, write I/O rates, and CPU percent values against raw JSON reports.
+- **Truthful Scope Disclaimers**: Retained explicit limitations regarding unconfigured storage budget, HTTP 202 transport acknowledgement vs central durability, absence of detection-match cost on synthetic noise, and developer-host smoke limitations.

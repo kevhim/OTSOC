@@ -139,4 +139,13 @@
   - **Truthful Degraded Measurement Accounting**: Explicitly documented why samples report `degraded_samples = total_samples` (raw signals fully available; storage pressure evaluation intentionally blocked at `StorageBudgetBytes: 0` pending authoritative policy).
   - **Verification**: 9/9 PASS on `verify-phase4.ps1 -Race -NativeDetection`, 5/5 PASS on provenance unit tests, 4/4 PASS on Windows measurement workload suite.
 - **Milestone Status**: Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
+
+## Phase 4 Evidence Export Protection, Source Stability Boundaries & Diagnostic Capture Checkpoint (2026-11-10)
+- **Status**: Completed on branch `fix/correctness-remediation-checkpoint`.
+- **Key Changes**:
+  - **Overwrite Path Elimination**: Removed automatic canonical-report overwriting in `workload_reports_test.go`. Evidence exports exclusively via `ExportEvidenceRun` into unique run directories. External `EVIDENCE_EXPORT_DIR` causes zero writes into the repository. All export/write/close errors are strictly checked and propagated. Added regression `TestExportEvidenceRun_RefusesOverwriteAndPreservesUnrelatedFiles`.
+  - **Source Stability Boundaries**: Implemented `CheckSourceBoundary` across `pre-compilation`, `post-compilation`, and `post-workload` boundaries. Requires clean committed checkout (`dirty: false`) for qualification evidence. Fails visibly if revision changes or working tree becomes dirty, refusing export without modifying or cleaning working tree. Disclosed boundary-consistency semantics. Added regression `TestCheckSourceBoundary_ValidAndRecordsStatus`.
+  - **Subprocess Diagnostics & Truthful Outcomes**: Unified all subprocess execution under `ManagedSubprocess` and `RunBoundedCommand`. Bounded stdout/stderr capture (256 KB) with `[OUTPUT TRUNCATED]` tagging. `ExitCode` is typed `*int` and set to `nil` when a process never starts (no invented exit codes). Wrapped `*exec.ExitError` exit codes extracted via `errors.As`. Distinguishes `SUCCESS`, `NONZERO_EXIT`, `TIMEOUT`, `CANCELLED`, and `LAUNCH_FAILURE`. Added 5 focused subprocess regressions.
+  - **Raw Evidence Reconciliation**: Reconciled documentation and summary tables with exact raw JSON evidence from clean run `run_20261110_054251_8240a569` (5 sustained samples, 12 reconnect samples, exact memory/storage/IO metrics, and timer boundary variation explanation).
+- **Milestone Status**: Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
 - **Next Bounded Implementation Task**: Execute equivalent Linux CI race & native workload evidence collection and plan representative low-spec qualification.
