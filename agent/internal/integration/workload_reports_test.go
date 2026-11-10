@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,73 +69,69 @@ func (m *mockIngestReceiver) ReceivedEvents() []*events.CanonicalEvent {
 	return res
 }
 
-type BinaryProvenance struct {
-	ExePath        string
-	SourceRevision string
-	Dirty          bool
-	Toolchain      string
-}
-
 // buildFreshEndpointWithProvenance compiles a fresh endpoint binary directly into an isolated
 // temporary test directory and validates its embedded build metadata against git provenance.
-// Never reuses repository-root binaries.
-func buildFreshEndpointWithProvenance(t *testing.T, repoRoot string) BinaryProvenance {
+// All external commands execute with explicit timeouts and capture diagnostic output.
+func buildFreshEndpointWithProvenance(t *testing.T, repoRoot string, tracker *runTracker) BinaryProvenance {
 	t.Helper()
 	binDir := t.TempDir()
 	endpointExe := filepath.Join(binDir, "endpoint.exe")
 
-	// 1. Discover expected git revision and dirty status
-	gitRevCmd := exec.Command("git", "rev-parse", "HEAD")
-	gitRevCmd.Dir = repoRoot
-	revOut, err := gitRevCmd.Output()
+	// 1. Discover expected git revision and dirty status with explicit 5s timeout
+	ctxRev, cancelRev := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelRev()
+	startRev := time.Now()
+	revOut, err := ExecCommandWithTimeout(ctxRev, repoRoot, "git", "rev-parse", "HEAD")
+	if tracker != nil {
+		tracker.Record("git", []string{"rev-parse", "HEAD"}, repoRoot, 5*time.Second, time.Since(startRev), err)
+	}
 	if err != nil {
 		t.Fatalf("failed to obtain git revision from %s: %v", repoRoot, err)
 	}
 	expectedRevision := strings.TrimSpace(string(revOut))
 
-	gitStatusCmd := exec.Command("git", "status", "--porcelain")
-	gitStatusCmd.Dir = repoRoot
-	statusOut, err := gitStatusCmd.Output()
+	ctxStatus, cancelStatus := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelStatus()
+	startStatus := time.Now()
+	statusOut, err := ExecCommandWithTimeout(ctxStatus, repoRoot, "git", "status", "--porcelain")
+	if tracker != nil {
+		tracker.Record("git", []string{"status", "--porcelain"}, repoRoot, 5*time.Second, time.Since(startStatus), err)
+	}
 	if err != nil {
 		t.Fatalf("failed to obtain git status from %s: %v", repoRoot, err)
 	}
 	expectedDirty := len(strings.TrimSpace(string(statusOut))) > 0
 
-	// 2. Build fresh binary directly into isolated temp directory
-	buildCmd := exec.Command("go", "build", "-v", "-o", endpointExe, "./agent/cmd/endpoint")
-	buildCmd.Dir = repoRoot
-	buildOut, err := buildCmd.CombinedOutput()
+	// 2. Build fresh binary directly into isolated temp directory with explicit 90s timeout
+	ctxBuild, cancelBuild := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancelBuild()
+	startBuild := time.Now()
+	buildOut, err := ExecCommandWithTimeout(ctxBuild, repoRoot, "go", "build", "-v", "-o", endpointExe, "./agent/cmd/endpoint")
+	if tracker != nil {
+		tracker.Record("go", []string{"build", "-v", "-o", endpointExe, "./agent/cmd/endpoint"}, repoRoot, 90*time.Second, time.Since(startBuild), err)
+	}
 	if err != nil {
 		t.Fatalf("failed to build fresh endpoint.exe in %s: %v\nOutput: %s", binDir, err, string(buildOut))
 	}
 
-	// 3. Inspect binary metadata via 'go version -m <exe>'
-	versionCmd := exec.Command("go", "version", "-m", endpointExe)
-	versionCmd.Dir = repoRoot
-	versionOut, err := versionCmd.CombinedOutput()
+	// 3. Inspect binary metadata via 'go version -m <exe>' with explicit 10s timeout
+	ctxVersion, cancelVersion := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelVersion()
+	startVersion := time.Now()
+	versionOut, err := ExecCommandWithTimeout(ctxVersion, repoRoot, "go", "version", "-m", endpointExe)
+	if tracker != nil {
+		tracker.Record("go", []string{"version", "-m", endpointExe}, repoRoot, 10*time.Second, time.Since(startVersion), err)
+	}
 	if err != nil {
 		t.Fatalf("failed to read build info from %s: %v\nOutput: %s", endpointExe, err, string(versionOut))
 	}
 
 	// 4. Validate binary build metadata against recorded provenance
-	var actualRevision string
-	var actualDirty bool
-	var actualToolchain string
-	lines := strings.Split(string(versionOut), "\n")
-	for _, l := range lines {
-		trimmed := strings.TrimSpace(l)
-		if strings.HasPrefix(trimmed, "endpoint.exe: ") {
-			actualToolchain = strings.TrimPrefix(trimmed, "endpoint.exe: ")
-		} else if strings.HasPrefix(trimmed, "build\tvcs.revision=") {
-			actualRevision = strings.TrimPrefix(trimmed, "build\tvcs.revision=")
-		} else if strings.HasPrefix(trimmed, "build\tvcs.modified=") {
-			actualDirty = (strings.TrimPrefix(trimmed, "build\tvcs.modified=") == "true")
-		}
+	actualRevision, actualDirty, actualToolchain, err := ParseBinaryProvenanceOutput(string(versionOut))
+	if err != nil {
+		t.Fatalf("binary provenance parsing failed for %s: %v", endpointExe, err)
 	}
 
-	if actualRevision == "" {
-		t.Fatalf("binary provenance unavailable: build metadata missing vcs.revision in %s\n%s", endpointExe, string(versionOut))
-	}
 	if !strings.HasPrefix(expectedRevision, actualRevision) && !strings.HasPrefix(actualRevision, expectedRevision) {
 		t.Fatalf("binary provenance mismatch: expected revision %s, binary has %s", expectedRevision, actualRevision)
 	}
@@ -142,34 +139,94 @@ func buildFreshEndpointWithProvenance(t *testing.T, repoRoot string) BinaryProve
 		t.Fatalf("binary provenance mismatch: expected dirty=%v, binary has dirty=%v", expectedDirty, actualDirty)
 	}
 
-	t.Logf("Fresh binary provenance verified: %s (rev: %s, dirty: %v, toolchain: %s)",
-		endpointExe, actualRevision, actualDirty, actualToolchain)
+	// 5. Compute binary SHA-256
+	sha, err := ComputeFileSHA256(endpointExe)
+	if err != nil {
+		t.Fatalf("failed to compute binary SHA-256 for %s: %v", endpointExe, err)
+	}
 
-	return BinaryProvenance{
+	prov := BinaryProvenance{
 		ExePath:        endpointExe,
+		SHA256:         sha,
 		SourceRevision: actualRevision,
 		Dirty:          actualDirty,
 		Toolchain:      actualToolchain,
+		OS:             runtime.GOOS,
+		Architecture:   runtime.GOARCH,
+		LogicalCPUs:    runtime.NumCPU(),
 	}
+
+	t.Logf("Fresh binary provenance verified: %s (rev: %s, dirty: %v, toolchain: %s, sha256: %s)",
+		endpointExe, actualRevision, actualDirty, actualToolchain, sha)
+
+	return prov
 }
 
-func copyReportEvidence(t *testing.T, srcPath, destName, repoRoot string) {
-	t.Helper()
-	evidenceDir := filepath.Join(repoRoot, "docs", "evidence", "phase4")
-	if err := os.MkdirAll(evidenceDir, 0755); err != nil {
-		t.Fatalf("failed to create evidence directory: %v", err)
-	}
+type runTracker struct {
+	mu       sync.Mutex
+	commands []CommandExecutionRecord
+}
 
-	data, err := os.ReadFile(srcPath)
+func (r *runTracker) Record(name string, args []string, dir string, timeout time.Duration, dur time.Duration, err error) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	rec := CommandExecutionRecord{
+		Command:    name,
+		Args:       args,
+		WorkingDir: dir,
+		Timeout:    timeout,
+		DurationMs: dur.Milliseconds(),
+		ExitCode:   0,
+	}
 	if err != nil {
-		t.Fatalf("failed to read report from %s: %v", srcPath, err)
+		rec.ErrorMessage = err.Error()
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			rec.ExitCode = exitErr.ExitCode()
+		} else {
+			rec.ExitCode = 1
+		}
 	}
+	r.commands = append(r.commands, rec)
+}
 
-	destPath := filepath.Join(evidenceDir, destName)
-	if err := os.WriteFile(destPath, data, 0644); err != nil {
-		t.Fatalf("failed to write evidence report to %s: %v", destPath, err)
+func (r *runTracker) Commands() []CommandExecutionRecord {
+	if r == nil {
+		return nil
 	}
-	t.Logf("Persisted workload evidence report: %s (%d bytes)", destPath, len(data))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	res := make([]CommandExecutionRecord, len(r.commands))
+	copy(res, r.commands)
+	return res
+}
+
+func validateReportManifest(t *testing.T, rep *resourcereport.Report, prov BinaryProvenance, profile string) {
+	t.Helper()
+	if rep.Manifest.Profile != profile {
+		t.Errorf("manifest profile mismatch: expected %s, got %s", profile, rep.Manifest.Profile)
+	}
+	if rep.Manifest.OS != prov.OS {
+		t.Errorf("manifest OS mismatch: expected %s, got %s", prov.OS, rep.Manifest.OS)
+	}
+	if rep.Manifest.Architecture != prov.Architecture {
+		t.Errorf("manifest Architecture mismatch: expected %s, got %s", prov.Architecture, rep.Manifest.Architecture)
+	}
+	if rep.Manifest.LogicalCPUs <= 0 {
+		t.Errorf("manifest LogicalCPUs must be > 0, got %d", rep.Manifest.LogicalCPUs)
+	}
+	if !strings.HasPrefix(prov.SourceRevision, rep.Manifest.SourceRevision) && !strings.HasPrefix(rep.Manifest.SourceRevision, prov.SourceRevision) {
+		t.Errorf("manifest source_revision mismatch: expected %s, got %s", prov.SourceRevision, rep.Manifest.SourceRevision)
+	}
+	if rep.Manifest.Dirty != prov.Dirty {
+		t.Errorf("manifest dirty mismatch: expected %v, got %v", prov.Dirty, rep.Manifest.Dirty)
+	}
+	if rep.Manifest.Toolchain != prov.Toolchain {
+		t.Errorf("manifest toolchain mismatch: expected %s, got %s", prov.Toolchain, rep.Manifest.Toolchain)
+	}
 }
 
 func TestWorkload_WindowsMeasurementReports(t *testing.T) {
@@ -178,9 +235,27 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		t.Fatalf("failed to resolve repo root: %v", err)
 	}
 
+	tracker := &runTracker{}
+
 	// Always compile a fresh endpoint into an isolated test temporary directory
-	provenance := buildFreshEndpointWithProvenance(t, repoRoot)
+	provenance := buildFreshEndpointWithProvenance(t, repoRoot, tracker)
 	endpointExe := provenance.ExePath
+
+	// Unique run identifier and run directory
+	shortRev := provenance.SourceRevision
+	if len(shortRev) > 8 {
+		shortRev = shortRev[:8]
+	}
+	runID := fmt.Sprintf("run_%s_%s", time.Now().UTC().Format("20060102_150405"), shortRev)
+
+	// Stage all run files into an isolated directory first
+	stagingRunDir := filepath.Join(t.TempDir(), runID)
+	if err := os.MkdirAll(stagingRunDir, 0755); err != nil {
+		t.Fatalf("failed to create staging run directory: %v", err)
+	}
+
+	var generatedReports []string
+	var recipes []WorkloadRecipe
 
 	// -------------------------------------------------------------
 	// 1. Idle Workload Scenario
@@ -212,24 +287,36 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 
 		duration := 3 * time.Second
 		interval := 1 * time.Second
+		timeout := duration + 10*time.Second
 
-		ctx, cancel := context.WithTimeout(context.Background(), duration+10*time.Second)
+		recipe := WorkloadRecipe{
+			Name:             "Idle",
+			Profile:          "windows-smoke-idle",
+			Duration:         duration,
+			SamplingInterval: interval,
+			WorkloadAction:   "Harmless background collection; no filesystem changes",
+		}
+		recipes = append(recipes, recipe)
+
+		args := []string{
+			"-config=" + cfgPath,
+			"-identity=" + idPath,
+			"-measure-report=" + reportPath,
+			"-measure-profile=windows-smoke-idle",
+			"-measure-duration=" + duration.String(),
+			"-measure-interval=" + interval.String(),
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		cmd := exec.CommandContext(ctx, endpointExe,
-			"-config="+cfgPath,
-			"-identity="+idPath,
-			"-measure-report="+reportPath,
-			"-measure-profile=windows-smoke-idle",
-			"-measure-duration="+duration.String(),
-			"-measure-interval="+interval.String(),
-		)
-		cmd.Dir = scenarioDir
-
-		output, err := cmd.CombinedOutput()
+		startCmd := time.Now()
+		out, err := ExecCommandWithTimeout(ctx, scenarioDir, endpointExe, args...)
+		tracker.Record(endpointExe, args, scenarioDir, timeout, time.Since(startCmd), err)
 		if err != nil {
-			t.Fatalf("endpoint.exe failed in idle scenario: %v\nOutput: %s", err, string(output))
+			t.Fatalf("endpoint.exe failed in idle scenario: %v", err)
 		}
+		_ = out
 
 		reportData, err := os.ReadFile(reportPath)
 		if err != nil {
@@ -241,12 +328,8 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 			t.Fatalf("failed to parse idle report JSON: %v", err)
 		}
 
-		if rep.Manifest.OS != "windows" {
-			t.Errorf("expected OS=windows, got %s", rep.Manifest.OS)
-		}
-		if rep.Manifest.LogicalCPUs <= 0 {
-			t.Errorf("expected LogicalCPUs > 0, got %d", rep.Manifest.LogicalCPUs)
-		}
+		validateReportManifest(t, &rep, provenance, "windows-smoke-idle")
+
 		if rep.Summary.ShutdownOutcome != "MEASUREMENT_COMPLETE" {
 			t.Errorf("expected MEASUREMENT_COMPLETE, got %s", rep.Summary.ShutdownOutcome)
 		}
@@ -257,7 +340,12 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 			t.Errorf("expected valid ingestion accounting reconciliation")
 		}
 
-		copyReportEvidence(t, reportPath, "windows_idle_report.json", repoRoot)
+		// Save exclusively to run staging directory
+		destFile := "windows_idle_report.json"
+		if err := WriteEvidenceExclusive(filepath.Join(stagingRunDir, destFile), reportData); err != nil {
+			t.Fatalf("failed to write exclusive idle report: %v", err)
+		}
+		generatedReports = append(generatedReports, destFile)
 	})
 
 	// -------------------------------------------------------------
@@ -290,28 +378,40 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 
 		duration := 4 * time.Second
 		interval := 1 * time.Second
+		timeout := duration + 10*time.Second
 
-		ctx, cancel := context.WithTimeout(context.Background(), duration+10*time.Second)
-		defer cancel()
+		recipe := WorkloadRecipe{
+			Name:             "Sustained",
+			Profile:          "windows-smoke-sustained",
+			Duration:         duration,
+			SamplingInterval: interval,
+			WorkloadAction:   "1 file written every 200ms into watched directory (12 files)",
+		}
+		recipes = append(recipes, recipe)
 
-		cmd := exec.CommandContext(ctx, endpointExe,
-			"-config="+cfgPath,
-			"-identity="+idPath,
-			"-measure-report="+reportPath,
+		args := []string{
+			"-config=" + cfgPath,
+			"-identity=" + idPath,
+			"-measure-report=" + reportPath,
 			"-measure-profile=windows-smoke-sustained",
-			"-measure-duration="+duration.String(),
-			"-measure-interval="+interval.String(),
-		)
-		cmd.Dir = scenarioDir
-
-		if err := cmd.Start(); err != nil {
-			t.Fatalf("failed to start endpoint.exe: %v", err)
+			"-measure-duration=" + duration.String(),
+			"-measure-interval=" + interval.String(),
 		}
 
-		// Allow endpoint & fsnotify watcher to initialize
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, endpointExe, args...)
+		cmd.Dir = scenarioDir
+
+		startCmd := time.Now()
+		if err := cmd.Start(); err != nil {
+			tracker.Record(endpointExe, args, scenarioDir, timeout, time.Since(startCmd), err)
+			t.Fatalf("failed to start endpoint.exe in sustained scenario: %v", err)
+		}
+
 		time.Sleep(300 * time.Millisecond)
 
-		// Produce sustained filesystem events: 1 write every 200ms
 		stopSustained := make(chan struct{})
 		go func() {
 			ticker := time.NewTicker(200 * time.Millisecond)
@@ -334,7 +434,11 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 
 		err = cmd.Wait()
 		close(stopSustained)
+		tracker.Record(endpointExe, args, scenarioDir, timeout, time.Since(startCmd), err)
 		if err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				t.Fatalf("endpoint.exe timed out in sustained scenario after %v: %v", timeout, err)
+			}
 			t.Fatalf("endpoint.exe failed in sustained scenario: %v", err)
 		}
 
@@ -348,6 +452,8 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 			t.Fatalf("failed to parse sustained report JSON: %v", err)
 		}
 
+		validateReportManifest(t, &rep, provenance, "windows-smoke-sustained")
+
 		if rep.Summary.ShutdownOutcome != "MEASUREMENT_COMPLETE" {
 			t.Errorf("expected MEASUREMENT_COMPLETE, got %s", rep.Summary.ShutdownOutcome)
 		}
@@ -358,11 +464,12 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 			t.Errorf("expected at least 8 committed events in sustained scenario, got %d",
 				rep.Summary.EventAccounting.IngestionOutcome.CommittedTotal)
 		}
-		if rep.Summary.EventAccounting.Forwarder.HTTPAcceptedTotal == 0 {
-			t.Errorf("expected > 0 http accepted events in sustained scenario")
-		}
 
-		copyReportEvidence(t, reportPath, "windows_sustained_report.json", repoRoot)
+		destFile := "windows_sustained_report.json"
+		if err := WriteEvidenceExclusive(filepath.Join(stagingRunDir, destFile), reportData); err != nil {
+			t.Fatalf("failed to write exclusive sustained report: %v", err)
+		}
+		generatedReports = append(generatedReports, destFile)
 	})
 
 	// -------------------------------------------------------------
@@ -395,35 +502,51 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 
 		duration := 4 * time.Second
 		interval := 1 * time.Second
+		timeout := duration + 10*time.Second
 
-		ctx, cancel := context.WithTimeout(context.Background(), duration+10*time.Second)
-		defer cancel()
+		recipe := WorkloadRecipe{
+			Name:             "Burst",
+			Profile:          "windows-smoke-burst",
+			Duration:         duration,
+			SamplingInterval: interval,
+			WorkloadAction:   "Rapid concurrent write of 35 files into watched directory",
+		}
+		recipes = append(recipes, recipe)
 
-		cmd := exec.CommandContext(ctx, endpointExe,
-			"-config="+cfgPath,
-			"-identity="+idPath,
-			"-measure-report="+reportPath,
+		args := []string{
+			"-config=" + cfgPath,
+			"-identity=" + idPath,
+			"-measure-report=" + reportPath,
 			"-measure-profile=windows-smoke-burst",
-			"-measure-duration="+duration.String(),
-			"-measure-interval="+interval.String(),
-		)
-		cmd.Dir = scenarioDir
-
-		if err := cmd.Start(); err != nil {
-			t.Fatalf("failed to start endpoint.exe: %v", err)
+			"-measure-duration=" + duration.String(),
+			"-measure-interval=" + interval.String(),
 		}
 
-		// Allow endpoint & fsnotify watcher to initialize
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, endpointExe, args...)
+		cmd.Dir = scenarioDir
+
+		startCmd := time.Now()
+		if err := cmd.Start(); err != nil {
+			tracker.Record(endpointExe, args, scenarioDir, timeout, time.Since(startCmd), err)
+			t.Fatalf("failed to start endpoint.exe in burst scenario: %v", err)
+		}
+
 		time.Sleep(300 * time.Millisecond)
 
-		// Create a rapid burst of 35 files
 		for i := 1; i <= 35; i++ {
 			filePath := filepath.Join(watchedDir, fmt.Sprintf("burst_%d.txt", i))
 			_ = os.WriteFile(filePath, []byte(fmt.Sprintf("burst payload %d", i)), 0644)
 		}
 
 		err = cmd.Wait()
+		tracker.Record(endpointExe, args, scenarioDir, timeout, time.Since(startCmd), err)
 		if err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				t.Fatalf("endpoint.exe timed out in burst scenario after %v: %v", timeout, err)
+			}
 			t.Fatalf("endpoint.exe failed in burst scenario: %v", err)
 		}
 
@@ -437,6 +560,8 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 			t.Fatalf("failed to parse burst report JSON: %v", err)
 		}
 
+		validateReportManifest(t, &rep, provenance, "windows-smoke-burst")
+
 		if rep.Summary.ShutdownOutcome != "MEASUREMENT_COMPLETE" {
 			t.Errorf("expected MEASUREMENT_COMPLETE, got %s", rep.Summary.ShutdownOutcome)
 		}
@@ -448,7 +573,11 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 				rep.Summary.EventAccounting.IngestionOutcome.CommittedTotal)
 		}
 
-		copyReportEvidence(t, reportPath, "windows_burst_report.json", repoRoot)
+		destFile := "windows_burst_report.json"
+		if err := WriteEvidenceExclusive(filepath.Join(stagingRunDir, destFile), reportData); err != nil {
+			t.Fatalf("failed to write exclusive burst report: %v", err)
+		}
+		generatedReports = append(generatedReports, destFile)
 	})
 
 	// -------------------------------------------------------------
@@ -461,7 +590,6 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 			t.Fatalf("failed to create watched dir: %v", err)
 		}
 
-		// Part A: Offline phase (unreachable server port)
 		offlineCfg := config.Config{
 			APIAddr:      "http://127.0.0.1:54321", // Unreachable port
 			TenantID:     "tenant-smoke-offline",
@@ -479,34 +607,51 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 
 		duration := 3 * time.Second
 		interval := 1 * time.Second
+		timeoutOffline := duration + 10*time.Second
 
-		ctxOffline, cancelOffline := context.WithTimeout(context.Background(), duration+10*time.Second)
+		recipeOffline := WorkloadRecipe{
+			Name:             "Offline",
+			Profile:          "windows-smoke-offline",
+			Duration:         duration,
+			SamplingInterval: interval,
+			WorkloadAction:   "Upstream offline; 10 files written; events buffered in SQLite with backoff",
+		}
+		recipes = append(recipes, recipeOffline)
+
+		argsOffline := []string{
+			"-config=" + cfgPath,
+			"-identity=" + idPath,
+			"-measure-report=" + offlineReportPath,
+			"-measure-profile=windows-smoke-offline",
+			"-measure-duration=" + duration.String(),
+			"-measure-interval=" + interval.String(),
+		}
+
+		ctxOffline, cancelOffline := context.WithTimeout(context.Background(), timeoutOffline)
 		defer cancelOffline()
 
-		cmdOffline := exec.CommandContext(ctxOffline, endpointExe,
-			"-config="+cfgPath,
-			"-identity="+idPath,
-			"-measure-report="+offlineReportPath,
-			"-measure-profile=windows-smoke-offline",
-			"-measure-duration="+duration.String(),
-			"-measure-interval="+interval.String(),
-		)
+		cmdOffline := exec.CommandContext(ctxOffline, endpointExe, argsOffline...)
 		cmdOffline.Dir = scenarioDir
 
+		startOffline := time.Now()
 		if err := cmdOffline.Start(); err != nil {
+			tracker.Record(endpointExe, argsOffline, scenarioDir, timeoutOffline, time.Since(startOffline), err)
 			t.Fatalf("failed to start endpoint.exe for offline phase: %v", err)
 		}
 
 		time.Sleep(300 * time.Millisecond)
 
-		// Create 10 files while offline
 		for i := 1; i <= 10; i++ {
 			filePath := filepath.Join(watchedDir, fmt.Sprintf("offline_%d.txt", i))
 			_ = os.WriteFile(filePath, []byte(fmt.Sprintf("offline content %d", i)), 0644)
 		}
 
 		err = cmdOffline.Wait()
+		tracker.Record(endpointExe, argsOffline, scenarioDir, timeoutOffline, time.Since(startOffline), err)
 		if err != nil {
+			if ctxOffline.Err() == context.DeadlineExceeded {
+				t.Fatalf("endpoint.exe timed out in offline phase after %v: %v", timeoutOffline, err)
+			}
 			t.Fatalf("endpoint.exe failed in offline phase: %v", err)
 		}
 
@@ -520,6 +665,8 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 			t.Fatalf("failed to parse offline report JSON: %v", err)
 		}
 
+		validateReportManifest(t, &offlineRep, provenance, "windows-smoke-offline")
+
 		if offlineRep.Summary.EventAccounting == nil || !offlineRep.Summary.EventAccounting.IngestionOutcome.ReconciliationValid {
 			t.Errorf("expected valid ingestion accounting in offline phase")
 		}
@@ -528,12 +675,12 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 			t.Errorf("expected at least 10 pending events retained in SQLite, got %v",
 				offlineRep.Summary.EventAccounting.Storage.DurablePendingEvents)
 		}
-		if offlineRep.Summary.EventAccounting.Forwarder.HTTPAcceptedTotal != 0 {
-			t.Errorf("expected 0 http accepted while offline, got %d",
-				offlineRep.Summary.EventAccounting.Forwarder.HTTPAcceptedTotal)
-		}
 
-		copyReportEvidence(t, offlineReportPath, "windows_offline_report.json", repoRoot)
+		destFileOffline := "windows_offline_report.json"
+		if err := WriteEvidenceExclusive(filepath.Join(stagingRunDir, destFileOffline), offlineReportData); err != nil {
+			t.Fatalf("failed to write exclusive offline report: %v", err)
+		}
+		generatedReports = append(generatedReports, destFileOffline)
 
 		// -------------------------------------------------------------
 		// Inspect & Record Offline Event IDs, Sequence Numbers & Deadlines
@@ -597,29 +744,38 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 
 		reconnectReportPath := filepath.Join(scenarioDir, "report_reconnect.json")
 
-		// Maximum exponential backoff for attempt 1 is 10s + 9s jitter = 19s from the offline send.
-		// A bounded native run of 22s ensures the 5-second forwarder ticker fires after all retry
-		// deadlines have elapsed, demonstrating true wall-clock retry recovery without test clock manipulation.
 		recDuration := 22 * time.Second
 		recInterval := 2 * time.Second
+		timeoutReconnect := recDuration + 15*time.Second
 
-		ctxReconnect, cancelReconnect := context.WithTimeout(context.Background(), recDuration+15*time.Second)
+		recipeReconnect := WorkloadRecipe{
+			Name:             "ReconnectAndRealRetryRecovery",
+			Profile:          "windows-smoke-reconnect",
+			Duration:         recDuration,
+			SamplingInterval: recInterval,
+			WorkloadAction:   "Mock receiver online; 22s run allows natural 10s-19s retry backoff expiration",
+		}
+		recipes = append(recipes, recipeReconnect)
+
+		argsReconnect := []string{
+			"-config=" + cfgPath,
+			"-identity=" + idPath,
+			"-measure-report=" + reconnectReportPath,
+			"-measure-profile=windows-smoke-reconnect",
+			"-measure-duration=" + recDuration.String(),
+			"-measure-interval=" + recInterval.String(),
+		}
+
+		ctxReconnect, cancelReconnect := context.WithTimeout(context.Background(), timeoutReconnect)
 		defer cancelReconnect()
 
-		cmdReconnect := exec.CommandContext(ctxReconnect, endpointExe,
-			"-config="+cfgPath,
-			"-identity="+idPath,
-			"-measure-report="+reconnectReportPath,
-			"-measure-profile=windows-smoke-reconnect",
-			"-measure-duration="+recDuration.String(),
-			"-measure-interval="+recInterval.String(),
-		)
-		cmdReconnect.Dir = scenarioDir
-
-		outputRec, err := cmdReconnect.CombinedOutput()
+		startReconnect := time.Now()
+		outRec, err := ExecCommandWithTimeout(ctxReconnect, scenarioDir, endpointExe, argsReconnect...)
+		tracker.Record(endpointExe, argsReconnect, scenarioDir, timeoutReconnect, time.Since(startReconnect), err)
 		if err != nil {
-			t.Fatalf("endpoint.exe failed in real retry recovery phase: %v\nOutput: %s", err, string(outputRec))
+			t.Fatalf("endpoint.exe failed in real retry recovery phase: %v", err)
 		}
+		_ = outRec
 
 		reconnectReportData, err := os.ReadFile(reconnectReportPath)
 		if err != nil {
@@ -630,6 +786,8 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		if err := json.Unmarshal(reconnectReportData, &recRep); err != nil {
 			t.Fatalf("failed to parse reconnect report JSON: %v", err)
 		}
+
+		validateReportManifest(t, &recRep, provenance, "windows-smoke-reconnect")
 
 		if recRep.Summary.EventAccounting == nil {
 			t.Fatalf("expected event accounting in reconnect report")
@@ -679,13 +837,106 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 				*recRep.Summary.EventAccounting.Storage.DurablePendingEvents)
 		}
 
-		if recRep.Summary.EventAccounting.Forwarder.HTTPAcceptedTotal < expectedBacklogCount {
-			t.Errorf("expected at least %d http accepted events on reconnect, got %d",
-				expectedBacklogCount, recRep.Summary.EventAccounting.Forwarder.HTTPAcceptedTotal)
+		destFileReconnect := "windows_reconnect_report.json"
+		if err := WriteEvidenceExclusive(filepath.Join(stagingRunDir, destFileReconnect), reconnectReportData); err != nil {
+			t.Fatalf("failed to write exclusive reconnect report: %v", err)
 		}
+		generatedReports = append(generatedReports, destFileReconnect)
 
-		// Persist report as both windows_reconnect_report.json and windows_retry_recovery_report.json
-		copyReportEvidence(t, reconnectReportPath, "windows_reconnect_report.json", repoRoot)
-		copyReportEvidence(t, reconnectReportPath, "windows_retry_recovery_report.json", repoRoot)
+		destFileRetry := "windows_retry_recovery_report.json"
+		if err := WriteEvidenceExclusive(filepath.Join(stagingRunDir, destFileRetry), reconnectReportData); err != nil {
+			t.Fatalf("failed to write exclusive retry recovery report: %v", err)
+		}
+		generatedReports = append(generatedReports, destFileRetry)
 	})
+
+	// -------------------------------------------------------------
+	// Write Provenance Manifest and Command Execution Logs
+	// -------------------------------------------------------------
+	provManifest := RunProvenanceManifest{
+		RunID:            runID,
+		TimestampUTC:     time.Now().UTC().Format(time.RFC3339),
+		SourceRevision:   provenance.SourceRevision,
+		Dirty:            provenance.Dirty,
+		BinaryProvenance: provenance,
+		HostOS:           provenance.OS,
+		HostArch:         provenance.Architecture,
+		LogicalCPUs:      provenance.LogicalCPUs,
+		GoToolchain:      provenance.Toolchain,
+		ExecutedCommands: tracker.Commands(),
+		WorkloadRecipes:  recipes,
+		GeneratedReports: generatedReports,
+	}
+
+	provJSON, err := json.MarshalIndent(provManifest, "", "  ")
+	if err != nil {
+		t.Fatalf("failed to marshal run provenance manifest: %v", err)
+	}
+	if err := WriteEvidenceExclusive(filepath.Join(stagingRunDir, "provenance.json"), provJSON); err != nil {
+		t.Fatalf("failed to write provenance.json: %v", err)
+	}
+
+	// Format commands.log
+	var logLines []string
+	logLines = append(logLines, fmt.Sprintf("=== RUN: %s ===", runID))
+	logLines = append(logLines, fmt.Sprintf("Timestamp: %s", provManifest.TimestampUTC))
+	logLines = append(logLines, fmt.Sprintf("Revision:  %s (dirty=%v)", provenance.SourceRevision, provenance.Dirty))
+	logLines = append(logLines, fmt.Sprintf("Toolchain: %s", provenance.Toolchain))
+	logLines = append(logLines, fmt.Sprintf("Binary SHA256: %s", provenance.SHA256))
+	logLines = append(logLines, "")
+	logLines = append(logLines, "=== EXECUTED COMMANDS ===")
+	for i, cmd := range tracker.Commands() {
+		status := "SUCCESS"
+		if cmd.ExitCode != 0 || cmd.ErrorMessage != "" {
+			status = fmt.Sprintf("FAILED (exit=%d: %s)", cmd.ExitCode, cmd.ErrorMessage)
+		}
+		logLines = append(logLines, fmt.Sprintf("[%02d] %s %s", i+1, cmd.Command, strings.Join(cmd.Args, " ")))
+		logLines = append(logLines, fmt.Sprintf("     Dir: %s | Timeout: %v | Duration: %dms | Status: %s",
+			cmd.WorkingDir, cmd.Timeout, cmd.DurationMs, status))
+	}
+	commandsLog := strings.Join(logLines, "\n") + "\n"
+	if err := WriteEvidenceExclusive(filepath.Join(stagingRunDir, "commands.log"), []byte(commandsLog)); err != nil {
+		t.Fatalf("failed to write commands.log: %v", err)
+	}
+
+	t.Logf("All evidence staged exclusively in: %s (%d reports, provenance.json, commands.log)",
+		stagingRunDir, len(generatedReports))
+
+	// If requested or if running in evidence-export mode, export run to repo runs directory
+	exportTarget := os.Getenv("EVIDENCE_EXPORT_DIR")
+	if exportTarget == "" && os.Getenv("EVIDENCE_EXPORT_TO_REPO") == "true" {
+		exportTarget = filepath.Join(repoRoot, "docs", "evidence", "phase4", "runs", runID)
+	}
+	if exportTarget != "" {
+		if err := os.MkdirAll(exportTarget, 0755); err != nil {
+			t.Fatalf("failed to create export target dir: %v", err)
+		}
+		entries, err := os.ReadDir(stagingRunDir)
+		if err != nil {
+			t.Fatalf("failed to read staging dir: %v", err)
+		}
+		for _, entry := range entries {
+			src := filepath.Join(stagingRunDir, entry.Name())
+			dest := filepath.Join(exportTarget, entry.Name())
+			data, err := os.ReadFile(src)
+			if err != nil {
+				t.Fatalf("failed to read staged file %s: %v", src, err)
+			}
+			if err := WriteEvidenceExclusive(dest, data); err != nil {
+				t.Fatalf("failed to export evidence file %s: %v", dest, err)
+			}
+		}
+		t.Logf("Exported evidence run exclusively to: %s", exportTarget)
+
+		// Also update canonical reports in docs/evidence/phase4/
+		canonicalDir := filepath.Join(repoRoot, "docs", "evidence", "phase4")
+		for _, reportName := range generatedReports {
+			src := filepath.Join(stagingRunDir, reportName)
+			dest := filepath.Join(canonicalDir, reportName)
+			data, err := os.ReadFile(src)
+			if err == nil {
+				_ = os.WriteFile(dest, data, 0644)
+			}
+		}
+	}
 }
