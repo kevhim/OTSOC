@@ -87,10 +87,10 @@ func buildFreshEndpointWithProvenance(t *testing.T, repoRoot string, tracker *ru
 		t.Fatalf("failed to build fresh endpoint.exe in %s: %v\nOutput: %s", binDir, err, recBuild.CombinedOutput)
 	}
 
-	// 2. Inspect binary metadata via 'go version -m <exe>' with explicit 10s timeout
-	ctxVersion, cancelVersion := context.WithTimeout(context.Background(), 10*time.Second)
+	// 2. Inspect binary metadata via 'go version -m <exe>' with explicit 30s timeout
+	ctxVersion, cancelVersion := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelVersion()
-	recVersion, err := RunBoundedCommand(ctxVersion, repoRoot, 10*time.Second, "go", "version", "-m", endpointExe)
+	recVersion, err := RunBoundedCommand(ctxVersion, repoRoot, 30*time.Second, "go", "version", "-m", endpointExe)
 	if tracker != nil {
 		tracker.Record(recVersion)
 	}
