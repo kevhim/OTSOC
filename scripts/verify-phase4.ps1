@@ -229,19 +229,19 @@ if ($NativeDetection) {
             Add-Result -Name "Native Detection (YARA-X C API)" -Status "FAIL" -Details "Detection test failure"
         }
 
-        $yaraxWorkloadOut = & go test -v ./agent/internal/integration -run "^TestWorkload_YaraX" 2>&1
+        $yaraxWorkloadOut = & go test -v ./agent/internal/integration -run "^TestWorkload_YaraX|^TestYaraX_" 2>&1
         $yaraxExit = $LASTEXITCODE
         $yaraxText = $yaraxWorkloadOut -join "`n"
         if ($yaraxText -match "\[no tests to run\]" -or $yaraxText -match "warning: no tests to run") {
-            Add-Result -Name "Native YARA-X Component Workload" -Status "FAIL" -Details "Omitted: Go reported no tests to run under ^TestWorkload_YaraX"
+            Add-Result -Name "Native YARA-X Component Workload" -Status "FAIL" -Details "Omitted: Go reported no tests to run under ^TestWorkload_YaraX|^TestYaraX_"
         } elseif ($yaraxExit -eq 0) {
-            Add-Result -Name "Native YARA-X Component Workload" -Status "PASS" -Details "Component workload, strict provenance, and cleanup survival verified (libyara_x_capi $yaraVer)"
+            Add-Result -Name "Native YARA-X Component Workload" -Status "PASS" -Details "Component workload, strict provenance, dual failure propagation, and dirty rejection verified (libyara_x_capi $yaraVer)"
         } else {
             Add-Result -Name "Native YARA-X Component Workload" -Status "FAIL" -Details "YARA-X workload or evidence export failed"
         }
 
         if ($Race) {
-            $raceYaraxOut = & go test -race -v ./agent/internal/integration -run "^TestWorkload_YaraX" 2>&1
+            $raceYaraxOut = & go test -race -v ./agent/internal/integration -run "^TestWorkload_YaraX|^TestYaraX_" 2>&1
             $raceYaraxExit = $LASTEXITCODE
             $raceYaraxText = $raceYaraxOut -join "`n"
             if ($raceYaraxText -match "\[no tests to run\]") {
