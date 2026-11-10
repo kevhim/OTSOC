@@ -1,0 +1,226 @@
+{
+  "run_id": "run_20261110_064202_a56298ce",
+  "timestamp_utc": "2026-11-10T06:42:52Z",
+  "source_revision": "a56298ce9eadf326ec356deb91171933405bb41b",
+  "dirty": false,
+  "source_boundary_checks": [
+    {
+      "checkpoint": "pre-compilation",
+      "timestamp_utc": "2026-11-10T06:41:38Z",
+      "revision": "a56298ce9eadf326ec356deb91171933405bb41b",
+      "dirty": false,
+      "valid": true
+    },
+    {
+      "checkpoint": "post-compilation",
+      "timestamp_utc": "2026-11-10T06:42:02Z",
+      "revision": "a56298ce9eadf326ec356deb91171933405bb41b",
+      "dirty": false,
+      "valid": true
+    },
+    {
+      "checkpoint": "post-workload",
+      "timestamp_utc": "2026-11-10T06:42:51Z",
+      "revision": "a56298ce9eadf326ec356deb91171933405bb41b",
+      "dirty": false,
+      "valid": true
+    }
+  ],
+  "binary_provenance": {
+    "exe_path": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports1657293303\\001\\endpoint.exe",
+    "sha256": "9eac91b606a63b69302331d2dade492e6b67a78ba6f2148af12d5cf73933cf1d",
+    "source_revision": "a56298ce9eadf326ec356deb91171933405bb41b",
+    "dirty": false,
+    "toolchain": "go1.27.0",
+    "os": "windows",
+    "architecture": "amd64",
+    "logical_cpus": 22
+  },
+  "host_os": "windows",
+  "host_arch": "amd64",
+  "logical_cpus": 22,
+  "go_toolchain": "go1.27.0",
+  "executed_commands": [
+    {
+      "command": "go",
+      "args": [
+        "build",
+        "-v",
+        "-o",
+        "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports1657293303\\001\\endpoint.exe",
+        "./agent/cmd/endpoint"
+      ],
+      "working_dir": "D:\\Desktop\\OT-SOC\\redcyberfox-ot-soc",
+      "timeout": 90000000000,
+      "duration_ms": 16525,
+      "outcome": "SUCCESS",
+      "process_started": true,
+      "exit_code": 0,
+      "stderr": "redcyberfox/agent/cmd/endpoint\n",
+      "combined_output": "redcyberfox/agent/cmd/endpoint\n",
+      "truncated": false
+    },
+    {
+      "command": "go",
+      "args": [
+        "version",
+        "-m",
+        "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports1657293303\\001\\endpoint.exe"
+      ],
+      "working_dir": "D:\\Desktop\\OT-SOC\\redcyberfox-ot-soc",
+      "timeout": 30000000000,
+      "duration_ms": 6296,
+      "outcome": "SUCCESS",
+      "process_started": true,
+      "exit_code": 0,
+      "stdout": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports1657293303\\001\\endpoint.exe: go1.27.0\n\tpath\tredcyberfox/agent/cmd/endpoint\n\tmod\tredcyberfox\tv0.3.0-phase-2b-offline-sync.0.20261110064119-a56298ce9ead\t\n\tdep\tgithub.com/dustin/go-humanize\tv1.0.1\th1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=\n\tdep\tgithub.com/fsnotify/fsnotify\tv1.10.1\th1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=\n\tdep\tgithub.com/google/uuid\tv1.6.0\th1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=\n\tdep\tgithub.com/mattn/go-isatty\tv0.0.24\th1:tGZZoVgT/KiqK1c8ocVLeDS8BSWMRd47J3Lbz7vsReI=\n\tdep\tgithub.com/ncruces/go-strftime\tv1.0.0\th1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=\n\tdep\tgithub.com/remyoudompheng/bigfft\tv0.0.0-20230129092748-24d4a6f8daec\th1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=\n\tdep\tgolang.org/x/sys\tv0.47.0\th1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=\n\tdep\tmodernc.org/libc\tv1.74.4\th1:fX1Omw4o2/1C2iRkkIsrQTasJQldLhRmuPreXLoWs9k=\n\tdep\tmodernc.org/mathutil\tv1.7.1\th1:GCZVGXdaN8gTqB1Mf/usp1Y/hSqgI2vAGGP4jZMCxOU=\n\tdep\tmodernc.org/memory\tv1.11.0\th1:o4QC8aMQzmcwCK3t3Ux/ZHmwFPzE6hf2Y5LbkRs+hbI=\n\tdep\tmodernc.org/sqlite\tv1.57.0\th1:qNQP6xnx5M0ISNtlnxoOX0+cD5bJ0/gr9aMmndFczzg=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\tDefaultGODEBUG=tracebacklabels=0,x509sslcertoverrideplatform=0\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=windows\n\tbuild\tGOAMD64=v1\n\tbuild\tvcs=git\n\tbuild\tvcs.revision=a56298ce9eadf326ec356deb91171933405bb41b\n\tbuild\tvcs.time=2026-11-10T06:41:19Z\n\tbuild\tvcs.modified=false\n",
+      "combined_output": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports1657293303\\001\\endpoint.exe: go1.27.0\n\tpath\tredcyberfox/agent/cmd/endpoint\n\tmod\tredcyberfox\tv0.3.0-phase-2b-offline-sync.0.20261110064119-a56298ce9ead\t\n\tdep\tgithub.com/dustin/go-humanize\tv1.0.1\th1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=\n\tdep\tgithub.com/fsnotify/fsnotify\tv1.10.1\th1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=\n\tdep\tgithub.com/google/uuid\tv1.6.0\th1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=\n\tdep\tgithub.com/mattn/go-isatty\tv0.0.24\th1:tGZZoVgT/KiqK1c8ocVLeDS8BSWMRd47J3Lbz7vsReI=\n\tdep\tgithub.com/ncruces/go-strftime\tv1.0.0\th1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=\n\tdep\tgithub.com/remyoudompheng/bigfft\tv0.0.0-20230129092748-24d4a6f8daec\th1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=\n\tdep\tgolang.org/x/sys\tv0.47.0\th1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=\n\tdep\tmodernc.org/libc\tv1.74.4\th1:fX1Omw4o2/1C2iRkkIsrQTasJQldLhRmuPreXLoWs9k=\n\tdep\tmodernc.org/mathutil\tv1.7.1\th1:GCZVGXdaN8gTqB1Mf/usp1Y/hSqgI2vAGGP4jZMCxOU=\n\tdep\tmodernc.org/memory\tv1.11.0\th1:o4QC8aMQzmcwCK3t3Ux/ZHmwFPzE6hf2Y5LbkRs+hbI=\n\tdep\tmodernc.org/sqlite\tv1.57.0\th1:qNQP6xnx5M0ISNtlnxoOX0+cD5bJ0/gr9aMmndFczzg=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\tDefaultGODEBUG=tracebacklabels=0,x509sslcertoverrideplatform=0\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=windows\n\tbuild\tGOAMD64=v1\n\tbuild\tvcs=git\n\tbuild\tvcs.revision=a56298ce9eadf326ec356deb91171933405bb41b\n\tbuild\tvcs.time=2026-11-10T06:41:19Z\n\tbuild\tvcs.modified=false\n",
+      "truncated": false
+    },
+    {
+      "command": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports1657293303\\001\\endpoint.exe",
+      "args": [
+        "-config=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Idle2781339931\\001\\agent.json",
+        "-identity=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Idle2781339931\\001\\identity.json",
+        "-measure-report=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Idle2781339931\\001\\report_idle.json",
+        "-measure-profile=windows-smoke-idle",
+        "-measure-duration=3s",
+        "-measure-interval=1s"
+      ],
+      "working_dir": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Idle2781339931\\001",
+      "timeout": 13000000000,
+      "duration_ms": 9209,
+      "outcome": "SUCCESS",
+      "process_started": true,
+      "exit_code": 0,
+      "stderr": "2026/11/10 12:12:08 Starting Endpoint Agent Alpha...\n2026/11/10 12:12:08 Device Identity: d88b6c60-8d61-4af7-87df-25e20e231728\n2026/11/10 12:12:08 Production detection engine initialized with 1 active deterministic rules\n2026/11/10 12:12:08 Resource governor coordinator initialized (on-demand mode, initial step ready=false evaluated=false storageBlocked=true)\n2026/11/10 12:12:08 Starting bounded measurement mode (duration: 3s, interval: 1s, report: \"C:\\\\Users\\\\YASHSH~1\\\\AppData\\\\Local\\\\Temp\\\\TestWorkload_WindowsMeasurementReportsScenario_Idle2781339931\\\\001\\\\report_idle.json\")...\n2026/11/10 12:12:08 Starting Process Collector...\n2026/11/10 12:12:08 Starting Filesystem Collector...\n2026/11/10 12:12:08 [MEASUREMENT SAMPLE #1] state=NORMAL cpu={0 true} rss={12218368 true} storage={94576 true} queue={0 true} oldestAge={0 false} network=UNKNOWN\n2026/11/10 12:12:08 Filesystem collector: watching path C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Idle2781339931\\001\\watched\n2026/11/10 12:12:08 Starting Inventory Collector...\n2026/11/10 12:12:08 Starting Network Collector...\n2026/11/10 12:12:08 Starting USB Collector...\n2026/11/10 12:12:08 Internal pipeline received health signal: Type=heartbeat\n2026/11/10 12:12:09 [MEASUREMENT SAMPLE #2] state=NORMAL cpu={0.21287491268495515 true} rss={22188032 true} storage={226416 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:10 [MEASUREMENT SAMPLE #3] state=NORMAL cpu={0 true} rss={22196224 true} storage={226416 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:11 [MEASUREMENT SAMPLING COMPLETE] Total samples: 3, Final state: NORMAL, Transitions: 0\n2026/11/10 12:12:11 [MEASUREMENT RUNNER] Duration (3s) reached. Requesting shared endpoint shutdown...\n2026/11/10 12:12:11 Endpoint Agent shutdown initiated (MEASUREMENT_COMPLETE)...\n2026/11/10 12:12:11 Endpoint Agent shutdown sequence initiated.\n2026/11/10 12:12:12 Successfully wrote measurement report to C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Idle2781339931\\001\\report_idle.json (3 samples, 5651 bytes)\n2026/11/10 12:12:12 Endpoint Agent shutdown cleanly.\n",
+      "combined_output": "2026/11/10 12:12:08 Starting Endpoint Agent Alpha...\n2026/11/10 12:12:08 Device Identity: d88b6c60-8d61-4af7-87df-25e20e231728\n2026/11/10 12:12:08 Production detection engine initialized with 1 active deterministic rules\n2026/11/10 12:12:08 Resource governor coordinator initialized (on-demand mode, initial step ready=false evaluated=false storageBlocked=true)\n2026/11/10 12:12:08 Starting bounded measurement mode (duration: 3s, interval: 1s, report: \"C:\\\\Users\\\\YASHSH~1\\\\AppData\\\\Local\\\\Temp\\\\TestWorkload_WindowsMeasurementReportsScenario_Idle2781339931\\\\001\\\\report_idle.json\")...\n2026/11/10 12:12:08 Starting Process Collector...\n2026/11/10 12:12:08 Starting Filesystem Collector...\n2026/11/10 12:12:08 [MEASUREMENT SAMPLE #1] state=NORMAL cpu={0 true} rss={12218368 true} storage={94576 true} queue={0 true} oldestAge={0 false} network=UNKNOWN\n2026/11/10 12:12:08 Filesystem collector: watching path C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Idle2781339931\\001\\watched\n2026/11/10 12:12:08 Starting Inventory Collector...\n2026/11/10 12:12:08 Starting Network Collector...\n2026/11/10 12:12:08 Starting USB Collector...\n2026/11/10 12:12:08 Internal pipeline received health signal: Type=heartbeat\n2026/11/10 12:12:09 [MEASUREMENT SAMPLE #2] state=NORMAL cpu={0.21287491268495515 true} rss={22188032 true} storage={226416 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:10 [MEASUREMENT SAMPLE #3] state=NORMAL cpu={0 true} rss={22196224 true} storage={226416 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:11 [MEASUREMENT SAMPLING COMPLETE] Total samples: 3, Final state: NORMAL, Transitions: 0\n2026/11/10 12:12:11 [MEASUREMENT RUNNER] Duration (3s) reached. Requesting shared endpoint shutdown...\n2026/11/10 12:12:11 Endpoint Agent shutdown initiated (MEASUREMENT_COMPLETE)...\n2026/11/10 12:12:11 Endpoint Agent shutdown sequence initiated.\n2026/11/10 12:12:12 Successfully wrote measurement report to C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Idle2781339931\\001\\report_idle.json (3 samples, 5651 bytes)\n2026/11/10 12:12:12 Endpoint Agent shutdown cleanly.\n",
+      "truncated": false
+    },
+    {
+      "command": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports1657293303\\001\\endpoint.exe",
+      "args": [
+        "-config=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Sustained2971167409\\001\\agent.json",
+        "-identity=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Sustained2971167409\\001\\identity.json",
+        "-measure-report=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Sustained2971167409\\001\\report_sustained.json",
+        "-measure-profile=windows-smoke-sustained",
+        "-measure-duration=4s",
+        "-measure-interval=1s"
+      ],
+      "working_dir": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Sustained2971167409\\001",
+      "timeout": 14000000000,
+      "duration_ms": 4285,
+      "outcome": "SUCCESS",
+      "process_started": true,
+      "exit_code": 0,
+      "stderr": "2026/11/10 12:12:12 Starting Endpoint Agent Alpha...\n2026/11/10 12:12:12 Device Identity: a68a6b10-bccf-45e0-a1dc-e1c5219f7017\n2026/11/10 12:12:12 Production detection engine initialized with 1 active deterministic rules\n2026/11/10 12:12:12 Resource governor coordinator initialized (on-demand mode, initial step ready=false evaluated=false storageBlocked=true)\n2026/11/10 12:12:12 Starting bounded measurement mode (duration: 4s, interval: 1s, report: \"C:\\\\Users\\\\YASHSH~1\\\\AppData\\\\Local\\\\Temp\\\\TestWorkload_WindowsMeasurementReportsScenario_Sustained2971167409\\\\001\\\\report_sustained.json\")...\n2026/11/10 12:12:12 Starting Process Collector...\n2026/11/10 12:12:12 Starting Filesystem Collector...\n2026/11/10 12:12:12 [MEASUREMENT SAMPLE #1] state=NORMAL cpu={0 true} rss={12054528 true} storage={94576 true} queue={0 true} oldestAge={0 false} network=UNKNOWN\n2026/11/10 12:12:12 Filesystem collector: watching path C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Sustained2971167409\\001\\watched\n2026/11/10 12:12:12 Starting Inventory Collector...\n2026/11/10 12:12:12 Starting Network Collector...\n2026/11/10 12:12:12 Starting USB Collector...\n2026/11/10 12:12:12 Internal pipeline received health signal: Type=heartbeat\n2026/11/10 12:12:13 [MEASUREMENT SAMPLE #2] state=NORMAL cpu={0.28395415676900915 true} rss={22163456 true} storage={494216 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:14 [MEASUREMENT SAMPLE #3] state=NORMAL cpu={0.1420484091523649 true} rss={22413312 true} storage={906216 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:15 [MEASUREMENT SAMPLE #4] state=NORMAL cpu={0.14093828565483585 true} rss={22626304 true} storage={1309976 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:16 [MEASUREMENT SAMPLING COMPLETE] Total samples: 4, Final state: NORMAL, Transitions: 0\n2026/11/10 12:12:16 [MEASUREMENT RUNNER] Duration (4s) reached. Requesting shared endpoint shutdown...\n2026/11/10 12:12:16 Endpoint Agent shutdown initiated (MEASUREMENT_COMPLETE)...\n2026/11/10 12:12:16 Endpoint Agent shutdown sequence initiated.\n2026/11/10 12:12:16 Successfully wrote measurement report to C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Sustained2971167409\\001\\report_sustained.json (4 samples, 6879 bytes)\n2026/11/10 12:12:16 Endpoint Agent shutdown cleanly.\n",
+      "combined_output": "2026/11/10 12:12:12 Starting Endpoint Agent Alpha...\n2026/11/10 12:12:12 Device Identity: a68a6b10-bccf-45e0-a1dc-e1c5219f7017\n2026/11/10 12:12:12 Production detection engine initialized with 1 active deterministic rules\n2026/11/10 12:12:12 Resource governor coordinator initialized (on-demand mode, initial step ready=false evaluated=false storageBlocked=true)\n2026/11/10 12:12:12 Starting bounded measurement mode (duration: 4s, interval: 1s, report: \"C:\\\\Users\\\\YASHSH~1\\\\AppData\\\\Local\\\\Temp\\\\TestWorkload_WindowsMeasurementReportsScenario_Sustained2971167409\\\\001\\\\report_sustained.json\")...\n2026/11/10 12:12:12 Starting Process Collector...\n2026/11/10 12:12:12 Starting Filesystem Collector...\n2026/11/10 12:12:12 [MEASUREMENT SAMPLE #1] state=NORMAL cpu={0 true} rss={12054528 true} storage={94576 true} queue={0 true} oldestAge={0 false} network=UNKNOWN\n2026/11/10 12:12:12 Filesystem collector: watching path C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Sustained2971167409\\001\\watched\n2026/11/10 12:12:12 Starting Inventory Collector...\n2026/11/10 12:12:12 Starting Network Collector...\n2026/11/10 12:12:12 Starting USB Collector...\n2026/11/10 12:12:12 Internal pipeline received health signal: Type=heartbeat\n2026/11/10 12:12:13 [MEASUREMENT SAMPLE #2] state=NORMAL cpu={0.28395415676900915 true} rss={22163456 true} storage={494216 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:14 [MEASUREMENT SAMPLE #3] state=NORMAL cpu={0.1420484091523649 true} rss={22413312 true} storage={906216 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:15 [MEASUREMENT SAMPLE #4] state=NORMAL cpu={0.14093828565483585 true} rss={22626304 true} storage={1309976 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:16 [MEASUREMENT SAMPLING COMPLETE] Total samples: 4, Final state: NORMAL, Transitions: 0\n2026/11/10 12:12:16 [MEASUREMENT RUNNER] Duration (4s) reached. Requesting shared endpoint shutdown...\n2026/11/10 12:12:16 Endpoint Agent shutdown initiated (MEASUREMENT_COMPLETE)...\n2026/11/10 12:12:16 Endpoint Agent shutdown sequence initiated.\n2026/11/10 12:12:16 Successfully wrote measurement report to C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Sustained2971167409\\001\\report_sustained.json (4 samples, 6879 bytes)\n2026/11/10 12:12:16 Endpoint Agent shutdown cleanly.\n",
+      "truncated": false
+    },
+    {
+      "command": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports1657293303\\001\\endpoint.exe",
+      "args": [
+        "-config=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Burst4029207267\\001\\agent.json",
+        "-identity=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Burst4029207267\\001\\identity.json",
+        "-measure-report=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Burst4029207267\\001\\report_burst.json",
+        "-measure-profile=windows-smoke-burst",
+        "-measure-duration=4s",
+        "-measure-interval=1s"
+      ],
+      "working_dir": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Burst4029207267\\001",
+      "timeout": 14000000000,
+      "duration_ms": 4201,
+      "outcome": "SUCCESS",
+      "process_started": true,
+      "exit_code": 0,
+      "stderr": "2026/11/10 12:12:16 Starting Endpoint Agent Alpha...\n2026/11/10 12:12:16 Device Identity: 6a380a4c-4ac3-48e3-addf-37ea5e935447\n2026/11/10 12:12:16 Production detection engine initialized with 1 active deterministic rules\n2026/11/10 12:12:16 Resource governor coordinator initialized (on-demand mode, initial step ready=false evaluated=false storageBlocked=true)\n2026/11/10 12:12:16 Starting bounded measurement mode (duration: 4s, interval: 1s, report: \"C:\\\\Users\\\\YASHSH~1\\\\AppData\\\\Local\\\\Temp\\\\TestWorkload_WindowsMeasurementReportsScenario_Burst4029207267\\\\001\\\\report_burst.json\")...\n2026/11/10 12:12:16 Starting Process Collector...\n2026/11/10 12:12:16 Starting Filesystem Collector...\n2026/11/10 12:12:16 [MEASUREMENT SAMPLE #1] state=NORMAL cpu={0 true} rss={12251136 true} storage={94576 true} queue={0 true} oldestAge={0 false} network=UNKNOWN\n2026/11/10 12:12:16 Filesystem collector: watching path C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Burst4029207267\\001\\watched\n2026/11/10 12:12:16 Starting Inventory Collector...\n2026/11/10 12:12:16 Starting Network Collector...\n2026/11/10 12:12:16 Starting USB Collector...\n2026/11/10 12:12:16 Internal pipeline received health signal: Type=heartbeat\n2026/11/10 12:12:17 [MEASUREMENT SAMPLE #2] state=NORMAL cpu={0.7098580755421832 true} rss={24694784 true} storage={2780816 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:18 [MEASUREMENT SAMPLE #3] state=NORMAL cpu={0 true} rss={24788992 true} storage={3600696 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:19 [MEASUREMENT SAMPLE #4] state=NORMAL cpu={0.07103360251727267 true} rss={24801280 true} storage={3736656 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:20 [MEASUREMENT SAMPLING COMPLETE] Total samples: 4, Final state: NORMAL, Transitions: 0\n2026/11/10 12:12:20 [MEASUREMENT RUNNER] Duration (4s) reached. Requesting shared endpoint shutdown...\n2026/11/10 12:12:20 Endpoint Agent shutdown initiated (MEASUREMENT_COMPLETE)...\n2026/11/10 12:12:20 Endpoint Agent shutdown sequence initiated.\n2026/11/10 12:12:20 Successfully wrote measurement report to C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Burst4029207267\\001\\report_burst.json (4 samples, 6860 bytes)\n2026/11/10 12:12:20 Endpoint Agent shutdown cleanly.\n",
+      "combined_output": "2026/11/10 12:12:16 Starting Endpoint Agent Alpha...\n2026/11/10 12:12:16 Device Identity: 6a380a4c-4ac3-48e3-addf-37ea5e935447\n2026/11/10 12:12:16 Production detection engine initialized with 1 active deterministic rules\n2026/11/10 12:12:16 Resource governor coordinator initialized (on-demand mode, initial step ready=false evaluated=false storageBlocked=true)\n2026/11/10 12:12:16 Starting bounded measurement mode (duration: 4s, interval: 1s, report: \"C:\\\\Users\\\\YASHSH~1\\\\AppData\\\\Local\\\\Temp\\\\TestWorkload_WindowsMeasurementReportsScenario_Burst4029207267\\\\001\\\\report_burst.json\")...\n2026/11/10 12:12:16 Starting Process Collector...\n2026/11/10 12:12:16 Starting Filesystem Collector...\n2026/11/10 12:12:16 [MEASUREMENT SAMPLE #1] state=NORMAL cpu={0 true} rss={12251136 true} storage={94576 true} queue={0 true} oldestAge={0 false} network=UNKNOWN\n2026/11/10 12:12:16 Filesystem collector: watching path C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Burst4029207267\\001\\watched\n2026/11/10 12:12:16 Starting Inventory Collector...\n2026/11/10 12:12:16 Starting Network Collector...\n2026/11/10 12:12:16 Starting USB Collector...\n2026/11/10 12:12:16 Internal pipeline received health signal: Type=heartbeat\n2026/11/10 12:12:17 [MEASUREMENT SAMPLE #2] state=NORMAL cpu={0.7098580755421832 true} rss={24694784 true} storage={2780816 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:18 [MEASUREMENT SAMPLE #3] state=NORMAL cpu={0 true} rss={24788992 true} storage={3600696 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:19 [MEASUREMENT SAMPLE #4] state=NORMAL cpu={0.07103360251727267 true} rss={24801280 true} storage={3736656 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:20 [MEASUREMENT SAMPLING COMPLETE] Total samples: 4, Final state: NORMAL, Transitions: 0\n2026/11/10 12:12:20 [MEASUREMENT RUNNER] Duration (4s) reached. Requesting shared endpoint shutdown...\n2026/11/10 12:12:20 Endpoint Agent shutdown initiated (MEASUREMENT_COMPLETE)...\n2026/11/10 12:12:20 Endpoint Agent shutdown sequence initiated.\n2026/11/10 12:12:20 Successfully wrote measurement report to C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Burst4029207267\\001\\report_burst.json (4 samples, 6860 bytes)\n2026/11/10 12:12:20 Endpoint Agent shutdown cleanly.\n",
+      "truncated": false
+    },
+    {
+      "command": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports1657293303\\001\\endpoint.exe",
+      "args": [
+        "-config=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\001\\agent.json",
+        "-identity=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\001\\identity.json",
+        "-measure-report=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\001\\report_offline.json",
+        "-measure-profile=windows-smoke-offline",
+        "-measure-duration=3s",
+        "-measure-interval=1s"
+      ],
+      "working_dir": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\001",
+      "timeout": 13000000000,
+      "duration_ms": 3905,
+      "outcome": "SUCCESS",
+      "process_started": true,
+      "exit_code": 0,
+      "stderr": "2026/11/10 12:12:21 Starting Endpoint Agent Alpha...\n2026/11/10 12:12:21 Device Identity: e64e74c0-2548-47c8-b6d2-2ebab82b7eb6\n2026/11/10 12:12:21 Production detection engine initialized with 1 active deterministic rules\n2026/11/10 12:12:21 Resource governor coordinator initialized (on-demand mode, initial step ready=false evaluated=false storageBlocked=true)\n2026/11/10 12:12:21 Starting bounded measurement mode (duration: 3s, interval: 1s, report: \"C:\\\\Users\\\\YASHSH~1\\\\AppData\\\\Local\\\\Temp\\\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\\\001\\\\report_offline.json\")...\n2026/11/10 12:12:21 Starting Process Collector...\n2026/11/10 12:12:21 Starting Filesystem Collector...\n2026/11/10 12:12:21 [MEASUREMENT SAMPLE #1] state=NORMAL cpu={0 true} rss={12017664 true} storage={94576 true} queue={0 true} oldestAge={0 false} network=UNKNOWN\n2026/11/10 12:12:21 Filesystem collector: watching path C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\001\\watched\n2026/11/10 12:12:21 Starting Inventory Collector...\n2026/11/10 12:12:21 Starting Network Collector...\n2026/11/10 12:12:21 Starting USB Collector...\n2026/11/10 12:12:21 Internal pipeline received health signal: Type=heartbeat\n2026/11/10 12:12:22 [MEASUREMENT SAMPLE #2] state=NORMAL cpu={0.568095581272581 true} rss={23699456 true} storage={1005096 true} queue={0 true} oldestAge={0 false} network=OFFLINE\n2026/11/10 12:12:23 [MEASUREMENT SAMPLE #3] state=NORMAL cpu={0 true} rss={23707648 true} storage={1005096 true} queue={0 true} oldestAge={0 false} network=OFFLINE\n2026/11/10 12:12:24 [MEASUREMENT SAMPLING COMPLETE] Total samples: 3, Final state: NORMAL, Transitions: 0\n2026/11/10 12:12:24 [MEASUREMENT RUNNER] Duration (3s) reached. Requesting shared endpoint shutdown...\n2026/11/10 12:12:24 Endpoint Agent shutdown initiated (MEASUREMENT_COMPLETE)...\n2026/11/10 12:12:24 Endpoint Agent shutdown sequence initiated.\n2026/11/10 12:12:24 Successfully wrote measurement report to C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\001\\report_offline.json (3 samples, 5666 bytes)\n2026/11/10 12:12:24 Endpoint Agent shutdown cleanly.\n",
+      "combined_output": "2026/11/10 12:12:21 Starting Endpoint Agent Alpha...\n2026/11/10 12:12:21 Device Identity: e64e74c0-2548-47c8-b6d2-2ebab82b7eb6\n2026/11/10 12:12:21 Production detection engine initialized with 1 active deterministic rules\n2026/11/10 12:12:21 Resource governor coordinator initialized (on-demand mode, initial step ready=false evaluated=false storageBlocked=true)\n2026/11/10 12:12:21 Starting bounded measurement mode (duration: 3s, interval: 1s, report: \"C:\\\\Users\\\\YASHSH~1\\\\AppData\\\\Local\\\\Temp\\\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\\\001\\\\report_offline.json\")...\n2026/11/10 12:12:21 Starting Process Collector...\n2026/11/10 12:12:21 Starting Filesystem Collector...\n2026/11/10 12:12:21 [MEASUREMENT SAMPLE #1] state=NORMAL cpu={0 true} rss={12017664 true} storage={94576 true} queue={0 true} oldestAge={0 false} network=UNKNOWN\n2026/11/10 12:12:21 Filesystem collector: watching path C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\001\\watched\n2026/11/10 12:12:21 Starting Inventory Collector...\n2026/11/10 12:12:21 Starting Network Collector...\n2026/11/10 12:12:21 Starting USB Collector...\n2026/11/10 12:12:21 Internal pipeline received health signal: Type=heartbeat\n2026/11/10 12:12:22 [MEASUREMENT SAMPLE #2] state=NORMAL cpu={0.568095581272581 true} rss={23699456 true} storage={1005096 true} queue={0 true} oldestAge={0 false} network=OFFLINE\n2026/11/10 12:12:23 [MEASUREMENT SAMPLE #3] state=NORMAL cpu={0 true} rss={23707648 true} storage={1005096 true} queue={0 true} oldestAge={0 false} network=OFFLINE\n2026/11/10 12:12:24 [MEASUREMENT SAMPLING COMPLETE] Total samples: 3, Final state: NORMAL, Transitions: 0\n2026/11/10 12:12:24 [MEASUREMENT RUNNER] Duration (3s) reached. Requesting shared endpoint shutdown...\n2026/11/10 12:12:24 Endpoint Agent shutdown initiated (MEASUREMENT_COMPLETE)...\n2026/11/10 12:12:24 Endpoint Agent shutdown sequence initiated.\n2026/11/10 12:12:24 Successfully wrote measurement report to C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\001\\report_offline.json (3 samples, 5666 bytes)\n2026/11/10 12:12:24 Endpoint Agent shutdown cleanly.\n",
+      "truncated": false
+    },
+    {
+      "command": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports1657293303\\001\\endpoint.exe",
+      "args": [
+        "-config=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\001\\agent.json",
+        "-identity=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\001\\identity.json",
+        "-measure-report=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\001\\report_reconnect.json",
+        "-measure-profile=windows-smoke-reconnect",
+        "-measure-duration=22s",
+        "-measure-interval=2s"
+      ],
+      "working_dir": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\001",
+      "timeout": 37000000000,
+      "duration_ms": 23776,
+      "outcome": "SUCCESS",
+      "process_started": true,
+      "exit_code": 0,
+      "stderr": "2026/11/10 12:12:25 Starting Endpoint Agent Alpha...\n2026/11/10 12:12:25 Device Identity: e64e74c0-2548-47c8-b6d2-2ebab82b7eb6\n2026/11/10 12:12:25 Production detection engine initialized with 1 active deterministic rules\n2026/11/10 12:12:25 Resource governor coordinator initialized (on-demand mode, initial step ready=false evaluated=false storageBlocked=true)\n2026/11/10 12:12:25 Starting bounded measurement mode (duration: 22s, interval: 2s, report: \"C:\\\\Users\\\\YASHSH~1\\\\AppData\\\\Local\\\\Temp\\\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\\\001\\\\report_reconnect.json\")...\n2026/11/10 12:12:25 Starting Process Collector...\n2026/11/10 12:12:25 Starting Filesystem Collector...\n2026/11/10 12:12:25 [MEASUREMENT SAMPLE #1] state=NORMAL cpu={0 true} rss={11964416 true} storage={118784 true} queue={0 true} oldestAge={0 false} network=UNKNOWN\n2026/11/10 12:12:25 Filesystem collector: watching path C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\001\\watched\n2026/11/10 12:12:25 Starting Inventory Collector...\n2026/11/10 12:12:25 Starting Network Collector...\n2026/11/10 12:12:25 Starting USB Collector...\n2026/11/10 12:12:25 Internal pipeline received health signal: Type=heartbeat\n2026/11/10 12:12:27 [MEASUREMENT SAMPLE #2] state=NORMAL cpu={0.1420280064048677 true} rss={21983232 true} storage={263016 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:29 [MEASUREMENT SAMPLE #3] state=NORMAL cpu={0 true} rss={21987328 true} storage={263016 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:31 [MEASUREMENT SAMPLE #4] state=NORMAL cpu={0 true} rss={22007808 true} storage={263016 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:33 [MEASUREMENT SAMPLE #5] state=NORMAL cpu={0 true} rss={22007808 true} storage={263016 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:35 [MEASUREMENT SAMPLE #6] state=NORMAL cpu={0 true} rss={22282240 true} storage={263016 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:37 [MEASUREMENT SAMPLE #7] state=NORMAL cpu={0.07134630416601138 true} rss={22368256 true} storage={806856 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:39 [MEASUREMENT SAMPLE #8] state=NORMAL cpu={0 true} rss={22368256 true} storage={806856 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:41 [MEASUREMENT SAMPLE #9] state=NORMAL cpu={0.03423880649160935 true} rss={22380544 true} storage={806856 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:43 [MEASUREMENT SAMPLE #10] state=NORMAL cpu={0 true} rss={22380544 true} storage={806856 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:45 [MEASUREMENT SAMPLE #11] state=NORMAL cpu={0 true} rss={22384640 true} storage={806856 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:47 [MEASUREMENT SAMPLING COMPLETE] Total samples: 11, Final state: NORMAL, Transitions: 0\n2026/11/10 12:12:47 [MEASUREMENT RUNNER] Duration (22s) reached. Requesting shared endpoint shutdown...\n2026/11/10 12:12:47 Endpoint Agent shutdown initiated (MEASUREMENT_COMPLETE)...\n2026/11/10 12:12:47 Endpoint Agent shutdown sequence initiated.\n2026/11/10 12:12:48 Successfully wrote measurement report to C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\001\\report_reconnect.json (11 samples, 15116 bytes)\n2026/11/10 12:12:48 Endpoint Agent shutdown cleanly.\n",
+      "combined_output": "2026/11/10 12:12:25 Starting Endpoint Agent Alpha...\n2026/11/10 12:12:25 Device Identity: e64e74c0-2548-47c8-b6d2-2ebab82b7eb6\n2026/11/10 12:12:25 Production detection engine initialized with 1 active deterministic rules\n2026/11/10 12:12:25 Resource governor coordinator initialized (on-demand mode, initial step ready=false evaluated=false storageBlocked=true)\n2026/11/10 12:12:25 Starting bounded measurement mode (duration: 22s, interval: 2s, report: \"C:\\\\Users\\\\YASHSH~1\\\\AppData\\\\Local\\\\Temp\\\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\\\001\\\\report_reconnect.json\")...\n2026/11/10 12:12:25 Starting Process Collector...\n2026/11/10 12:12:25 Starting Filesystem Collector...\n2026/11/10 12:12:25 [MEASUREMENT SAMPLE #1] state=NORMAL cpu={0 true} rss={11964416 true} storage={118784 true} queue={0 true} oldestAge={0 false} network=UNKNOWN\n2026/11/10 12:12:25 Filesystem collector: watching path C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\001\\watched\n2026/11/10 12:12:25 Starting Inventory Collector...\n2026/11/10 12:12:25 Starting Network Collector...\n2026/11/10 12:12:25 Starting USB Collector...\n2026/11/10 12:12:25 Internal pipeline received health signal: Type=heartbeat\n2026/11/10 12:12:27 [MEASUREMENT SAMPLE #2] state=NORMAL cpu={0.1420280064048677 true} rss={21983232 true} storage={263016 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:29 [MEASUREMENT SAMPLE #3] state=NORMAL cpu={0 true} rss={21987328 true} storage={263016 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:31 [MEASUREMENT SAMPLE #4] state=NORMAL cpu={0 true} rss={22007808 true} storage={263016 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:33 [MEASUREMENT SAMPLE #5] state=NORMAL cpu={0 true} rss={22007808 true} storage={263016 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:35 [MEASUREMENT SAMPLE #6] state=NORMAL cpu={0 true} rss={22282240 true} storage={263016 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:37 [MEASUREMENT SAMPLE #7] state=NORMAL cpu={0.07134630416601138 true} rss={22368256 true} storage={806856 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:39 [MEASUREMENT SAMPLE #8] state=NORMAL cpu={0 true} rss={22368256 true} storage={806856 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:41 [MEASUREMENT SAMPLE #9] state=NORMAL cpu={0.03423880649160935 true} rss={22380544 true} storage={806856 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:43 [MEASUREMENT SAMPLE #10] state=NORMAL cpu={0 true} rss={22380544 true} storage={806856 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:45 [MEASUREMENT SAMPLE #11] state=NORMAL cpu={0 true} rss={22384640 true} storage={806856 true} queue={0 true} oldestAge={0 false} network=ONLINE\n2026/11/10 12:12:47 [MEASUREMENT SAMPLING COMPLETE] Total samples: 11, Final state: NORMAL, Transitions: 0\n2026/11/10 12:12:47 [MEASUREMENT RUNNER] Duration (22s) reached. Requesting shared endpoint shutdown...\n2026/11/10 12:12:47 Endpoint Agent shutdown initiated (MEASUREMENT_COMPLETE)...\n2026/11/10 12:12:47 Endpoint Agent shutdown sequence initiated.\n2026/11/10 12:12:48 Successfully wrote measurement report to C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe4059124939\\001\\report_reconnect.json (11 samples, 15116 bytes)\n2026/11/10 12:12:48 Endpoint Agent shutdown cleanly.\n",
+      "truncated": false
+    }
+  ],
+  "workload_recipes": [
+    {
+      "name": "Idle",
+      "profile": "windows-smoke-idle",
+      "duration": 3000000000,
+      "sampling_interval": 1000000000,
+      "workload_action": "Harmless background collection; no filesystem changes"
+    },
+    {
+      "name": "Sustained",
+      "profile": "windows-smoke-sustained",
+      "duration": 4000000000,
+      "sampling_interval": 1000000000,
+      "workload_action": "1 file written every 200ms into watched directory (12 files)"
+    },
+    {
+      "name": "Burst",
+      "profile": "windows-smoke-burst",
+      "duration": 4000000000,
+      "sampling_interval": 1000000000,
+      "workload_action": "Rapid concurrent write of 35 files into watched directory"
+    },
+    {
+      "name": "Offline",
+      "profile": "windows-smoke-offline",
+      "duration": 3000000000,
+      "sampling_interval": 1000000000,
+      "workload_action": "Upstream offline; 10 files written; events buffered in SQLite with backoff"
+    },
+    {
+      "name": "ReconnectAndRealRetryRecovery",
+      "profile": "windows-smoke-reconnect",
+      "duration": 22000000000,
+      "sampling_interval": 2000000000,
+      "workload_action": "Mock receiver online; 22s run allows natural 10s-19s retry backoff expiration"
+    }
+  ],
+  "generated_reports": [
+    "windows_idle_report.json",
+    "windows_sustained_report.json",
+    "windows_burst_report.json",
+    "windows_offline_report.json",
+    "windows_reconnect_report.json",
+    "windows_retry_recovery_report.json"
+  ]
+}

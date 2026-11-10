@@ -527,7 +527,17 @@ Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Resource governor th
 - **Regressions**: Added 5 focused unit tests covering output capture, wrapped exit code extraction, launch failure, timeout, and truncation.
 
 ### 4. Raw Evidence & Documentation Reconciliation
-- **Reconciled Sample Counts**: Corrected documentation from earlier historical values (4 sustained, 11 reconnect) to match the exact raw JSON evidence from clean run `run_20261110_054251_8240a569` (5 sustained samples, 12 reconnect samples).
-- **Timer Boundary Variation Explanation**: Documented that sampling counts vary at timer boundaries depending on whether initial sample collection precedes or coincides with the interval ticker, and whether the final sample is recorded immediately prior to shutdown.
+- **Reconciled Sample Counts**: Reconciled documentation from earlier historical values (4 sustained, 11 reconnect) to match the exact raw JSON evidence from clean run `run_20261110_054251_8240a569` (5 sustained samples, 12 reconnect samples) and newest run `run_20261110_064202_a56298ce` (4 sustained samples, 11 reconnect samples).
+- **Timer Boundary Variation Explanation**: Documented that sampling counts naturally vary at timer boundaries depending on whether initial sample collection precedes or coincides with the interval ticker, and whether the final sample is recorded immediately prior to shutdown.
 - **Metric Verification**: Checked all published memory (RSS), persistence storage bytes, write I/O rates, and CPU percent values against raw JSON reports.
 - **Truthful Scope Disclaimers**: Retained explicit limitations regarding unconfigured storage budget, HTTP 202 transport acknowledgement vs central durability, absence of detection-match cost on synthetic noise, and developer-host smoke limitations.
+
+### 5. Verification Outcomes
+- `scripts/verify-phase4.ps1 -Race -NativeDetection`: 9/9 PASS.
+- `go test -v -count=1 ./agent/internal/integration -run "TestParseBinaryProvenance|TestWriteEvidenceExclusive|TestExecCommandWithTimeout|TestSubprocess|TestExportEvidenceRun|TestCheckSourceBoundary"`: 12/12 PASS.
+- `go test -v -race -count=1 ./agent/internal/eventqueue/...`: 12/12 PASS.
+- `go test -v -race -count=1 ./agent/internal/storage/...`: 21/21 PASS.
+- `go test -v -race -count=1 ./agent/internal/resourcereport/...`: 8/8 PASS.
+- `go test -v -count=1 ./agent/internal/integration -run TestWorkload_WindowsMeasurementReports`: 4/4 PASS (75.71s; exported to `docs/evidence/phase4/runs/run_20261110_064202_a56298ce/`).
+- `go build -v ./agent/cmd/endpoint`: PASS.
+- `go build -v ./server/cmd/api`: PASS.

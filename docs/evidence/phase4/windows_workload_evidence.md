@@ -26,10 +26,10 @@ This document records the empirical measurement results collected from the compi
 | **Physical Memory** | 32 GB RAM (32,961,912 KB visible) |
 | **Go Toolchain** | `go1.27.0` (windows/amd64) |
 | **CGO / Toolchain** | MSYS2 UCRT64 GCC 14.2.0, libyara_x_capi 1.20.0 |
-| **Active Run ID** | `run_20261110_054251_8240a569` |
-| **Source Revision** | `8240a5692a335dd1c9d20e2a2755e95554a0b7e9` |
+| **Active Run ID** | `run_20261110_064202_a56298ce` |
+| **Source Revision** | `a56298ce9eadf326ec356deb91171933405bb41b` |
 | **Working Tree State**| `dirty: false` (clean committed baseline) |
-| **Binary SHA-256** | `d949af478cd55535bcaf69344d670edbcc31b32ab5070bf4ac87e67f37016257` |
+| **Binary SHA-256** | `9eac91b606a63b69302331d2dade492e6b67a78ba6f2148af12d5cf73933cf1d` |
 
 ### Production Detection Rule Workload
 
@@ -42,23 +42,36 @@ All scenarios executed with the active production detection engine loaded with t
 
 ---
 
+## Source Stability Boundary Verification
+
+To guarantee that qualification evidence is generated from an immutable, committed codebase, the test harness evaluates source tree stability across three discrete workflow boundaries (`CheckSourceBoundary`):
+
+| Checkpoint Boundary | Evaluated At | Source Revision | Dirty State | Valid | Result |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **1. Pre-Compilation** | Prior to building test binary | `a56298ce...` | `false` | `true` | **PASS** (Clean baseline confirmed) |
+| **2. Post-Compilation** | Immediately following `go build` | `a56298ce...` | `false` | `true` | **PASS** (Zero compilation-time mutations) |
+| **3. Post-Workload** | Immediately following all scenarios | `a56298ce...` | `false` | `true` | **PASS** (Zero workload-time mutations) |
+
+> [!NOTE]
+> Boundary checks establish boundary-state consistency; they cannot prove that no transient edit occurred between checkpoints. For authoritative qualification evidence, an isolated committed checkout should be used.
+
+---
+
 ## Subprocess Execution Bounding & Timeout Governance
 
-In earlier test iterations, git queries, binary compilation, and buildinfo inspection were executed without explicit context deadlines, and documentation prematurely claimed all subprocess commands were bounded. In this verified release, **every single external command is strictly governed by an explicit timeout context** with captured diagnostic output and visible deadline-exceeded failure reporting:
+Every command executed in the harness is strictly governed by `RunBoundedCommand` or `StartManagedSubprocess` with explicit context timeouts, bounded thread-safe buffer output capture (256 KB), truthful exit codes (`*int`, `nil` on launch failure), and visible deadline reporting:
 
 | Command | Working Directory | Explicit Timeout | Actual Duration | Exit Code | Purpose |
 | :--- | :--- | :---: | :---: | :---: | :--- |
-| `git rev-parse HEAD` | Repository Root | 5.0 s | 45 ms | `0` | Expected commit discovery |
-| `git status --porcelain` | Repository Root | 5.0 s | 53 ms | `0` | Expected clean checkout verification |
-| `go build -v -o <temp>/endpoint.exe ...` | Repository Root | 90.0 s | 2,600 ms | `0` | Fresh binary compilation in `t.TempDir()` |
-| `go version -m <temp>/endpoint.exe` | Repository Root | 10.0 s | 89 ms | `0` | Embedded VCS buildinfo & toolchain verification |
-| `endpoint.exe (windows-smoke-idle)` | `Scenario_Idle` TempDir | 13.0 s | 3,273 ms | `0` | Idle baseline workload |
-| `endpoint.exe (windows-smoke-sustained)` | `Scenario_Sustained` TempDir | 14.0 s | 4,149 ms | `0` | Sustained filesystem workload |
-| `endpoint.exe (windows-smoke-burst)` | `Scenario_Burst` TempDir | 14.0 s | 4,138 ms | `0` | Burst concurrency workload |
-| `endpoint.exe (windows-smoke-offline)` | `Scenario_Offline` TempDir | 13.0 s | 3,605 ms | `0` | Offline storage buffering workload |
-| `endpoint.exe (windows-smoke-reconnect)`| `Scenario_Offline` TempDir | 37.0 s | 22,269 ms | `0` | Reconnection & real retry recovery workload |
+| `go build -v -o <temp>/endpoint.exe ...` | Repository Root | 90.0 s | 16,525 ms | `0` | Fresh binary compilation in `t.TempDir()` |
+| `go version -m <temp>/endpoint.exe` | Repository Root | 30.0 s | 6,296 ms | `0` | Embedded VCS buildinfo & toolchain verification |
+| `endpoint.exe (windows-smoke-idle)` | `Scenario_Idle` TempDir | 13.0 s | 9,209 ms | `0` | Idle baseline workload |
+| `endpoint.exe (windows-smoke-sustained)` | `Scenario_Sustained` TempDir | 14.0 s | 4,285 ms | `0` | Sustained filesystem workload |
+| `endpoint.exe (windows-smoke-burst)` | `Scenario_Burst` TempDir | 14.0 s | 4,201 ms | `0` | Burst concurrency workload |
+| `endpoint.exe (windows-smoke-offline)` | `Scenario_Offline` TempDir | 13.0 s | 3,905 ms | `0` | Offline storage buffering workload |
+| `endpoint.exe (windows-smoke-reconnect)`| `Scenario_Offline` TempDir | 37.0 s | 23,776 ms | `0` | Reconnection & real retry recovery workload |
 
-All command invocations, arguments, timeouts, durations, and exit statuses are deterministically recorded in [`commands.log`](file:///D:/Desktop/OT-SOC/redcyberfox-ot-soc/docs/evidence/phase4/runs/run_20261110_054251_8240a569/commands.log).
+All command invocations, arguments, timeouts, durations, and exit statuses are deterministically recorded in [`commands.log`](file:///D:/Desktop/OT-SOC/redcyberfox-ot-soc/docs/evidence/phase4/runs/run_20261110_064202_a56298ce/commands.log).
 
 ---
 
@@ -76,11 +89,15 @@ docs/evidence/phase4/
 │       ├── README.md
 │       └── windows_*_report.json
 ├── runs/
-│   └── run_20261110_054251_8240a569/ # Clean committed run (dirty=false, verified SHA256)
+│   ├── run_20261110_054251_8240a569/ # Clean committed run 1 (dirty=false, rev 8240a56...)
+│   │   ├── provenance.json
+│   │   ├── commands.log
+│   │   └── windows_*_report.json
+│   └── run_20261110_064202_a56298ce/ # Clean committed run 2 (dirty=false, rev a56298c...)
 │       ├── provenance.json
 │       ├── commands.log
 │       └── windows_*_report.json
-├── windows_idle_report.json          # Canonical latest reports (exclusive creation)
+├── windows_idle_report.json          # Canonical baseline reports (exclusive creation)
 ├── windows_sustained_report.json
 ├── windows_burst_report.json
 ├── windows_offline_report.json
@@ -215,16 +232,18 @@ Executed in two consecutive phases using the **exact same SQLite database and id
 
 ## Comparative Metrics Summary Table
 
+### Latest Evidence Run (`run_20261110_064202_a56298ce`, Revision `a56298ce...`)
+
 | Metric | Idle Scenario | Sustained Scenario | Burst Scenario | Offline Scenario | Real Retry Scenario |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Profile** | `windows-smoke-idle` | `windows-smoke-sustained` | `windows-smoke-burst` | `windows-smoke-offline` | `windows-smoke-reconnect` |
 | **Duration** | 3.0 s | 4.0 s | 4.0 s | 3.0 s | 22.0 s |
-| **Total Samples** | 3 | 5 | 4 | 3 | 12 |
-| **Degraded Samples** | 3 (Storage Unresolved) | 5 (Storage Unresolved) | 4 (Storage Unresolved) | 3 (Storage Unresolved) | 12 (Storage Unresolved) |
-| **Peak RSS Memory** | 70.70 MB | 22.89 MB | 24.72 MB | 22.81 MB | 22.61 MB |
-| **Peak Storage Size** | 237 KB | 1,295 KB | 3,713 KB | 982 KB | 812 KB |
-| **Peak Write IO** | 340 KB/s | 803 KB/s | 3,621 KB/s | 890 KB/s | 1,924 KB/s |
-| **Mean Process CPU** | ~0.42% | ~0.19% | ~0.25% | ~0.50% | ~0.05% |
+| **Total Samples** | 3 | 4 | 4 | 3 | 11 |
+| **Degraded Samples** | 3 (Storage Unresolved) | 4 (Storage Unresolved) | 4 (Storage Unresolved) | 3 (Storage Unresolved) | 11 (Storage Unresolved) |
+| **Peak RSS Memory** | 21.17 MB | 21.58 MB | 23.65 MB | 22.61 MB | 21.35 MB |
+| **Peak Storage Size** | 221 KB | 1,279 KB | 3,649 KB | 982 KB | 788 KB |
+| **Peak Write IO** | 268 KB/s | 403 KB/s | 2,622 KB/s | 890 KB/s | 473 KB/s |
+| **Mean Process CPU** | ~0.21% | ~0.19% | ~0.39% | ~0.57% | ~0.08% |
 | **Ingested Events** | 2 | 26 | 72 | 22 | 2 |
 | **Committed Events** | 2 | 26 | 72 | 22 | 2 |
 | **HTTP Accepted** | 2 | 26 | 72 | 0 | 24 |
@@ -232,6 +251,31 @@ Executed in two consecutive phases using the **exact same SQLite database and id
 | **Final Pending DB** | 0 | 0 | 0 | 22 | 0 |
 | **Reconciled Valid** | **TRUE** | **TRUE** | **TRUE** | **TRUE** | **TRUE** |
 | **Shutdown Outcome** | `MEASUREMENT_COMPLETE` | `MEASUREMENT_COMPLETE` | `MEASUREMENT_COMPLETE` | `MEASUREMENT_COMPLETE` | `MEASUREMENT_COMPLETE` |
+
+### Reproducibility Comparison Across Committed Qualification Runs
+
+| Scenario | Metric | Run 1 (`run_..._8240a569`) | Run 2 (`run_..._a56298ce`) | Variance / Reproducibility Assessment |
+| :--- | :--- | :---: | :---: | :--- |
+| **Idle** | Total Samples / Degraded | 3 / 3 | 3 / 3 | Identical sample count (1s interval) |
+| | Peak RSS Memory | 70.70 MB | 21.17 MB | Cold-start Go GC/DLL initialization vs warm cache |
+| | Peak Storage / Write IO | 237 KB / 340 KB/s | 221 KB / 268 KB/s | Baseline SQLite initialization |
+| | Ingested / Committed / Accepted | 2 / 2 / 2 | 2 / 2 / 2 | Exact deterministic match (1 inv + 1 net) |
+| **Sustained** | Total Samples / Degraded | 5 / 5 | 4 / 4 | Timer boundary variation (4.0s duration vs 1.0s tick alignment) |
+| | Peak RSS Memory | 22.89 MB | 21.58 MB | Stable steady-state memory footprint (~22 MB) |
+| | Peak Storage / Write IO | 1,295 KB / 803 KB/s | 1,279 KB / 403 KB/s | Consistent SQLite WAL expansion (12 files) |
+| | Ingested / Committed / Accepted | 26 / 26 / 26 | 26 / 26 / 26 | Exact deterministic match (2 baseline + 24 fs) |
+| **Burst** | Total Samples / Degraded | 4 / 4 | 4 / 4 | Identical sample count |
+| | Peak RSS Memory | 24.72 MB | 23.65 MB | Stable bounded memory under burst (~24 MB) |
+| | Peak Storage / Write IO | 3,713 KB / 3,621 KB/s | 3,649 KB / 2,622 KB/s | Rapid 35-file concurrent burst expansion |
+| | Ingested / Committed / Accepted | 72 / 72 / 72 | 72 / 72 / 72 | Exact deterministic match (2 baseline + 70 fs) |
+| **Offline** | Total Samples / Degraded | 3 / 3 | 3 / 3 | Identical sample count |
+| | Ingested / Committed | 22 / 22 | 22 / 22 | Exact match (10 monitored files buffered) |
+| | HTTP Accepted / Retries | 0 / 22 | 0 / 22 | Strictly 0 HTTP accepted; 22 retries with backoff |
+| | Final Pending Events in SQLite | 22 | 22 | 100% of offline events preserved in SQLite `PENDING` |
+| **Reconnect** | Total Samples / Degraded | 12 / 12 | 11 / 11 | Timer boundary variation (22.0s duration vs 2.0s tick alignment) |
+| | Initial Backlog / Newly Ingested | 22 / 2 | 22 / 2 | Exact match |
+| | HTTP Accepted / Local Removed | 24 / 24 | 24 / 24 | All 24 events accepted by receiver and deleted from SQLite |
+| | Final Pending Events in SQLite | 0 | 0 | Zero orphan events; clean empty pending queue |
 
 ---
 
