@@ -247,28 +247,45 @@ func TestWorkload_YaraX_ComponentIntegration_PositiveVersusHarmlessDetection(t *
 		t.Fatalf("failed to determine repository root: %v", err)
 	}
 
-	// 0. Pre-workload source boundary verification
-	ctxPre, cancelPre := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelPre()
-	preCheck, err := CheckSourceBoundary(ctxPre, repoRoot, "pre-yarax-component-workload")
-	if err != nil {
-		t.Fatalf("failed pre-collection source boundary check: %v", err)
-	}
-
-	exportRequested := os.Getenv("EVIDENCE_EXPORT_DIR") != "" || os.Getenv("EVIDENCE_EXPORT_TO_REPO") == "true"
-	if exportRequested && preCheck.Dirty && os.Getenv("ALLOW_DIRTY_EVIDENCE") != "true" {
-		t.Fatalf("cannot export accepted qualification evidence from dirty checkout: revision=%s, dirty=%v. Commit changes before collecting evidence.", preCheck.Revision, preCheck.Dirty)
-	}
-
 	tempDir := t.TempDir()
 	runID := fmt.Sprintf("yarax_%s", time.Now().UTC().Format("20060102_150405"))
-	persistentDiagDir := filepath.Join(repoRoot, "docs", "evidence", "phase4", "diagnostics")
+	persistentDiagDir := os.Getenv("DIAGNOSTIC_DIR")
+	if persistentDiagDir == "" {
+		persistentDiagDir = filepath.Join(repoRoot, "docs", "evidence", "phase4", "diagnostics")
+	}
 	stagingDir := filepath.Join(tempDir, "staging")
 	if err := os.MkdirAll(stagingDir, 0755); err != nil {
 		t.Fatalf("failed to create staging dir: %v", err)
 	}
 	diagMgr := NewRunDiagnosticManager(runID, persistentDiagDir, stagingDir, nil)
 	diagMgr.RegisterTestingFinalizer(t)
+
+	failWithDiagnostics := func(outcome DiagnosticOutcome, reason string, origErr error) {
+		t.Helper()
+		diagPath, diagErr := diagMgr.FinalizeFailure(outcome, reason, origErr)
+		if diagErr != nil {
+			t.Fatalf("%s: %v (CRITICAL: diagnostic retention also failed: %v)", reason, origErr, diagErr)
+		}
+		if diagPath != "" {
+			t.Logf("Diagnostic bundle preserved at: %s", diagPath)
+		}
+		t.Fatalf("%s: %v", reason, origErr)
+	}
+
+	// 0. Pre-workload source boundary verification
+	ctxPre, cancelPre := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelPre()
+	preCheck, err := CheckSourceBoundary(ctxPre, repoRoot, "pre-yarax-component-workload")
+	if err != nil {
+		failWithDiagnostics(OutcomeFailed, "failed pre-collection source boundary check", err)
+	}
+	diagMgr.RecordBoundaryCheck(preCheck)
+
+	exportRequested := os.Getenv("EVIDENCE_EXPORT_DIR") != "" || os.Getenv("EVIDENCE_EXPORT_TO_REPO") == "true"
+	if exportRequested && preCheck.Dirty {
+		bErr := fmt.Errorf("qualification evidence requires a clean committed source checkout, but working tree is dirty: revision=%s, dirty=%v. Commit changes before collecting evidence (notes: %s)", preCheck.Revision, preCheck.Dirty, preCheck.StatusNotes)
+		failWithDiagnostics(OutcomeInvalid, "cannot export accepted qualification evidence from dirty checkout", bErr)
+	}
 
 	dbPath := filepath.Join(tempDir, "yarax_workload.db")
 	idPath := filepath.Join(tempDir, "identity.json")
@@ -731,15 +748,18 @@ rule Suspicious_OT_Payload {
 	t.Logf("Note on Memory: runtime.MemStats only measures Go heap; libyara_x_capi native allocations are excluded.")
 
 	// Invariants (asserted and verified strictly BEFORE exporting accepted evidence):
+	// Inject failure mode for harness qualification testing if requested
+	if injectMode := os.Getenv("YARAX_TEST_INJECT_FAILURE"); injectMode == "storage_growth_nonpositive" {
+		maliciousStorageGrowth = -1024
+	}
+
 	// 1. Positive detection MUST produce greater storage growth than harmless workload due to finding persistence
 	if maliciousStorageGrowth <= 0 {
-		_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "non-positive storage growth for detection workload", fmt.Errorf("storage growth=%d", maliciousStorageGrowth))
-		t.Fatalf("expected positive storage growth for detection workload, got %d", maliciousStorageGrowth)
+		failWithDiagnostics(OutcomeFailed, "non-positive storage growth for detection workload", fmt.Errorf("storage growth=%d", maliciousStorageGrowth))
 	}
 	// 2. Detection pipeline latency must be bounded (< 100ms per event even on unoptimized native scan + SQLite insert)
 	if pipelineMaliciousSummary.Mean > 100*time.Millisecond {
-		_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "detection pipeline latency exceeded 100ms threshold", fmt.Errorf("mean latency=%v", pipelineMaliciousSummary.Mean))
-		t.Fatalf("average detection pipeline latency %v exceeds 100ms threshold", pipelineMaliciousSummary.Mean)
+		failWithDiagnostics(OutcomeFailed, "detection pipeline latency exceeded 100ms threshold", fmt.Errorf("mean latency=%v", pipelineMaliciousSummary.Mean))
 	}
 
 	// Post-workload source boundary check
@@ -747,18 +767,22 @@ rule Suspicious_OT_Payload {
 	defer cancelPost()
 	postCheck, err := CheckSourceBoundary(ctxPost, repoRoot, "post-yarax-component-workload")
 	if err != nil {
-		_, _ = diagMgr.FinalizeFailure(OutcomeInvalid, "post-workload source boundary check failed", err)
-		t.Fatalf("post-workload source boundary check failed: %v", err)
+		failWithDiagnostics(OutcomeInvalid, "post-workload source boundary check failed", err)
 	}
+	diagMgr.RecordBoundaryCheck(postCheck)
+
 	if postCheck.Revision != preCheck.Revision {
 		bErr := fmt.Errorf("source revision changed during collection: pre=%s, post=%s", preCheck.Revision, postCheck.Revision)
-		_, _ = diagMgr.FinalizeFailure(OutcomeInvalid, "source revision altered during collection", bErr)
-		t.Fatalf("qualification run invalidated: %v", bErr)
+		failWithDiagnostics(OutcomeInvalid, "source revision altered during collection", bErr)
 	}
-	if exportRequested && postCheck.Dirty && os.Getenv("ALLOW_DIRTY_EVIDENCE") != "true" {
+	if exportRequested && postCheck.Dirty {
 		bErr := fmt.Errorf("working tree became dirty during workload collection: status=%s", postCheck.StatusNotes)
-		_, _ = diagMgr.FinalizeFailure(OutcomeInvalid, "working tree dirty after collection", bErr)
-		t.Fatalf("qualification run invalidated: %v", bErr)
+		failWithDiagnostics(OutcomeInvalid, "working tree dirty after collection", bErr)
+	}
+
+	// Ensure failed subtests or boundary checks cannot produce accepted evidence export
+	if t.Failed() {
+		failWithDiagnostics(OutcomeFailed, "aborting accepted evidence export: test has active failures", errors.New("test marked failed prior to export"))
 	}
 
 	libyaraVer := getLibYaraXVersion()
@@ -806,8 +830,7 @@ rule Suspicious_OT_Payload {
 
 	exportedPath, err := ExportYaraXComponentEvidence(stagingDir, exportDir, componentEvidence)
 	if err != nil {
-		_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "failed to export accepted evidence", err)
-		t.Fatalf("failed to export YARA-X component evidence: %v", err)
+		failWithDiagnostics(OutcomeFailed, "failed to export accepted evidence", err)
 	}
 
 	if exportDir != "" {
@@ -993,5 +1016,136 @@ func TestWorkload_YaraX_ComponentEvidenceExport(t *testing.T) {
 	_, errWriteFail := ExportYaraXComponentEvidence(dummyStaging, filepath.Join(unwritableBlocker, "sub"), sampleEvidence)
 	if errWriteFail == nil {
 		t.Fatalf("expected error when exporting to unwritable target, got nil")
+	}
+}
+
+// TestYaraX_QualificationEvidenceRefusesDirtyOverride_RetainsDiagnostics verifies that:
+// 1. Setting ALLOW_DIRTY_EVIDENCE=true does NOT permit accepted qualification evidence export from a dirty tree.
+// 2. Export is strictly refused before any files are written into EVIDENCE_EXPORT_DIR.
+// 3. Diagnostics are retained in PersistentDiagDir under invalid_<runID> with an INVALID outcome manifest.
+func TestYaraX_QualificationEvidenceRefusesDirtyOverride_RetainsDiagnostics(t *testing.T) {
+	repoRoot, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatalf("failed to determine repository root: %v", err)
+	}
+
+	tempDir := t.TempDir()
+	exportDir := filepath.Join(tempDir, "attempted_export")
+	diagDir := filepath.Join(tempDir, "retained_diagnostics")
+
+	// Create a temporary uncommitted canary file in repoRoot to make working tree dirty
+	canaryPath := filepath.Join(repoRoot, fmt.Sprintf("dirty_canary_test_%d.tmp", time.Now().UnixNano()))
+	if err := os.WriteFile(canaryPath, []byte("uncommitted qualification canary"), 0644); err != nil {
+		t.Fatalf("failed to create dirty canary file: %v", err)
+	}
+	defer func() {
+		_ = os.Remove(canaryPath)
+	}()
+
+	// Verify working tree is indeed reported as dirty
+	chk, chkErr := CheckSourceBoundary(context.Background(), repoRoot, "verify-canary-dirty")
+	if chkErr != nil || !chk.Dirty {
+		t.Fatalf("failed to set up dirty working tree fixture: err=%v, dirty=%v", chkErr, chk.Dirty)
+	}
+
+	// Invoke TestWorkload_YaraX_ComponentIntegration_PositiveVersusHarmlessDetection in a child test process
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWorkload_YaraX_ComponentIntegration_PositiveVersusHarmlessDetection$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"ALLOW_DIRTY_EVIDENCE=true", // Must be ignored and rejected!
+		"EVIDENCE_EXPORT_DIR="+exportDir,
+		"DIAGNOSTIC_DIR="+diagDir,
+	)
+
+	out, err := cmd.CombinedOutput()
+	outputStr := string(out)
+
+	// Clean up canary immediately so other tests run on clean tree
+	_ = os.Remove(canaryPath)
+
+	// Child MUST fail with nonzero exit code
+	if err == nil {
+		t.Fatalf("expected child test to fail on dirty working tree despite ALLOW_DIRTY_EVIDENCE=true, but it passed:\n%s", outputStr)
+	}
+
+	// Output must state dirty qualification rejection
+	if !strings.Contains(outputStr, "cannot export accepted qualification evidence from dirty checkout") {
+		t.Fatalf("expected output to mention dirty qualification evidence refusal, got:\n%s", outputStr)
+	}
+
+	// Export directory MUST remain completely empty (zero accepted evidence files)
+	if entries, err := os.ReadDir(exportDir); err == nil && len(entries) > 0 {
+		t.Fatalf("expected export directory to be empty, but found %d files", len(entries))
+	}
+
+	// Persistent diagnostic directory MUST contain an invalid_<runID> directory with diagnostic_manifest.json
+	diagEntries, err := os.ReadDir(diagDir)
+	if err != nil {
+		t.Fatalf("failed to read diagnostic directory: %v", err)
+	}
+	var invalidFound bool
+	for _, entry := range diagEntries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), "invalid_") {
+			invalidFound = true
+			manifestPath := filepath.Join(diagDir, entry.Name(), "diagnostic_manifest.json")
+			data, readErr := os.ReadFile(manifestPath)
+			if readErr != nil {
+				t.Fatalf("failed to read diagnostic manifest %s: %v", manifestPath, readErr)
+			}
+			var manifest DiagnosticManifest
+			if unmarshalErr := json.Unmarshal(data, &manifest); unmarshalErr != nil {
+				t.Fatalf("failed to parse diagnostic manifest: %v", unmarshalErr)
+			}
+			if manifest.Outcome != OutcomeInvalid {
+				t.Fatalf("expected diagnostic outcome %s, got %s", OutcomeInvalid, manifest.Outcome)
+			}
+		}
+	}
+	if !invalidFound {
+		t.Fatalf("expected invalid_<runID> directory in %s, found none:\n%s", diagDir, outputStr)
+	}
+}
+
+// TestWorkload_YaraX_DiagnosticFinalizationFailure_PreservesBothCauses verifies that:
+// 1. When an actual workload failure occurs AND diagnostic persistence fails (e.g., unwritable diagnostic directory),
+// 2. Both the original failure reason AND the diagnostic retention error are visibly printed in test output.
+// 3. The test exits nonzero.
+func TestWorkload_YaraX_DiagnosticFinalizationFailure_PreservesBothCauses(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create an unwritable blocker file for DIAGNOSTIC_DIR so os.MkdirAll / os.Mkdir fails
+	blockerFile := filepath.Join(tempDir, "diagnostic_dir_blocker.txt")
+	if err := os.WriteFile(blockerFile, []byte("i_am_a_file_blocking_mkdir"), 0644); err != nil {
+		t.Fatalf("failed to write blocker file: %v", err)
+	}
+
+	// Invoke child test process with YARAX_TEST_INJECT_FAILURE and DIAGNOSTIC_DIR pointing to blockerFile
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWorkload_YaraX_ComponentIntegration_PositiveVersusHarmlessDetection$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"YARAX_TEST_INJECT_FAILURE=storage_growth_nonpositive",
+		"DIAGNOSTIC_DIR="+blockerFile,
+	)
+
+	out, err := cmd.CombinedOutput()
+	outputStr := string(out)
+
+	// Child test MUST exit nonzero
+	if err == nil {
+		t.Fatalf("expected child test with injected failure and diagnostic write failure to exit nonzero, got success:\n%s", outputStr)
+	}
+
+	// Child output MUST contain original failure reason
+	if !strings.Contains(outputStr, "non-positive storage growth for detection workload") {
+		t.Fatalf("expected output to contain original failure reason 'non-positive storage growth for detection workload', got:\n%s", outputStr)
+	}
+
+	// Child output MUST contain diagnostic retention failure notice
+	if !strings.Contains(outputStr, "CRITICAL: diagnostic retention also failed:") {
+		t.Fatalf("expected output to contain 'CRITICAL: diagnostic retention also failed:', got:\n%s", outputStr)
 	}
 }

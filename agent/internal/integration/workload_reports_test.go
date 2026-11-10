@@ -222,7 +222,7 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		t.Fatalf("failed to resolve repo root: %v", err)
 	}
 
-	requireClean := os.Getenv("EVIDENCE_EXPORT_TO_REPO") == "true" || os.Getenv("EVIDENCE_REQUIRE_CLEAN") == "true"
+	requireClean := os.Getenv("EVIDENCE_EXPORT_TO_REPO") == "true" || os.Getenv("EVIDENCE_REQUIRE_CLEAN") == "true" || os.Getenv("EVIDENCE_EXPORT_DIR") != ""
 	tracker := &runTracker{}
 
 	ctxCheck := context.Background()
