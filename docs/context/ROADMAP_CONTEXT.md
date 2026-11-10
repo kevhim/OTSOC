@@ -128,4 +128,15 @@
   - **Real Retry Recovery & Mock Receiver**: Removed fake SQL that cleared retry deadlines. Preserved natural backoff timestamps across shutdown and restart. 22-second reconnect run verified natural deadline expiration, mock HTTP 202 acknowledgement, and local SQLite removal. Documented mock receiver boundary and harmless rule match scope.
   - **Verification**: `scripts/verify-phase4.ps1 -Race -NativeDetection` 9/9 PASS.
 - **Milestone Status**: Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
+
+## Phase 4 Measurement Evidence Provenance, Report Preservation & Subprocess Bounds Checkpoint (2026-11-10)
+- **Status**: Completed on branch `fix/correctness-remediation-checkpoint`.
+- **Key Changes**:
+  - **Subprocess Execution Bounding**: Corrected documentation that prematurely claimed all commands were bounded. Applied explicit timeout contexts to all external commands (`git rev-parse HEAD` 5s, `git status` 5s, `go build` 90s, `go version -m` 10s, `endpoint.exe` scenarios 13s–37s) via `ExecCommandWithTimeout` with captured diagnostics and clear timeout reporting.
+  - **Toolchain Provenance & Binary Hashing**: Implemented `ParseBinaryProvenanceOutput` handling Windows and POSIX absolute executable paths and strictly requiring `toolchain`, `revision`, and `vcs.modified` presence. Computed binary SHA-256 (`ComputeFileSHA256`) and recorded in `provenance.json`.
+  - **Historical Preservation & Run Isolation**: Recovered original reports from commits `d6fd8bd` and `5cbe40b` into dedicated `docs/evidence/phase4/historical/` directories. Generated new evidence exclusively (`WriteEvidenceExclusive`) into a unique run directory (`docs/evidence/phase4/runs/run_20261110_054251_8240a569/`) alongside `commands.log` and `provenance.json`.
+  - **Committed Clean Baseline Verification**: Verified binary provenance against clean committed source (`dirty: false`, commit `8240a56...`). Validated every scenario report manifest against binary provenance.
+  - **Truthful Degraded Measurement Accounting**: Explicitly documented why samples report `degraded_samples = total_samples` (raw signals fully available; storage pressure evaluation intentionally blocked at `StorageBudgetBytes: 0` pending authoritative policy).
+  - **Verification**: 9/9 PASS on `verify-phase4.ps1 -Race -NativeDetection`, 5/5 PASS on provenance unit tests, 4/4 PASS on Windows measurement workload suite.
+- **Milestone Status**: Phase 4 acceptance remains **OPEN**; Phase 5 has not begun.
 - **Next Bounded Implementation Task**: Execute equivalent Linux CI race & native workload evidence collection and plan representative low-spec qualification.

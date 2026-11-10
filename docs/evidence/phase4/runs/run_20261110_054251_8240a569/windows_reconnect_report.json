@@ -1,0 +1,578 @@
+{
+  "manifest": {
+    "source_revision": "8240a5692a335dd1c9d20e2a2755e95554a0b7e9",
+    "dirty": false,
+    "os": "windows",
+    "architecture": "amd64",
+    "toolchain": "go1.27.0",
+    "logical_cpus": 22,
+    "profile": "windows-smoke-reconnect",
+    "rules": [
+      {
+        "rule_id": "LOCAL-IOC-EXEC-001",
+        "version": "1.0",
+        "severity": "CRITICAL"
+      }
+    ],
+    "sampling_interval_ms": 2000,
+    "duration_ms": 22000,
+    "sample_limit": 10000,
+    "output_byte_limit": 10485760
+  },
+  "samples": [
+    {
+      "sample_index": 1,
+      "timestamp": "2026-11-10T05:43:07Z",
+      "cpu_percent": 0,
+      "rss_bytes": 13058048,
+      "persistence_bytes": 151552,
+      "contributing_files": [
+        {
+          "path": "agent.db",
+          "size_bytes": 118784,
+          "exists": true
+        },
+        {
+          "path": "agent.db-wal",
+          "size_bytes": 0,
+          "exists": true
+        },
+        {
+          "path": "agent.db-shm",
+          "size_bytes": 32768,
+          "exists": true
+        },
+        {
+          "path": "agent_emergency_spill.log",
+          "size_bytes": null,
+          "exists": false
+        }
+      ],
+      "write_io_bytes_per_sec": 1969990.3194578895,
+      "queue_depth": 0,
+      "queue_capacity": 200,
+      "queue_saturation_percent": 0,
+      "queue_oldest_event_age_seconds": null,
+      "blocked_enqueue_attempts_total": 0,
+      "pressure_episodes_total": 0,
+      "backpressure_events_total": 0,
+      "connectivity": "UNKNOWN",
+      "governor_state": "NORMAL",
+      "sampling_error": "storage budget is unconfigured or unresolved",
+      "events_dropped_total": null,
+      "events_aggregated_total": null
+    },
+    {
+      "sample_index": 2,
+      "timestamp": "2026-11-10T05:43:09Z",
+      "cpu_percent": 0.10649907933675895,
+      "rss_bytes": 22921216,
+      "persistence_bytes": 295784,
+      "contributing_files": [
+        {
+          "path": "agent.db",
+          "size_bytes": 118784,
+          "exists": true
+        },
+        {
+          "path": "agent.db-wal",
+          "size_bytes": 144232,
+          "exists": true
+        },
+        {
+          "path": "agent.db-shm",
+          "size_bytes": 32768,
+          "exists": true
+        },
+        {
+          "path": "agent_emergency_spill.log",
+          "size_bytes": null,
+          "exists": false
+        }
+      ],
+      "write_io_bytes_per_sec": 72212.26021945286,
+      "queue_depth": 0,
+      "queue_capacity": 200,
+      "queue_saturation_percent": 0,
+      "queue_oldest_event_age_seconds": null,
+      "blocked_enqueue_attempts_total": 0,
+      "pressure_episodes_total": 0,
+      "backpressure_events_total": 0,
+      "connectivity": "ONLINE",
+      "governor_state": "NORMAL",
+      "sampling_error": "storage budget is unconfigured or unresolved",
+      "events_dropped_total": null,
+      "events_aggregated_total": null
+    },
+    {
+      "sample_index": 3,
+      "timestamp": "2026-11-10T05:43:11Z",
+      "cpu_percent": 0,
+      "rss_bytes": 22953984,
+      "persistence_bytes": 295784,
+      "contributing_files": [
+        {
+          "path": "agent.db",
+          "size_bytes": 118784,
+          "exists": true
+        },
+        {
+          "path": "agent.db-wal",
+          "size_bytes": 144232,
+          "exists": true
+        },
+        {
+          "path": "agent.db-shm",
+          "size_bytes": 32768,
+          "exists": true
+        },
+        {
+          "path": "agent_emergency_spill.log",
+          "size_bytes": null,
+          "exists": false
+        }
+      ],
+      "write_io_bytes_per_sec": 90.00073350597808,
+      "queue_depth": 0,
+      "queue_capacity": 200,
+      "queue_saturation_percent": 0,
+      "queue_oldest_event_age_seconds": null,
+      "blocked_enqueue_attempts_total": 0,
+      "pressure_episodes_total": 0,
+      "backpressure_events_total": 0,
+      "connectivity": "ONLINE",
+      "governor_state": "NORMAL",
+      "sampling_error": "storage budget is unconfigured or unresolved",
+      "events_dropped_total": null,
+      "events_aggregated_total": null
+    },
+    {
+      "sample_index": 4,
+      "timestamp": "2026-11-10T05:43:13Z",
+      "cpu_percent": 0.035515609527482644,
+      "rss_bytes": 23011328,
+      "persistence_bytes": 295784,
+      "contributing_files": [
+        {
+          "path": "agent.db",
+          "size_bytes": 118784,
+          "exists": true
+        },
+        {
+          "path": "agent.db-wal",
+          "size_bytes": 144232,
+          "exists": true
+        },
+        {
+          "path": "agent.db-shm",
+          "size_bytes": 32768,
+          "exists": true
+        },
+        {
+          "path": "agent_emergency_spill.log",
+          "size_bytes": null,
+          "exists": false
+        }
+      ],
+      "write_io_bytes_per_sec": 81.00968470780681,
+      "queue_depth": 0,
+      "queue_capacity": 200,
+      "queue_saturation_percent": 0,
+      "queue_oldest_event_age_seconds": null,
+      "blocked_enqueue_attempts_total": 0,
+      "pressure_episodes_total": 0,
+      "backpressure_events_total": 0,
+      "connectivity": "ONLINE",
+      "governor_state": "NORMAL",
+      "sampling_error": "storage budget is unconfigured or unresolved",
+      "events_dropped_total": null,
+      "events_aggregated_total": null
+    },
+    {
+      "sample_index": 5,
+      "timestamp": "2026-11-10T05:43:15Z",
+      "cpu_percent": 0.03550295831098351,
+      "rss_bytes": 23019520,
+      "persistence_bytes": 295784,
+      "contributing_files": [
+        {
+          "path": "agent.db",
+          "size_bytes": 118784,
+          "exists": true
+        },
+        {
+          "path": "agent.db-wal",
+          "size_bytes": 144232,
+          "exists": true
+        },
+        {
+          "path": "agent.db-shm",
+          "size_bytes": 32768,
+          "exists": true
+        },
+        {
+          "path": "agent_emergency_spill.log",
+          "size_bytes": null,
+          "exists": false
+        }
+      ],
+      "write_io_bytes_per_sec": 90.47857919637526,
+      "queue_depth": 0,
+      "queue_capacity": 200,
+      "queue_saturation_percent": 0,
+      "queue_oldest_event_age_seconds": null,
+      "blocked_enqueue_attempts_total": 0,
+      "pressure_episodes_total": 0,
+      "backpressure_events_total": 0,
+      "connectivity": "ONLINE",
+      "governor_state": "NORMAL",
+      "sampling_error": "storage budget is unconfigured or unresolved",
+      "events_dropped_total": null,
+      "events_aggregated_total": null
+    },
+    {
+      "sample_index": 6,
+      "timestamp": "2026-11-10T05:43:17Z",
+      "cpu_percent": 0,
+      "rss_bytes": 23019520,
+      "persistence_bytes": 295784,
+      "contributing_files": [
+        {
+          "path": "agent.db",
+          "size_bytes": 118784,
+          "exists": true
+        },
+        {
+          "path": "agent.db-wal",
+          "size_bytes": 144232,
+          "exists": true
+        },
+        {
+          "path": "agent.db-shm",
+          "size_bytes": 32768,
+          "exists": true
+        },
+        {
+          "path": "agent_emergency_spill.log",
+          "size_bytes": null,
+          "exists": false
+        }
+      ],
+      "write_io_bytes_per_sec": 90.02136657135571,
+      "queue_depth": 0,
+      "queue_capacity": 200,
+      "queue_saturation_percent": 0,
+      "queue_oldest_event_age_seconds": null,
+      "blocked_enqueue_attempts_total": 0,
+      "pressure_episodes_total": 0,
+      "backpressure_events_total": 0,
+      "connectivity": "ONLINE",
+      "governor_state": "NORMAL",
+      "sampling_error": "storage budget is unconfigured or unresolved",
+      "events_dropped_total": null,
+      "events_aggregated_total": null
+    },
+    {
+      "sample_index": 7,
+      "timestamp": "2026-11-10T05:43:19Z",
+      "cpu_percent": 0.03550515555991399,
+      "rss_bytes": 23687168,
+      "persistence_bytes": 831384,
+      "contributing_files": [
+        {
+          "path": "agent.db",
+          "size_bytes": 118784,
+          "exists": true
+        },
+        {
+          "path": "agent.db-wal",
+          "size_bytes": 679832,
+          "exists": true
+        },
+        {
+          "path": "agent.db-shm",
+          "size_bytes": 32768,
+          "exists": true
+        },
+        {
+          "path": "agent_emergency_spill.log",
+          "size_bytes": null,
+          "exists": false
+        }
+      ],
+      "write_io_bytes_per_sec": 267834.16919551615,
+      "queue_depth": 0,
+      "queue_capacity": 200,
+      "queue_saturation_percent": 0,
+      "queue_oldest_event_age_seconds": null,
+      "blocked_enqueue_attempts_total": 0,
+      "pressure_episodes_total": 0,
+      "backpressure_events_total": 0,
+      "connectivity": "ONLINE",
+      "governor_state": "NORMAL",
+      "sampling_error": "storage budget is unconfigured or unresolved",
+      "events_dropped_total": null,
+      "events_aggregated_total": null
+    },
+    {
+      "sample_index": 8,
+      "timestamp": "2026-11-10T05:43:21Z",
+      "cpu_percent": 0,
+      "rss_bytes": 23695360,
+      "persistence_bytes": 831384,
+      "contributing_files": [
+        {
+          "path": "agent.db",
+          "size_bytes": 118784,
+          "exists": true
+        },
+        {
+          "path": "agent.db-wal",
+          "size_bytes": 679832,
+          "exists": true
+        },
+        {
+          "path": "agent.db-shm",
+          "size_bytes": 32768,
+          "exists": true
+        },
+        {
+          "path": "agent_emergency_spill.log",
+          "size_bytes": null,
+          "exists": false
+        }
+      ],
+      "write_io_bytes_per_sec": 90.03085357351965,
+      "queue_depth": 0,
+      "queue_capacity": 200,
+      "queue_saturation_percent": 0,
+      "queue_oldest_event_age_seconds": null,
+      "blocked_enqueue_attempts_total": 0,
+      "pressure_episodes_total": 0,
+      "backpressure_events_total": 0,
+      "connectivity": "ONLINE",
+      "governor_state": "NORMAL",
+      "sampling_error": "storage budget is unconfigured or unresolved",
+      "events_dropped_total": null,
+      "events_aggregated_total": null
+    },
+    {
+      "sample_index": 9,
+      "timestamp": "2026-11-10T05:43:23Z",
+      "cpu_percent": 0.03550520348355924,
+      "rss_bytes": 23695360,
+      "persistence_bytes": 831384,
+      "contributing_files": [
+        {
+          "path": "agent.db",
+          "size_bytes": 118784,
+          "exists": true
+        },
+        {
+          "path": "agent.db-wal",
+          "size_bytes": 679832,
+          "exists": true
+        },
+        {
+          "path": "agent.db-shm",
+          "size_bytes": 32768,
+          "exists": true
+        },
+        {
+          "path": "agent_emergency_spill.log",
+          "size_bytes": null,
+          "exists": false
+        }
+      ],
+      "write_io_bytes_per_sec": 80.98594893785928,
+      "queue_depth": 0,
+      "queue_capacity": 200,
+      "queue_saturation_percent": 0,
+      "queue_oldest_event_age_seconds": null,
+      "blocked_enqueue_attempts_total": 0,
+      "pressure_episodes_total": 0,
+      "backpressure_events_total": 0,
+      "connectivity": "ONLINE",
+      "governor_state": "NORMAL",
+      "sampling_error": "storage budget is unconfigured or unresolved",
+      "events_dropped_total": null,
+      "events_aggregated_total": null
+    },
+    {
+      "sample_index": 10,
+      "timestamp": "2026-11-10T05:43:25Z",
+      "cpu_percent": 0.035503691288676156,
+      "rss_bytes": 23695360,
+      "persistence_bytes": 831384,
+      "contributing_files": [
+        {
+          "path": "agent.db",
+          "size_bytes": 118784,
+          "exists": true
+        },
+        {
+          "path": "agent.db-wal",
+          "size_bytes": 679832,
+          "exists": true
+        },
+        {
+          "path": "agent.db-shm",
+          "size_bytes": 32768,
+          "exists": true
+        },
+        {
+          "path": "agent_emergency_spill.log",
+          "size_bytes": null,
+          "exists": false
+        }
+      ],
+      "write_io_bytes_per_sec": 89.98055520202084,
+      "queue_depth": 0,
+      "queue_capacity": 200,
+      "queue_saturation_percent": 0,
+      "queue_oldest_event_age_seconds": null,
+      "blocked_enqueue_attempts_total": 0,
+      "pressure_episodes_total": 0,
+      "backpressure_events_total": 0,
+      "connectivity": "ONLINE",
+      "governor_state": "NORMAL",
+      "sampling_error": "storage budget is unconfigured or unresolved",
+      "events_dropped_total": null,
+      "events_aggregated_total": null
+    },
+    {
+      "sample_index": 11,
+      "timestamp": "2026-11-10T05:43:27Z",
+      "cpu_percent": 0,
+      "rss_bytes": 23695360,
+      "persistence_bytes": 831384,
+      "contributing_files": [
+        {
+          "path": "agent.db",
+          "size_bytes": 118784,
+          "exists": true
+        },
+        {
+          "path": "agent.db-wal",
+          "size_bytes": 679832,
+          "exists": true
+        },
+        {
+          "path": "agent.db-shm",
+          "size_bytes": 32768,
+          "exists": true
+        },
+        {
+          "path": "agent_emergency_spill.log",
+          "size_bytes": null,
+          "exists": false
+        }
+      ],
+      "write_io_bytes_per_sec": 91.01483541817316,
+      "queue_depth": 0,
+      "queue_capacity": 200,
+      "queue_saturation_percent": 0,
+      "queue_oldest_event_age_seconds": null,
+      "blocked_enqueue_attempts_total": 0,
+      "pressure_episodes_total": 0,
+      "backpressure_events_total": 0,
+      "connectivity": "ONLINE",
+      "governor_state": "NORMAL",
+      "sampling_error": "storage budget is unconfigured or unresolved",
+      "events_dropped_total": null,
+      "events_aggregated_total": null
+    },
+    {
+      "sample_index": 12,
+      "timestamp": "2026-11-10T05:43:29Z",
+      "cpu_percent": 0,
+      "rss_bytes": 23703552,
+      "persistence_bytes": 831384,
+      "contributing_files": [
+        {
+          "path": "agent.db",
+          "size_bytes": 118784,
+          "exists": true
+        },
+        {
+          "path": "agent.db-wal",
+          "size_bytes": 679832,
+          "exists": true
+        },
+        {
+          "path": "agent.db-shm",
+          "size_bytes": 32768,
+          "exists": true
+        },
+        {
+          "path": "agent_emergency_spill.log",
+          "size_bytes": null,
+          "exists": false
+        }
+      ],
+      "write_io_bytes_per_sec": 81.49013969309713,
+      "queue_depth": 0,
+      "queue_capacity": 200,
+      "queue_saturation_percent": 0,
+      "queue_oldest_event_age_seconds": null,
+      "blocked_enqueue_attempts_total": 0,
+      "pressure_episodes_total": 0,
+      "backpressure_events_total": 0,
+      "connectivity": "ONLINE",
+      "governor_state": "NORMAL",
+      "sampling_error": "storage budget is unconfigured or unresolved",
+      "events_dropped_total": null,
+      "events_aggregated_total": null
+    }
+  ],
+  "summary": {
+    "total_samples": 12,
+    "degraded_samples": 12,
+    "reporting_errors": 0,
+    "shutdown_outcome": "MEASUREMENT_COMPLETE",
+    "event_accounting": {
+      "ingestion_outcome": {
+        "ingested_total": 2,
+        "committed_total": 2,
+        "failed_before_commit_total": 0,
+        "recovered_dlq_total": 0,
+        "spilled_disk_total": 0,
+        "dropped_total": 0,
+        "reconciliation_valid": true
+      },
+      "forwarder": {
+        "attempts_total": 24,
+        "http_accepted_total": 24,
+        "dlq_total": 0,
+        "retry_total": 0,
+        "local_removed_total": 24,
+        "local_removal_errors_total": 0
+      },
+      "queue": {
+        "adapter_blocked_enqueue_attempts_total": 0,
+        "blocked_enqueue_attempts_total": 0,
+        "pressure_episodes_total": 0,
+        "time_spent_full_seconds": 0
+      },
+      "storage": {
+        "initial_backlog_pending_events": 22,
+        "durable_pending_events": 0,
+        "durable_dlq_events": 0,
+        "durable_total_events": 0,
+        "source_telemetry_events": 0,
+        "derived_findings_events": 0,
+        "pruned_events_total": null
+      },
+      "ingested_total": 2,
+      "committed_total": 2,
+      "forwarded_total": 24,
+      "failed_before_commit_total": 0,
+      "recovered_dlq_total": 0,
+      "spilled_disk_total": 0,
+      "dropped_total": 0,
+      "backpressure_events_total": 0,
+      "reconciliation_valid": true
+    },
+    "notice": "Notice: Report completion does not equate to event-accounting reconciliation, zero telemetry loss, or Phase 4 qualification."
+  }
+}

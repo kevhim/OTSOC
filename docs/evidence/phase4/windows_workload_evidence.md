@@ -14,7 +14,7 @@ This document records the empirical measurement results collected from the compi
 > **Production Detection Rule Scope**: All scenarios executed with the active production detection engine loaded with deterministic rule `LOCAL-IOC-EXEC-001`. Because the workload consisted of harmless temporary file writes and OS snapshots, **no detection rule conditions matched**, and **no derived detection findings were emitted**. This run demonstrates detection engine evaluation overhead during collection, but **does not claim detection-match execution cost or finding emission overhead**.
 
 > [!WARNING]
-> **Retry Deadline Preservation & Historical Correction**: An earlier iteration of the reconnect test manually cleared retry deadlines via SQL (`UPDATE events SET next_attempt_at = NULL`) to force immediate redelivery. That historical approach was invalidated and rerun. The corrected scenario (`Scenario_OfflineAndRealRetryRecovery`) **strictly preserves SQLite retry timestamps across shutdown and restart without SQL modification**. The reconnect phase executes for 22 seconds, allowing the exponential backoff window ($10\text{s} + 9\text{s}\text{ jitter} = 10\text{--}19\text{s}$) to naturally elapse so the forwarder's 5s retry ticker discovers and drains all 22 offline-buffered events natively.
+> **Retry Deadline Preservation & Natural Recovery**: An early iteration of the reconnect test manually cleared retry deadlines via SQL (`UPDATE events SET next_attempt_at = NULL`) to force immediate redelivery. That historical approach was invalidated. The corrected scenario (`Scenario_OfflineAndRealRetryRecovery`) **strictly preserves SQLite retry timestamps across shutdown and restart without SQL modification**. The reconnect phase executes for 22 seconds, allowing the exponential backoff window ($10\text{s} + 9\text{s}\text{ jitter} = 10\text{--}19\text{s}$) to naturally elapse so the forwarder's 5s retry ticker discovers and drains all 22 offline-buffered events natively.
 
 ### Host Hardware & Environment
 
@@ -24,10 +24,12 @@ This document records the empirical measurement results collected from the compi
 | **Processor** | Intel(R) Core(TM) Ultra 7 155H |
 | **Topology** | 16 physical cores, 22 logical processors |
 | **Physical Memory** | 32 GB RAM (32,961,912 KB visible) |
-| **Go Toolchain** | go1.27.0 (windows/amd64) |
+| **Go Toolchain** | `go1.27.0` (windows/amd64) |
 | **CGO / Toolchain** | MSYS2 UCRT64 GCC 14.2.0, libyara_x_capi 1.20.0 |
-| **Source Revision** | `d6fd8bd091bcbda92d760803b9233830d3bc0fe4` |
-| **Working Tree State**| Verified fresh build in isolated `t.TempDir()` with matching VCS buildinfo |
+| **Active Run ID** | `run_20261110_054251_8240a569` |
+| **Source Revision** | `8240a5692a335dd1c9d20e2a2755e95554a0b7e9` |
+| **Working Tree State**| `dirty: false` (clean committed baseline) |
+| **Binary SHA-256** | `d949af478cd55535bcaf69344d670edbcc31b32ab5070bf4ac87e67f37016257` |
 
 ### Production Detection Rule Workload
 
@@ -40,13 +42,45 @@ All scenarios executed with the active production detection engine loaded with t
 
 ---
 
-## Workload Scenarios & Empirical Evidence
+## Subprocess Execution Bounding & Timeout Governance
 
-Workload scenarios were executed using freshly compiled native `endpoint.exe` binaries in isolated directories with dedicated persistence files (`agent.db`, `identity.json`, `agent.json`) and opt-in machine-readable JSON reports:
+In earlier test iterations, git queries, binary compilation, and buildinfo inspection were executed without explicit context deadlines, and documentation prematurely claimed all subprocess commands were bounded. In this verified release, **every single external command is strictly governed by an explicit timeout context** with captured diagnostic output and visible deadline-exceeded failure reporting:
+
+| Command | Working Directory | Explicit Timeout | Actual Duration | Exit Code | Purpose |
+| :--- | :--- | :---: | :---: | :---: | :--- |
+| `git rev-parse HEAD` | Repository Root | 5.0 s | 45 ms | `0` | Expected commit discovery |
+| `git status --porcelain` | Repository Root | 5.0 s | 53 ms | `0` | Expected clean checkout verification |
+| `go build -v -o <temp>/endpoint.exe ...` | Repository Root | 90.0 s | 2,600 ms | `0` | Fresh binary compilation in `t.TempDir()` |
+| `go version -m <temp>/endpoint.exe` | Repository Root | 10.0 s | 89 ms | `0` | Embedded VCS buildinfo & toolchain verification |
+| `endpoint.exe (windows-smoke-idle)` | `Scenario_Idle` TempDir | 13.0 s | 3,273 ms | `0` | Idle baseline workload |
+| `endpoint.exe (windows-smoke-sustained)` | `Scenario_Sustained` TempDir | 14.0 s | 4,149 ms | `0` | Sustained filesystem workload |
+| `endpoint.exe (windows-smoke-burst)` | `Scenario_Burst` TempDir | 14.0 s | 4,138 ms | `0` | Burst concurrency workload |
+| `endpoint.exe (windows-smoke-offline)` | `Scenario_Offline` TempDir | 13.0 s | 3,605 ms | `0` | Offline storage buffering workload |
+| `endpoint.exe (windows-smoke-reconnect)`| `Scenario_Offline` TempDir | 37.0 s | 22,269 ms | `0` | Reconnection & real retry recovery workload |
+
+All command invocations, arguments, timeouts, durations, and exit statuses are deterministically recorded in [`commands.log`](file:///D:/Desktop/OT-SOC/redcyberfox-ot-soc/docs/evidence/phase4/runs/run_20261110_054251_8240a569/commands.log).
+
+---
+
+## Historical Run Preservation & Directory Isolation
+
+To prevent accidental file clobbering, historical and corrected runs are segregated into dedicated, immutable directories:
 
 ```
 docs/evidence/phase4/
-├── windows_idle_report.json
+├── historical/
+│   ├── run_d6fd8bd_initial/          # Historical initial run; manual SQL deadline clearing
+│   │   ├── README.md
+│   │   └── windows_*_report.json
+│   └── run_5cbe40b_retry_recovery/   # Historical retry run; natural backoff, but dirty=true
+│       ├── README.md
+│       └── windows_*_report.json
+├── runs/
+│   └── run_20261110_054251_8240a569/ # Clean committed run (dirty=false, verified SHA256)
+│       ├── provenance.json
+│       ├── commands.log
+│       └── windows_*_report.json
+├── windows_idle_report.json          # Canonical latest reports (exclusive creation)
 ├── windows_sustained_report.json
 ├── windows_burst_report.json
 ├── windows_offline_report.json
@@ -54,10 +88,38 @@ docs/evidence/phase4/
 └── windows_retry_recovery_report.json
 ```
 
+---
+
+## Truthful Degraded Measurement Accounting
+
+In all measurement reports, samples report:
+```json
+"governor_state": "NORMAL",
+"sampling_error": "storage budget is unconfigured or unresolved"
+```
+and `degraded_samples` equals `total_samples` (e.g. 11/11 in reconnect, 3/3 in idle).
+
+### Distinguishing Available Signals from Unresolved Policy
+1. **Available Raw Resource Signals**:
+   - Process CPU Utilization (%): Sampled via Windows `GetProcessTimes` with prime step continuity.
+   - Process Memory (RSS): Exact visible bytes via `K32GetProcessMemoryInfo`.
+   - Durable Persistence Footprint: Exact regular-file byte sums (`agent.db` + `agent.db-wal` + `agent.db-shm`).
+   - Write IO Throughput: Derived bytes/sec via Windows `GetProcessIoCounters`.
+   - Event Queue Metrics: Depth, capacity, saturation %, and oldest event age.
+2. **Unavailable Storage-Pressure Evaluation**:
+   - The Resource Governor contract requires an authoritative host persistence budget policy (`StorageBudgetBytes`).
+   - Because this policy remains pending hardware qualification and OT deployment guidelines, `StorageBudgetBytes` is **strictly configured as 0**.
+   - As a result, the governor coordinator truthfully emits `ErrMissingStorageBudget` and flags `StorageBlocked = true`.
+3. **No Fabricated Budgets**:
+   - The test harness does **not invent an arbitrary budget**, suppress errors, fabricate values, or artificially enable enforcement merely to make samples appear green. The degraded sample count truthfully reflects the open architectural gate.
+
+---
+
+## Workload Scenarios & Empirical Evidence
+
 ### 1. Idle Workload Scenario (`windows-smoke-idle`)
-- **Profile**: `windows-smoke-idle`
-- **Duration**: 3,000 ms | **Sampling Interval**: 1,000 ms (3 samples)
-- **Workload**: No artificial filesystem activity. OS background collectors (`inventory`, `network`, `process`, `usb`, `filesystem`) initialized.
+- **Profile**: `windows-smoke-idle` | **Duration**: 3,000 ms | **Sampling Interval**: 1,000 ms (3 samples)
+- **Workload**: No artificial filesystem activity. OS background collectors initialized.
 - **Durable Storage**: `agent.db` (4 KB), `agent.db-wal` (185 KB), `agent.db-shm` (32 KB).
 - **Process Memory (RSS)**: Initial 12.11 MB, steady-state 21.91 MB.
 - **CPU Utilization**: 0.00% to 0.50% (mean ~0.19%).
@@ -71,11 +133,10 @@ docs/evidence/phase4/
   - Final Shutdown Outcome: `MEASUREMENT_COMPLETE`
 
 ### 2. Sustained Workload Scenario (`windows-smoke-sustained`)
-- **Profile**: `windows-smoke-sustained`
-- **Duration**: 4,000 ms | **Sampling Interval**: 1,000 ms (4 samples)
-- **Workload**: Steady file creation stream (1 file written every 200 ms to monitored directory).
+- **Profile**: `windows-smoke-sustained` | **Duration**: 4,000 ms | **Sampling Interval**: 1,000 ms (4 samples)
+- **Workload**: Steady file creation stream (1 file written every 200 ms to monitored directory; 12 files).
 - **Durable Storage**: `agent.db` (4 KB), `agent.db-wal` expanded to 1,273 KB (1.27 MB), `agent.db-shm` (32 KB).
-- **Process Memory (RSS)**: Initial 12.01 MB, peak 23.42 MB.
+- **Process Memory (RSS)**: Initial 12.01 MB, peak 23.41 MB.
 - **CPU Utilization**: 0.07% to 0.64% (excluding baseline prime sample).
 - **Write IO Throughput**: 298.1 KB/s to 453.4 KB/s.
 - **Queue Metrics**: Depth: 0 (smooth real-time processing), Saturation: 0.0%, Blocked Attempts: 0, Pressure Episodes: 0.
@@ -88,11 +149,10 @@ docs/evidence/phase4/
   - Final Shutdown Outcome: `MEASUREMENT_COMPLETE`
 
 ### 3. Burst Workload Scenario (`windows-smoke-burst`)
-- **Profile**: `windows-smoke-burst`
-- **Duration**: 4,000 ms | **Sampling Interval**: 1,000 ms (4 samples)
+- **Profile**: `windows-smoke-burst` | **Duration**: 4,000 ms | **Sampling Interval**: 1,000 ms (4 samples)
 - **Workload**: Sudden burst of 35 files created concurrently in monitored directory.
 - **Durable Storage**: `agent.db` (4 KB), `agent.db-wal` expanded to 3,736 KB (3.73 MB), `agent.db-shm` (32 KB).
-- **Process Memory (RSS)**: Initial 11.98 MB, peak 25.78 MB.
+- **Process Memory (RSS)**: Initial 11.98 MB, peak 25.79 MB.
 - **CPU Utilization**: 0.00% to 0.78%.
 - **Write IO Throughput**: Peaked at 3,679.3 KB/s (3.68 MB/s).
 - **Queue Metrics**: Depth: 0 after consumer drain, Saturation: 0.0%, Blocked Attempts: 0, Pressure Episodes: 0.
@@ -106,11 +166,10 @@ docs/evidence/phase4/
 
 ### 4. Offline & Real Retry Recovery Workload Scenario (`windows-smoke-offline` / `windows-smoke-reconnect`)
 
-This scenario was executed in two consecutive phases using the **exact same SQLite database and identity**, verifying both offline buffering and subsequent real retry recovery:
+Executed in two consecutive phases using the **exact same SQLite database and identity**:
 
 #### Phase 4A: Offline Ingestion & Storage Buffering
-- **Profile**: `windows-smoke-offline`
-- **Duration**: 3,000 ms | **Sampling Interval**: 1,000 ms (3 samples)
+- **Profile**: `windows-smoke-offline` | **Duration**: 3,000 ms | **Sampling Interval**: 1,000 ms (3 samples)
 - **Workload**: Upstream server offline (unreachable port `http://127.0.0.1:54321`), 10 files created in monitored directory.
 - **Connectivity State**: Transitioned from `UNKNOWN` to `OFFLINE`.
 - **Durable Storage**: `agent.db-wal` expanded to 918 KB (0.92 MB).
@@ -124,13 +183,12 @@ This scenario was executed in two consecutive phases using the **exact same SQLi
   - Final Shutdown Outcome: `MEASUREMENT_COMPLETE`
 
 #### Phase 4B: Reconnection & Real Retry Recovery
-- **Profile**: `windows-smoke-reconnect` (persisted as both `windows_reconnect_report.json` and `windows_retry_recovery_report.json`)
-- **Duration**: 22,000 ms | **Sampling Interval**: 2,000 ms (11 samples)
-- **Workload**: Upstream mock server online (`http://127.0.0.1:<port>`), same SQLite database reopened without modifying any row or column.
+- **Profile**: `windows-smoke-reconnect` | **Duration**: 22,000 ms | **Sampling Interval**: 2,000 ms (11 samples)
+- **Workload**: Upstream mock receiver online (`http://127.0.0.1:<port>`), same SQLite database reopened without modifying any row or column.
 - **Retry Mechanism**: The forwarder runs a background retry loop every 5 seconds. Within the 22-second execution window, the 10s–19s exponential backoff window naturally elapsed without any SQL clock resetting or test intervention.
 - **Event Identity & Ordering Verification**:
   - The test harness recorded the exact IDs and sequence numbers of all 22 offline-buffered events before starting Phase 4B.
-  - After Phase 4B shutdown, the test verified that **every single recorded offline event ID and sequence number** arrived at the mock receiver.
+  - After Phase 4B shutdown, verified that **every single recorded offline event ID and sequence number** arrived at the mock receiver.
   - Asserted `count(state = 'PENDING') == 0` in SQLite post-shutdown.
 - **Backlog Ingestion Accounting**:
   - Initial Backlog Pending Events: **22**
@@ -148,13 +206,14 @@ This scenario was executed in two consecutive phases using the **exact same SQLi
 
 | Metric | Idle Scenario | Sustained Scenario | Burst Scenario | Offline Scenario | Real Retry Scenario |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Report File** | `windows_idle_report.json` | `windows_sustained_report.json` | `windows_burst_report.json` | `windows_offline_report.json` | `windows_retry_recovery_report.json` |
+| **Profile** | `windows-smoke-idle` | `windows-smoke-sustained` | `windows-smoke-burst` | `windows-smoke-offline` | `windows-smoke-reconnect` |
 | **Duration** | 3.0 s | 4.0 s | 4.0 s | 3.0 s | 22.0 s |
 | **Total Samples** | 3 | 4 | 4 | 3 | 11 |
-| **Peak RSS Memory** | 21.92 MB | 23.42 MB | 25.78 MB | 23.26 MB | 22.89 MB |
+| **Degraded Samples** | 3 (Storage Unresolved) | 4 (Storage Unresolved) | 4 (Storage Unresolved) | 3 (Storage Unresolved) | 11 (Storage Unresolved) |
+| **Peak RSS Memory** | 21.91 MB | 23.41 MB | 25.79 MB | 23.27 MB | 22.90 MB |
 | **Peak Storage Size** | 222 KB | 1,309 KB | 3,773 KB | 955 KB | 296 KB |
 | **Peak Write IO** | 271 KB/s | 453 KB/s | 3,679 KB/s | 860 KB/s | 292 KB/s |
-| **Mean Process CPU** | ~0.19% | ~0.28% | ~0.26% | ~0.21% | ~0.07% |
+| **Mean Process CPU** | ~0.19% | ~0.26% | ~0.28% | ~0.21% | ~0.07% |
 | **Ingested Events** | 2 | 26 | 72 | 22 | 2 |
 | **Committed Events** | 2 | 26 | 72 | 22 | 2 |
 | **HTTP Accepted** | 2 | 26 | 72 | 0 | 24 |

@@ -48,3 +48,9 @@ The agent runs locally, queues events in SQLite, and forwards to central server 
   - `TimeSpentFullSeconds`: cumulative duration the queue spent at 100% saturation.
   - Deterministic FIFO waiter admission, context cancellation without state loss, and immediate rejection with `ErrQueueClosed` on queue closure.
   - Testing synchronization hooks (`SetAdapterBlockedHook`, `AdapterWaiting`, `AdapterHeldEvent`) allow barrier-based verification of queue saturation without timing assumptions.
+
+## Subprocess Execution & Provenance Invariants
+- **Subprocess Execution Bounding**: All external commands executed during measurement and integration runs (git queries, compilation, buildinfo inspection, workload execution) are strictly bounded by explicit timeout contexts via `ExecCommandWithTimeout`.
+- **Toolchain Provenance Parsing**: Toolchain provenance is extracted via `ParseBinaryProvenanceOutput` handling both Windows and POSIX absolute executable paths, strictly requiring `toolchain`, `revision`, and `vcs.modified` presence without silent defaulting.
+- **Evidence File Creation**: Evidence file writing uses `WriteEvidenceExclusive` (`os.O_EXCL | os.O_CREATE`) to guarantee unique run isolation and prevent accidental overwrites.
+- **Degraded Measurement Truthfulness**: Degraded measurement samples (`sampling_error: storage budget is unconfigured or unresolved`) are reported truthfully while `StorageBudgetBytes` remains 0; no artificial budget or error suppression is permitted.

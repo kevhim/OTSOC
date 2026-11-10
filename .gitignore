@@ -63,6 +63,7 @@ temp/
 coverage/
 logs/
 *.log
+!docs/evidence/**/commands.log
 *.zip
 !.tools/go/lib/time/zoneinfo.zip
 scratch/

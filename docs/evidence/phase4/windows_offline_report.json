@@ -1,7 +1,7 @@
 {
   "manifest": {
-    "source_revision": "d6fd8bd091bcbda92d760803b9233830d3bc0fe4",
-    "dirty": true,
+    "source_revision": "8240a5692a335dd1c9d20e2a2755e95554a0b7e9",
+    "dirty": false,
     "os": "windows",
     "architecture": "amd64",
     "toolchain": "go1.27.0",
@@ -22,9 +22,9 @@
   "samples": [
     {
       "sample_index": 1,
-      "timestamp": "2026-11-05T09:12:32Z",
+      "timestamp": "2026-11-10T05:43:03Z",
       "cpu_percent": 0,
-      "rss_bytes": 13004800,
+      "rss_bytes": 13238272,
       "persistence_bytes": 94576,
       "contributing_files": [
         {
@@ -48,7 +48,7 @@
           "exists": false
         }
       ],
-      "write_io_bytes_per_sec": 478591.9114011669,
+      "write_io_bytes_per_sec": 635003.9359748098,
       "queue_depth": 0,
       "queue_capacity": 200,
       "queue_saturation_percent": 0,
@@ -64,10 +64,10 @@
     },
     {
       "sample_index": 2,
-      "timestamp": "2026-11-05T09:12:33Z",
-      "cpu_percent": 0.14200762371449702,
-      "rss_bytes": 24006656,
-      "persistence_bytes": 980376,
+      "timestamp": "2026-11-10T05:43:04Z",
+      "cpu_percent": 0.49705957958125874,
+      "rss_bytes": 23900160,
+      "persistence_bytes": 1005096,
       "contributing_files": [
         {
           "path": "agent.db",
@@ -76,7 +76,7 @@
         },
         {
           "path": "agent.db-wal",
-          "size_bytes": 943512,
+          "size_bytes": 968232,
           "exists": true
         },
         {
@@ -90,7 +90,7 @@
           "exists": false
         }
       ],
-      "write_io_bytes_per_sec": 886129.9349853199,
+      "write_io_bytes_per_sec": 910903.6370918541,
       "queue_depth": 0,
       "queue_capacity": 200,
       "queue_saturation_percent": 0,
@@ -106,10 +106,10 @@
     },
     {
       "sample_index": 3,
-      "timestamp": "2026-11-05T09:12:34Z",
+      "timestamp": "2026-11-10T05:43:05Z",
       "cpu_percent": 0,
-      "rss_bytes": 24006656,
-      "persistence_bytes": 980376,
+      "rss_bytes": 23916544,
+      "persistence_bytes": 1005096,
       "contributing_files": [
         {
           "path": "agent.db",
@@ -118,7 +118,7 @@
         },
         {
           "path": "agent.db-wal",
-          "size_bytes": 943512,
+          "size_bytes": 968232,
           "exists": true
         },
         {
@@ -132,7 +132,7 @@
           "exists": false
         }
       ],
-      "write_io_bytes_per_sec": 181.03120978056617,
+      "write_io_bytes_per_sec": 181.94728987012462,
       "queue_depth": 0,
       "queue_capacity": 200,
       "queue_saturation_percent": 0,

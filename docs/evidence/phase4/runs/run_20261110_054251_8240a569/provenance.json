@@ -1,0 +1,190 @@
+{
+  "run_id": "run_20261110_054251_8240a569",
+  "timestamp_utc": "2026-11-10T05:43:29Z",
+  "source_revision": "8240a5692a335dd1c9d20e2a2755e95554a0b7e9",
+  "dirty": false,
+  "binary_provenance": {
+    "exe_path": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports2137712797\\001\\endpoint.exe",
+    "sha256": "d949af478cd55535bcaf69344d670edbcc31b32ab5070bf4ac87e67f37016257",
+    "source_revision": "8240a5692a335dd1c9d20e2a2755e95554a0b7e9",
+    "dirty": false,
+    "toolchain": "go1.27.0",
+    "os": "windows",
+    "architecture": "amd64",
+    "logical_cpus": 22
+  },
+  "host_os": "windows",
+  "host_arch": "amd64",
+  "logical_cpus": 22,
+  "go_toolchain": "go1.27.0",
+  "executed_commands": [
+    {
+      "command": "git",
+      "args": [
+        "rev-parse",
+        "HEAD"
+      ],
+      "working_dir": "D:\\Desktop\\OT-SOC\\redcyberfox-ot-soc",
+      "timeout": 5000000000,
+      "duration_ms": 45,
+      "exit_code": 0
+    },
+    {
+      "command": "git",
+      "args": [
+        "status",
+        "--porcelain"
+      ],
+      "working_dir": "D:\\Desktop\\OT-SOC\\redcyberfox-ot-soc",
+      "timeout": 5000000000,
+      "duration_ms": 53,
+      "exit_code": 0
+    },
+    {
+      "command": "go",
+      "args": [
+        "build",
+        "-v",
+        "-o",
+        "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports2137712797\\001\\endpoint.exe",
+        "./agent/cmd/endpoint"
+      ],
+      "working_dir": "D:\\Desktop\\OT-SOC\\redcyberfox-ot-soc",
+      "timeout": 90000000000,
+      "duration_ms": 2600,
+      "exit_code": 0
+    },
+    {
+      "command": "go",
+      "args": [
+        "version",
+        "-m",
+        "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports2137712797\\001\\endpoint.exe"
+      ],
+      "working_dir": "D:\\Desktop\\OT-SOC\\redcyberfox-ot-soc",
+      "timeout": 10000000000,
+      "duration_ms": 89,
+      "exit_code": 0
+    },
+    {
+      "command": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports2137712797\\001\\endpoint.exe",
+      "args": [
+        "-config=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Idle80972788\\001\\agent.json",
+        "-identity=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Idle80972788\\001\\identity.json",
+        "-measure-report=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Idle80972788\\001\\report_idle.json",
+        "-measure-profile=windows-smoke-idle",
+        "-measure-duration=3s",
+        "-measure-interval=1s"
+      ],
+      "working_dir": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Idle80972788\\001",
+      "timeout": 13000000000,
+      "duration_ms": 3273,
+      "exit_code": 0
+    },
+    {
+      "command": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports2137712797\\001\\endpoint.exe",
+      "args": [
+        "-config=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Sustained2739171344\\001\\agent.json",
+        "-identity=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Sustained2739171344\\001\\identity.json",
+        "-measure-report=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Sustained2739171344\\001\\report_sustained.json",
+        "-measure-profile=windows-smoke-sustained",
+        "-measure-duration=4s",
+        "-measure-interval=1s"
+      ],
+      "working_dir": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Sustained2739171344\\001",
+      "timeout": 14000000000,
+      "duration_ms": 4149,
+      "exit_code": 0
+    },
+    {
+      "command": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports2137712797\\001\\endpoint.exe",
+      "args": [
+        "-config=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Burst4272954409\\001\\agent.json",
+        "-identity=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Burst4272954409\\001\\identity.json",
+        "-measure-report=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Burst4272954409\\001\\report_burst.json",
+        "-measure-profile=windows-smoke-burst",
+        "-measure-duration=4s",
+        "-measure-interval=1s"
+      ],
+      "working_dir": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_Burst4272954409\\001",
+      "timeout": 14000000000,
+      "duration_ms": 4138,
+      "exit_code": 0
+    },
+    {
+      "command": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports2137712797\\001\\endpoint.exe",
+      "args": [
+        "-config=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe1491913161\\001\\agent.json",
+        "-identity=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe1491913161\\001\\identity.json",
+        "-measure-report=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe1491913161\\001\\report_offline.json",
+        "-measure-profile=windows-smoke-offline",
+        "-measure-duration=3s",
+        "-measure-interval=1s"
+      ],
+      "working_dir": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe1491913161\\001",
+      "timeout": 13000000000,
+      "duration_ms": 3605,
+      "exit_code": 0
+    },
+    {
+      "command": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReports2137712797\\001\\endpoint.exe",
+      "args": [
+        "-config=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe1491913161\\001\\agent.json",
+        "-identity=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe1491913161\\001\\identity.json",
+        "-measure-report=C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe1491913161\\001\\report_reconnect.json",
+        "-measure-profile=windows-smoke-reconnect",
+        "-measure-duration=22s",
+        "-measure-interval=2s"
+      ],
+      "working_dir": "C:\\Users\\YASHSH~1\\AppData\\Local\\Temp\\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe1491913161\\001",
+      "timeout": 37000000000,
+      "duration_ms": 22269,
+      "exit_code": 0
+    }
+  ],
+  "workload_recipes": [
+    {
+      "name": "Idle",
+      "profile": "windows-smoke-idle",
+      "duration": 3000000000,
+      "sampling_interval": 1000000000,
+      "workload_action": "Harmless background collection; no filesystem changes"
+    },
+    {
+      "name": "Sustained",
+      "profile": "windows-smoke-sustained",
+      "duration": 4000000000,
+      "sampling_interval": 1000000000,
+      "workload_action": "1 file written every 200ms into watched directory (12 files)"
+    },
+    {
+      "name": "Burst",
+      "profile": "windows-smoke-burst",
+      "duration": 4000000000,
+      "sampling_interval": 1000000000,
+      "workload_action": "Rapid concurrent write of 35 files into watched directory"
+    },
+    {
+      "name": "Offline",
+      "profile": "windows-smoke-offline",
+      "duration": 3000000000,
+      "sampling_interval": 1000000000,
+      "workload_action": "Upstream offline; 10 files written; events buffered in SQLite with backoff"
+    },
+    {
+      "name": "ReconnectAndRealRetryRecovery",
+      "profile": "windows-smoke-reconnect",
+      "duration": 22000000000,
+      "sampling_interval": 2000000000,
+      "workload_action": "Mock receiver online; 22s run allows natural 10s-19s retry backoff expiration"
+    }
+  ],
+  "generated_reports": [
+    "windows_idle_report.json",
+    "windows_sustained_report.json",
+    "windows_burst_report.json",
+    "windows_offline_report.json",
+    "windows_reconnect_report.json",
+    "windows_retry_recovery_report.json"
+  ]
+}

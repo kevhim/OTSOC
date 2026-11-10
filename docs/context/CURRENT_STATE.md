@@ -418,7 +418,7 @@ Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Resource governor th
 - **Isolated Per-Test Build**: `buildFreshEndpointWithProvenance` always compiles a fresh `endpoint.exe` directly into `t.TempDir()`.
 - **VCS Buildinfo Inspection**: Evaluates compiled binary metadata via `go version -m <path>`, extracting `vcs.revision` and `vcs.modified`.
 - **Strict Provenance Validation**: Validates binary revision and dirty state against git status (`git rev-parse HEAD` and `git status --porcelain`). Fails visibly if metadata is missing or mismatched.
-- **Bounded Subprocess Execution**: All subprocess invocations use `exec.CommandContext` with bounded timeouts and capture combined diagnostic stdout/stderr.
+- **Historical Subprocess Bounds Limitation**: Documentation prematurely claimed all subprocess commands were bounded; however, git queries, binary compilation, and build metadata inspection were previously executed without explicit timeout contexts.
 
 ### 3. Real Retry Recovery & Mock Receiver Accounting
 - **Preservation of Retry Timestamps**: Completely removed `UPDATE events SET next_attempt_at = NULL` manipulation. The offline phase shuts down after 3 seconds, leaving 22 pending events with legitimate exponential backoff timestamps ($10\text{s} + 9\text{s}\text{ jitter} = 10\text{--}19\text{s}$ in the future).
@@ -439,5 +439,58 @@ Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Resource governor th
 - `go test -v -race -count=1 ./agent/internal/storage/...`: 21/21 PASS.
 - `go test -v -race -count=1 ./agent/internal/resourcereport/...`: 8/8 PASS.
 - `go test -v -count=1 ./agent/internal/integration -run TestWorkload_WindowsMeasurementReports`: 4/4 PASS (41.95s).
+- `go build -v ./agent/cmd/endpoint`: PASS.
+- `go build -v ./server/cmd/api`: PASS.
+
+## 2026-11-10 Phase 4 Measurement Evidence Provenance, Report Preservation & Subprocess Bounds Checkpoint (non-phase changing)
+
+A focused checkpoint implementing comprehensive subprocess execution bounding, toolchain provenance extraction, historical report preservation, and clean committed evidence generation was completed on branch `fix/correctness-remediation-checkpoint`.
+Phase 4 acceptance remains **OPEN**; Phase 5 has not begun. Resource governor thresholds remain uncalibrated and observational until representative multi-sample workloads are measured on constrained OT hardware.
+
+### 1. Comprehensive Subprocess Timeout Governance (`agent/internal/integration`)
+- **Explicit Timeout Bounding**: Corrected earlier documentation that prematurely claimed all subprocess commands were bounded. In this release, every external command is strictly governed by an explicit timeout context via `ExecCommandWithTimeout`:
+  - `git rev-parse HEAD`: 5.0 s timeout
+  - `git status --porcelain`: 5.0 s timeout
+  - `go build -v -o <temp>/endpoint.exe ...`: 90.0 s timeout
+  - `go version -m <temp>/endpoint.exe`: 10.0 s timeout
+  - `endpoint.exe (windows-smoke-idle)`: 13.0 s timeout (3s duration + 10s margin)
+  - `endpoint.exe (windows-smoke-sustained)`: 14.0 s timeout (4s duration + 10s margin)
+  - `endpoint.exe (windows-smoke-burst)`: 14.0 s timeout (4s duration + 10s margin)
+  - `endpoint.exe (windows-smoke-offline)`: 13.0 s timeout (3s duration + 10s margin)
+  - `endpoint.exe (windows-smoke-reconnect)`: 37.0 s timeout (22s duration + 15s margin)
+- **Diagnostic Capture & Deadline Reporting**: All stdout and stderr streams are captured; if a timeout occurs (`errors.Is(ctx.Err(), context.DeadlineExceeded)`), failures are reported visibly with diagnostic command output.
+- **Commands Log**: Deterministically logs command, working directory, timeout, execution duration, and exit status in `commands.log`.
+
+### 2. Toolchain Metadata & Binary Provenance Parsing
+- **Absolute Path Toolchain Parsing**: Extracted `ParseBinaryProvenanceOutput` in `agent/internal/integration/provenance_helpers.go` to handle absolute executable paths printed by `go version -m` across Windows (`C:\...\endpoint.exe: go1.27.0`) and POSIX paths.
+- **Strict Provenance Contract**: Requires `toolchain`, `vcs.revision`, and `vcs.modified` to be explicitly present in build metadata; fails visibly if any field is missing without silent defaulting.
+- **Cryptographic Binary Identity**: Computes hex-encoded SHA-256 hash (`ComputeFileSHA256`) of the compiled binary (`d949af478cd55535bcaf69344d670edbcc31b32ab5070bf4ac87e67f37016257`) and records it in `provenance.json`.
+
+### 3. Historical Evidence Preservation & Unique Run Directories
+- **Historical Preservation**: Recovered original reports from git revisions into immutable directories:
+  - `docs/evidence/phase4/historical/run_d6fd8bd_initial/`: reports from initial run with manual SQL deadline clearing (`d6fd8bd`).
+  - `docs/evidence/phase4/historical/run_5cbe40b_retry_recovery/`: reports from natural retry recovery run that had uncommitted working tree state (`5cbe40b`, `dirty: true`).
+- **Unique Run Isolation**: Completed runs are isolated in unique run directories (e.g. `docs/evidence/phase4/runs/run_20261110_054251_8240a569/`), storing raw reports, `commands.log`, and `provenance.json` together.
+- **Exclusive Creation**: `WriteEvidenceExclusive` enforces `os.O_CREATE | os.O_EXCL`, strictly refusing to overwrite existing files.
+
+### 4. Generation from Clean Committed Source (`dirty: false`)
+- **Committed Baseline**: Built from clean checkout commit `8240a5692a335dd1c9d20e2a2755e95554a0b7e9`.
+- **Isolated Run Execution**: Scenario outputs were staged in `t.TempDir()`, ensuring evidence generation did not mutate the working tree during collection.
+- **Manifest Validation**: All scenario reports (`idle`, `sustained`, `burst`, `offline`, `reconnect`) validated their embedded manifest against the binary provenance (`source_revision: 8240a56...`, `dirty: false`, `toolchain: go1.27.0`, `logical_cpus: 22`).
+
+### 5. Truthful Degraded Measurement Accounting
+- **Degraded Status Clarity**: Documented that all samples (11/11 in reconnect, 4/4 in sustained/burst, 3/3 in idle/offline) report `sampling_error: storage budget is unconfigured or unresolved`.
+- **Distinction of Signals**:
+  - Fully Available Raw Metrics: CPU (%), RSS (bytes), persistence file sizes (`agent.db`, `agent.db-wal`, `agent.db-shm`), write I/O (bytes/sec), queue depth, saturation %, and oldest event age.
+  - Unavailable Storage Pressure: `StorageBudgetBytes` remains intentionally blocked at `0` pending an authoritative host disk budget policy.
+  - Integrity: No artificial budget was invented and no errors were suppressed.
+
+### 6. Verification Outcomes
+- `scripts/verify-phase4.ps1 -Race -NativeDetection`: 9/9 PASS.
+- `go test -v -count=1 ./agent/internal/integration -run "TestParseBinaryProvenance|TestWriteEvidenceExclusive|TestExecCommandWithTimeout"`: 5/5 PASS.
+- `go test -v -race -count=1 ./agent/internal/eventqueue/...`: 12/12 PASS.
+- `go test -v -race -count=1 ./agent/internal/storage/...`: 21/21 PASS.
+- `go test -v -race -count=1 ./agent/internal/resourcereport/...`: 8/8 PASS.
+- `go test -v -count=1 ./agent/internal/integration -run TestWorkload_WindowsMeasurementReports`: 4/4 PASS (40.58s).
 - `go build -v ./agent/cmd/endpoint`: PASS.
 - `go build -v ./server/cmd/api`: PASS.
