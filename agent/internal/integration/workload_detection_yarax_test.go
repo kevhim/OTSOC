@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -246,7 +247,29 @@ func TestWorkload_YaraX_ComponentIntegration_PositiveVersusHarmlessDetection(t *
 		t.Fatalf("failed to determine repository root: %v", err)
 	}
 
+	// 0. Pre-workload source boundary verification
+	ctxPre, cancelPre := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelPre()
+	preCheck, err := CheckSourceBoundary(ctxPre, repoRoot, "pre-yarax-component-workload")
+	if err != nil {
+		t.Fatalf("failed pre-collection source boundary check: %v", err)
+	}
+
+	exportRequested := os.Getenv("EVIDENCE_EXPORT_DIR") != "" || os.Getenv("EVIDENCE_EXPORT_TO_REPO") == "true"
+	if exportRequested && preCheck.Dirty && os.Getenv("ALLOW_DIRTY_EVIDENCE") != "true" {
+		t.Fatalf("cannot export accepted qualification evidence from dirty checkout: revision=%s, dirty=%v. Commit changes before collecting evidence.", preCheck.Revision, preCheck.Dirty)
+	}
+
 	tempDir := t.TempDir()
+	runID := fmt.Sprintf("yarax_%s", time.Now().UTC().Format("20060102_150405"))
+	persistentDiagDir := filepath.Join(repoRoot, "docs", "evidence", "phase4", "diagnostics")
+	stagingDir := filepath.Join(tempDir, "staging")
+	if err := os.MkdirAll(stagingDir, 0755); err != nil {
+		t.Fatalf("failed to create staging dir: %v", err)
+	}
+	diagMgr := NewRunDiagnosticManager(runID, persistentDiagDir, stagingDir, nil)
+	diagMgr.RegisterTestingFinalizer(t)
+
 	dbPath := filepath.Join(tempDir, "yarax_workload.db")
 	idPath := filepath.Join(tempDir, "identity.json")
 
@@ -707,133 +730,268 @@ rule Suspicious_OT_Payload {
 	t.Logf("HeapAlloc Malicious: %d bytes -> %d bytes", memBeforeMalicious.HeapAlloc, memAfterMalicious.HeapAlloc)
 	t.Logf("Note on Memory: runtime.MemStats only measures Go heap; libyara_x_capi native allocations are excluded.")
 
-	// Query boundary check for exact committed source revision
-	srcCheck, _ := CheckSourceBoundary(context.Background(), repoRoot, "yarax-component-workload")
+	// Invariants (asserted and verified strictly BEFORE exporting accepted evidence):
+	// 1. Positive detection MUST produce greater storage growth than harmless workload due to finding persistence
+	if maliciousStorageGrowth <= 0 {
+		_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "non-positive storage growth for detection workload", fmt.Errorf("storage growth=%d", maliciousStorageGrowth))
+		t.Fatalf("expected positive storage growth for detection workload, got %d", maliciousStorageGrowth)
+	}
+	// 2. Detection pipeline latency must be bounded (< 100ms per event even on unoptimized native scan + SQLite insert)
+	if pipelineMaliciousSummary.Mean > 100*time.Millisecond {
+		_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "detection pipeline latency exceeded 100ms threshold", fmt.Errorf("mean latency=%v", pipelineMaliciousSummary.Mean))
+		t.Fatalf("average detection pipeline latency %v exceeds 100ms threshold", pipelineMaliciousSummary.Mean)
+	}
+
+	// Post-workload source boundary check
+	ctxPost, cancelPost := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelPost()
+	postCheck, err := CheckSourceBoundary(ctxPost, repoRoot, "post-yarax-component-workload")
+	if err != nil {
+		_, _ = diagMgr.FinalizeFailure(OutcomeInvalid, "post-workload source boundary check failed", err)
+		t.Fatalf("post-workload source boundary check failed: %v", err)
+	}
+	if postCheck.Revision != preCheck.Revision {
+		bErr := fmt.Errorf("source revision changed during collection: pre=%s, post=%s", preCheck.Revision, postCheck.Revision)
+		_, _ = diagMgr.FinalizeFailure(OutcomeInvalid, "source revision altered during collection", bErr)
+		t.Fatalf("qualification run invalidated: %v", bErr)
+	}
+	if exportRequested && postCheck.Dirty && os.Getenv("ALLOW_DIRTY_EVIDENCE") != "true" {
+		bErr := fmt.Errorf("working tree became dirty during workload collection: status=%s", postCheck.StatusNotes)
+		_, _ = diagMgr.FinalizeFailure(OutcomeInvalid, "working tree dirty after collection", bErr)
+		t.Fatalf("qualification run invalidated: %v", bErr)
+	}
+
 	libyaraVer := getLibYaraXVersion()
 
-	// Machine-readable component evidence artifact
-	componentEvidence := map[string]interface{}{
-		"evidence_type":     "component_integration",
-		"component":         "native_yarax_detection_engine",
-		"timestamp_utc":     time.Now().UTC().Format(time.RFC3339),
-		"source_revision":   srcCheck.Revision,
-		"dirty":             srcCheck.Dirty,
-		"toolchain":         runtime.Version(),
-		"libyara_x_version": libyaraVer,
-		"rule_id":           ruleID,
-		"rule_version":      ruleVersion,
-		"events_per_batch":  eventCount,
-		"timing_boundaries": map[string]string{
+	// Machine-readable component evidence artifact using strongly typed struct
+	componentEvidence := YaraXComponentEvidence{
+		EvidenceType:    "component_integration",
+		Component:       "native_yarax_detection_engine",
+		TimestampUTC:    time.Now().UTC().Format(time.RFC3339),
+		SourceRevision:  postCheck.Revision,
+		Dirty:           postCheck.Dirty,
+		Toolchain:       runtime.Version(),
+		LibYaraXVersion: libyaraVer,
+		RuleID:          ruleID,
+		RuleVersion:     ruleVersion,
+		EventsPerBatch:  eventCount,
+		TimingBoundaries: map[string]string{
 			"scanner_only":       "Pure in-memory YARA-X C API evaluation alone (no SQLite, no ingestion hooks)",
 			"pipeline_detection": "Ingestion OnCommitted hook -> detEngine.Evaluate (single native scan + deterministic UUIDv5 derivation + SQLite INSERT)",
 		},
-		"memory_boundary_note":       "runtime.MemStats measures Go heap only; native CGO allocations (libyara_x_capi) and OS page cache are process-level memory outside the Go heap",
-		"scanner_harmless_summary":   scannerHarmlessSummary,
-		"scanner_malicious_summary":  scannerMaliciousSummary,
-		"pipeline_harmless_summary":  pipelineHarmlessSummary,
-		"pipeline_malicious_summary": pipelineMaliciousSummary,
-		"raw_scanner_harmless_ns":    rawScannerHarmlessNs,
-		"raw_scanner_malicious_ns":   rawScannerMaliciousNs,
-		"raw_pipeline_harmless_ns":   rawPipelineHarmlessNs,
-		"raw_pipeline_malicious_ns":  rawPipelineMaliciousNs,
-		"storage_growth_bytes": map[string]int64{
+		MemoryBoundaryNote:       "runtime.MemStats measures Go heap only; native CGO allocations (libyara_x_capi) and OS page cache are process-level memory outside the Go heap",
+		ScannerHarmlessSummary:   scannerHarmlessSummary,
+		ScannerMaliciousSummary:  scannerMaliciousSummary,
+		PipelineHarmlessSummary:  pipelineHarmlessSummary,
+		PipelineMaliciousSummary: pipelineMaliciousSummary,
+		RawScannerHarmlessNs:     rawScannerHarmlessNs,
+		RawScannerMaliciousNs:    rawScannerMaliciousNs,
+		RawPipelineHarmlessNs:    rawPipelineHarmlessNs,
+		RawPipelineMaliciousNs:   rawPipelineMaliciousNs,
+		StorageGrowthBytes: map[string]int64{
 			"harmless":  harmlessStorageGrowth,
 			"malicious": maliciousStorageGrowth,
 		},
-		"storage_amplification_ratio": float64(maliciousStorageGrowth) / float64(harmlessStorageGrowth+1),
-		"asserted_source_event_ids":   allAssertedSourceIDs,
-		"asserted_finding_ids":        allAssertedFindingIDs,
-		"durability_reopen_verified":  true,
-		"zero_event_loss":             true,
+		StorageAmplificationRatio: float64(maliciousStorageGrowth) / float64(harmlessStorageGrowth+1),
+		AssertedSourceEventIDs:    allAssertedSourceIDs,
+		AssertedFindingIDs:        allAssertedFindingIDs,
+		DurabilityReopenVerified:  true,
+		ZeroEventLoss:             true,
 	}
 
-	evData, err := json.MarshalIndent(componentEvidence, "", "  ")
-	if err != nil {
-		t.Fatalf("failed to marshal component evidence: %v", err)
-	}
-
-	// Always stage locally in tempDir
-	stagingPath := filepath.Join(tempDir, "yarax_component_evidence.json")
-	if err := WriteEvidenceExclusive(stagingPath, evData); err != nil {
-		t.Fatalf("failed to stage component evidence: %v", err)
-	}
-
-	// Export exclusively to explicit external destination if configured
-	runID := fmt.Sprintf("yarax_%s", time.Now().UTC().Format("20060102_150405"))
 	exportDir := os.Getenv("EVIDENCE_EXPORT_DIR")
 	if exportDir == "" && os.Getenv("EVIDENCE_EXPORT_TO_REPO") == "true" {
 		exportDir = filepath.Join(repoRoot, "docs", "evidence", "phase4", "runs", runID)
 	}
-	if exportDir != "" {
-		if err := os.MkdirAll(exportDir, 0755); err != nil {
-			t.Fatalf("failed to create export directory %s: %v", exportDir, err)
-		}
-		targetPath := filepath.Join(exportDir, "yarax_component_evidence.json")
-		if err := WriteEvidenceExclusive(targetPath, evData); err != nil {
-			t.Fatalf("failed to export YARA-X component evidence exclusively to %s: %v", targetPath, err)
-		}
-		t.Logf("Exported YARA-X component evidence exclusively to: %s", targetPath)
+
+	exportedPath, err := ExportYaraXComponentEvidence(stagingDir, exportDir, componentEvidence)
+	if err != nil {
+		_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "failed to export accepted evidence", err)
+		t.Fatalf("failed to export YARA-X component evidence: %v", err)
 	}
 
-	// Invariants:
-	// 1. Positive detection MUST produce greater storage growth than harmless workload due to finding persistence
-	if maliciousStorageGrowth <= 0 {
-		t.Errorf("expected positive storage growth for detection workload, got %d", maliciousStorageGrowth)
+	if exportDir != "" {
+		t.Logf("Accepted qualification evidence exported exclusively to: %s", exportedPath)
 	}
-	// 2. Detection pipeline latency must be bounded (< 100ms per event even on unoptimized native scan + SQLite insert)
-	if pipelineMaliciousSummary.Mean > 100*time.Millisecond {
-		t.Errorf("average detection pipeline latency %v exceeds 100ms threshold", pipelineMaliciousSummary.Mean)
+
+	diagMgr.MarkSuccess()
+}
+
+// YaraXComponentEvidence documents native YARA-X evaluation and pipeline durability performance.
+type YaraXComponentEvidence struct {
+	EvidenceType              string            `json:"evidence_type"`
+	Component                 string            `json:"component"`
+	TimestampUTC              string            `json:"timestamp_utc"`
+	SourceRevision            string            `json:"source_revision"`
+	Dirty                     bool              `json:"dirty"`
+	Toolchain                 string            `json:"toolchain"`
+	LibYaraXVersion           string            `json:"libyara_x_version"`
+	RuleID                    string            `json:"rule_id"`
+	RuleVersion               string            `json:"rule_version"`
+	EventsPerBatch            int               `json:"events_per_batch"`
+	TimingBoundaries          map[string]string `json:"timing_boundaries"`
+	MemoryBoundaryNote        string            `json:"memory_boundary_note"`
+	ScannerHarmlessSummary    LatencySummary    `json:"scanner_harmless_summary"`
+	ScannerMaliciousSummary   LatencySummary    `json:"scanner_malicious_summary"`
+	PipelineHarmlessSummary   LatencySummary    `json:"pipeline_harmless_summary"`
+	PipelineMaliciousSummary  LatencySummary    `json:"pipeline_malicious_summary"`
+	RawScannerHarmlessNs      []int64           `json:"raw_scanner_harmless_ns"`
+	RawScannerMaliciousNs     []int64           `json:"raw_scanner_malicious_ns"`
+	RawPipelineHarmlessNs     []int64           `json:"raw_pipeline_harmless_ns"`
+	RawPipelineMaliciousNs    []int64           `json:"raw_pipeline_malicious_ns"`
+	StorageGrowthBytes        map[string]int64  `json:"storage_growth_bytes"`
+	StorageAmplificationRatio float64           `json:"storage_amplification_ratio"`
+	AssertedSourceEventIDs    []string          `json:"asserted_source_event_ids"`
+	AssertedFindingIDs        []string          `json:"asserted_finding_ids"`
+	DurabilityReopenVerified  bool              `json:"durability_reopen_verified"`
+	ZeroEventLoss             bool              `json:"zero_event_loss"`
+}
+
+// ExportYaraXComponentEvidence stages and exclusively exports component evidence.
+// It writes to stagingDir/yarax_component_evidence.json, and if targetDir is non-empty,
+// writes exclusively to targetDir/yarax_component_evidence.json, strictly refusing overwrite.
+func ExportYaraXComponentEvidence(stagingDir, targetDir string, ev YaraXComponentEvidence) (string, error) {
+	if strings.TrimSpace(ev.SourceRevision) == "" {
+		return "", errors.New("source_revision is required in component evidence")
 	}
+	if strings.TrimSpace(ev.Toolchain) == "" {
+		return "", errors.New("toolchain is required in component evidence")
+	}
+	if strings.TrimSpace(ev.LibYaraXVersion) == "" {
+		return "", errors.New("libyara_x_version is required in component evidence")
+	}
+
+	data, err := json.MarshalIndent(ev, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal component evidence: %w", err)
+	}
+
+	if stagingDir != "" {
+		if err := os.MkdirAll(stagingDir, 0755); err != nil {
+			return "", fmt.Errorf("failed to create staging dir %s: %w", stagingDir, err)
+		}
+		stagingPath := filepath.Join(stagingDir, "yarax_component_evidence.json")
+		if err := WriteEvidenceExclusive(stagingPath, data); err != nil {
+			return "", fmt.Errorf("failed to write staging evidence %s: %w", stagingPath, err)
+		}
+	}
+
+	if targetDir == "" {
+		return filepath.Join(stagingDir, "yarax_component_evidence.json"), nil
+	}
+
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create target export dir %s: %w", targetDir, err)
+	}
+
+	targetPath := filepath.Join(targetDir, "yarax_component_evidence.json")
+	if err := WriteEvidenceExclusive(targetPath, data); err != nil {
+		return "", fmt.Errorf("failed to write target evidence exclusively to %s: %w", targetPath, err)
+	}
+
+	return targetPath, nil
 }
 
 // TestWorkload_YaraX_ComponentEvidenceExport verifies that YARA-X component evidence
 // exports exclusively to an external directory outside temporary directories, survives
-// cleanup, and strictly refuses overwrite.
+// cleanup of the staging environment, and strictly refuses overwrite.
 func TestWorkload_YaraX_ComponentEvidenceExport(t *testing.T) {
-	persistentExportDir := filepath.Join(t.TempDir(), "persistent_export")
-	if err := os.MkdirAll(persistentExportDir, 0755); err != nil {
-		t.Fatalf("failed to create export dir: %v", err)
+	parentDir := t.TempDir()
+	persistentExportDir := filepath.Join(parentDir, "persistent_evidence")
+	var stagingDir string
+	var exportedPath string
+
+	sampleEvidence := YaraXComponentEvidence{
+		EvidenceType:    "component_integration",
+		Component:       "native_yarax_detection_engine",
+		TimestampUTC:    time.Now().UTC().Format(time.RFC3339),
+		SourceRevision:  "f81a7bf06a61c12de7b98a1df97ccdd0396b5a24",
+		Dirty:           false,
+		Toolchain:       runtime.Version(),
+		LibYaraXVersion: "1.20.0",
+		RuleID:          "YARA-OT-MALWARE-001",
+		RuleVersion:     "1.0",
+		EventsPerBatch:  30,
+		TimingBoundaries: map[string]string{
+			"scanner_only":       "Pure in-memory YARA-X C API evaluation",
+			"pipeline_detection": "Ingestion OnCommitted hook -> detEngine.Evaluate",
+		},
+		MemoryBoundaryNote:        "runtime.MemStats measures Go heap only",
+		ScannerHarmlessSummary:    LatencySummary{Count: 30, Mean: 50 * time.Microsecond, P95: 80 * time.Microsecond},
+		ScannerMaliciousSummary:   LatencySummary{Count: 30, Mean: 60 * time.Microsecond, P95: 90 * time.Microsecond},
+		PipelineHarmlessSummary:   LatencySummary{Count: 30, Mean: 500 * time.Microsecond, P95: 800 * time.Microsecond},
+		PipelineMaliciousSummary:  LatencySummary{Count: 30, Mean: 2 * time.Millisecond, P95: 4 * time.Millisecond},
+		StorageGrowthBytes:        map[string]int64{"harmless": 24576, "malicious": 81920},
+		StorageAmplificationRatio: 3.33,
+		DurabilityReopenVerified:  true,
+		ZeroEventLoss:             true,
 	}
 
-	targetFile := filepath.Join(persistentExportDir, "yarax_component_evidence.json")
+	// Nested subtest executes staging in its own t.TempDir() and returns so cleanup runs
+	t.Run("StageAndExportInSubtest", func(subT *testing.T) {
+		stagingDir = subT.TempDir()
+		var err error
+		exportedPath, err = ExportYaraXComponentEvidence(stagingDir, persistentExportDir, sampleEvidence)
+		if err != nil {
+			subT.Fatalf("ExportYaraXComponentEvidence failed: %v", err)
+		}
 
-	dummyEvidence := map[string]interface{}{
-		"evidence_type":     "component_integration",
-		"component":         "native_yarax_detection_engine",
-		"source_revision":   "testrev123456",
-		"dirty":             false,
-		"toolchain":         runtime.Version(),
-		"libyara_x_version": "1.20.0",
+		stagingFile := filepath.Join(stagingDir, "yarax_component_evidence.json")
+		if _, err := os.Stat(stagingFile); err != nil {
+			subT.Fatalf("staging evidence must exist inside subtest before cleanup: %v", err)
+		}
+	})
+
+	// After subtest completes, subT.TempDir() cleanup has removed stagingDir
+	if _, err := os.Stat(stagingDir); !os.IsNotExist(err) {
+		t.Errorf("expected staging directory %s to be cleaned up after subtest, but stat err=%v", stagingDir, err)
 	}
-	data, err := json.MarshalIndent(dummyEvidence, "", "  ")
+
+	// 1. Exported evidence remains readable and complete
+	data, err := os.ReadFile(exportedPath)
 	if err != nil {
-		t.Fatalf("failed to marshal evidence: %v", err)
+		t.Fatalf("exported evidence in persistent dir was not preserved after staging cleanup: %v", err)
 	}
 
-	// First export must succeed
-	if err := WriteEvidenceExclusive(targetFile, data); err != nil {
-		t.Fatalf("expected exclusive export to succeed: %v", err)
+	var verified YaraXComponentEvidence
+	if err := json.Unmarshal(data, &verified); err != nil {
+		t.Fatalf("failed to unmarshal preserved evidence: %v", err)
 	}
 
-	// Second export must fail with overwrite refusal
-	errSecond := WriteEvidenceExclusive(targetFile, data)
+	// 2. Validate required provenance & timing fields
+	if verified.SourceRevision != sampleEvidence.SourceRevision {
+		t.Errorf("source_revision mismatch: expected %s, got %s", sampleEvidence.SourceRevision, verified.SourceRevision)
+	}
+	if verified.Dirty != false {
+		t.Errorf("dirty mismatch: expected false, got %v", verified.Dirty)
+	}
+	if verified.Toolchain != runtime.Version() {
+		t.Errorf("toolchain mismatch: expected %s, got %s", runtime.Version(), verified.Toolchain)
+	}
+	if verified.LibYaraXVersion != "1.20.0" {
+		t.Errorf("libyara_x_version mismatch: expected 1.20.0, got %s", verified.LibYaraXVersion)
+	}
+	if verified.ScannerHarmlessSummary.Count != 30 {
+		t.Errorf("timing summary count mismatch: expected 30, got %d", verified.ScannerHarmlessSummary.Count)
+	}
+
+	// 3. Repeated export strictly refuses overwrite
+	dummyStaging := t.TempDir()
+	_, errSecond := ExportYaraXComponentEvidence(dummyStaging, persistentExportDir, sampleEvidence)
 	if errSecond == nil {
-		t.Fatalf("expected WriteEvidenceExclusive to refuse overwrite, but it succeeded")
+		t.Fatalf("expected repeated export to fail with overwrite refusal, but it succeeded")
 	}
 	if !strings.Contains(errSecond.Error(), "refusing to overwrite") {
 		t.Errorf("expected 'refusing to overwrite' error, got: %v", errSecond)
 	}
 
-	// Verify content
-	readBack, err := os.ReadFile(targetFile)
-	if err != nil {
-		t.Fatalf("failed to read back exported file: %v", err)
+	// 4. Test write failure handling without dummy JSON
+	unwritableBlocker := filepath.Join(parentDir, "blocker_file")
+	if err := os.WriteFile(unwritableBlocker, []byte("blocker"), 0644); err != nil {
+		t.Fatalf("failed to create blocker file: %v", err)
 	}
-	var parsed map[string]interface{}
-	if err := json.Unmarshal(readBack, &parsed); err != nil {
-		t.Fatalf("failed to parse exported json: %v", err)
-	}
-	if parsed["component"] != "native_yarax_detection_engine" {
-		t.Errorf("unexpected component: %v", parsed["component"])
+	_, errWriteFail := ExportYaraXComponentEvidence(dummyStaging, filepath.Join(unwritableBlocker, "sub"), sampleEvidence)
+	if errWriteFail == nil {
+		t.Fatalf("expected error when exporting to unwritable target, got nil")
 	}
 }

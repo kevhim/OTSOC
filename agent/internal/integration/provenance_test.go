@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -585,31 +584,6 @@ func TestDiagnosticRetention_FailedAndInvalidRuns(t *testing.T) {
 			t.Errorf("unexpected content in preserved partial report: %s", string(repData))
 		}
 	})
-}
-
-func makeUnreadableFileForTesting(t *testing.T, path string) func() {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		p, err := syscall.UTF16PtrFromString(path)
-		if err != nil {
-			t.Fatalf("failed to get utf16 ptr: %v", err)
-		}
-		// ShareMode = 0 gives exclusive access; os.ReadFile in any goroutine will fail with sharing violation
-		h, err := syscall.CreateFile(p, syscall.GENERIC_READ|syscall.GENERIC_WRITE, 0, nil, syscall.CREATE_ALWAYS, syscall.FILE_ATTRIBUTE_NORMAL, 0)
-		if err != nil {
-			t.Fatalf("failed to create locked file: %v", err)
-		}
-		return func() {
-			_ = syscall.CloseHandle(h)
-		}
-	}
-	// POSIX
-	if err := os.WriteFile(path, []byte("unreadable data"), 0000); err != nil {
-		t.Fatalf("failed to create 0000 file: %v", err)
-	}
-	return func() {
-		_ = os.Chmod(path, 0644)
-	}
 }
 
 func TestDiagnosticErrors_WriteAndCopyFailure(t *testing.T) {

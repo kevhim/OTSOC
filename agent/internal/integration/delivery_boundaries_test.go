@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -666,26 +665,84 @@ func TestDeliveryCrashHelperProcess(t *testing.T) {
 		// Hang; the parent kills the child while HTTP request is in-flight
 		select {}
 
+	case "noisy_child":
+		signalBarrier()
+		// Rapidly emit copious output to stdout and stderr until killed
+		chunk := strings.Repeat("X_NOISY_SUBPROCESS_STREAM_DATA_LINE_OT_SOC_1234567890\n", 64)
+		for {
+			_, _ = os.Stdout.WriteString(chunk)
+			_, _ = os.Stderr.WriteString(chunk)
+			time.Sleep(1 * time.Millisecond)
+		}
+
 	default:
 		os.Exit(99)
 	}
 }
 
-// ManagedCrashProcess governs an external crash-test child process with bounded buffers,
-// explicit timeout contexts, and guaranteed single reap via sync.Once.
+// CrashStreamLimitBytes defines the default per-stream output limit for crash subprocesses (64 KB).
+const CrashStreamLimitBytes = 64 * 1024
+
+// ManagedCrashProcess governs an external crash-test child process with thread-safe bounded buffers,
+// explicit timeout contexts, guaranteed single reap via sync.Once, and distinct termination vs cleanup tracking.
 type ManagedCrashProcess struct {
-	cmd       *exec.Cmd
-	stdoutBuf *bytes.Buffer
-	stderrBuf *bytes.Buffer
-	reapOnce  sync.Once
-	reapErr   error
-	cancelCtx context.CancelFunc
+	cmd        *exec.Cmd
+	stdoutBuf  *boundedBuffer
+	stderrBuf  *boundedBuffer
+	reapOnce   sync.Once
+	reapErr    error
+	cancelCtx  context.CancelFunc
+	forcedKill bool
+	exitCode   int
+}
+
+func (p *ManagedCrashProcess) Stdout() string {
+	if p.stdoutBuf == nil {
+		return ""
+	}
+	return p.stdoutBuf.String()
+}
+
+func (p *ManagedCrashProcess) Stderr() string {
+	if p.stderrBuf == nil {
+		return ""
+	}
+	return p.stderrBuf.String()
+}
+
+func (p *ManagedCrashProcess) StdoutTruncated() bool {
+	if p.stdoutBuf == nil {
+		return false
+	}
+	return p.stdoutBuf.IsTruncated()
+}
+
+func (p *ManagedCrashProcess) StderrTruncated() bool {
+	if p.stderrBuf == nil {
+		return false
+	}
+	return p.stderrBuf.IsTruncated()
+}
+
+func (p *ManagedCrashProcess) Truncated() bool {
+	return p.StdoutTruncated() || p.StderrTruncated()
+}
+
+func (p *ManagedCrashProcess) ExitCode() int {
+	return p.exitCode
+}
+
+func (p *ManagedCrashProcess) Diagnostics() string {
+	return fmt.Sprintf("exitCode=%d, forcedKill=%v, reapErr=%v, stdoutLen=%d (trunc=%v), stderrLen=%d (trunc=%v)\n--- STDOUT ---\n%s\n--- STDERR ---\n%s",
+		p.exitCode, p.forcedKill, p.reapErr, len(p.Stdout()), p.StdoutTruncated(), len(p.Stderr()), p.StderrTruncated(), p.Stdout(), p.Stderr())
 }
 
 // KillAndReap terminates the child process and reaps its exit state exactly once within a bounded 5s deadline.
+// Forced termination via Process.Kill is distinguished from cleanup failure (such as reap timeout).
 func (p *ManagedCrashProcess) KillAndReap() error {
 	p.reapOnce.Do(func() {
 		defer p.cancelCtx()
+		p.forcedKill = true
 		if p.cmd.Process != nil {
 			_ = p.cmd.Process.Kill()
 		}
@@ -696,6 +753,9 @@ func (p *ManagedCrashProcess) KillAndReap() error {
 		select {
 		case err := <-done:
 			p.reapErr = err
+			if p.cmd.ProcessState != nil {
+				p.exitCode = p.cmd.ProcessState.ExitCode()
+			}
 		case <-time.After(5 * time.Second):
 			p.reapErr = errors.New("timeout waiting for crash subprocess reap")
 		}
@@ -703,8 +763,11 @@ func (p *ManagedCrashProcess) KillAndReap() error {
 	return p.reapErr
 }
 
-func startCrashHelperSubprocess(t *testing.T, mode, dbPath, idPath, barrierPath, serverURL string) *ManagedCrashProcess {
+func startCrashHelperSubprocessWithLimit(t *testing.T, mode, dbPath, idPath, barrierPath, serverURL string, streamLimit int) *ManagedCrashProcess {
 	t.Helper()
+	if streamLimit <= 0 {
+		streamLimit = CrashStreamLimitBytes
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDeliveryCrashHelperProcess$", "-test.v")
 	cmd.Env = append(os.Environ(),
@@ -716,8 +779,8 @@ func startCrashHelperSubprocess(t *testing.T, mode, dbPath, idPath, barrierPath,
 		"DELIVERY_CRASH_SERVER_URL="+serverURL,
 	)
 
-	stdoutBuf := new(bytes.Buffer)
-	stderrBuf := new(bytes.Buffer)
+	stdoutBuf := newBoundedBuffer(streamLimit)
+	stderrBuf := newBoundedBuffer(streamLimit)
 	cmd.Stdout = stdoutBuf
 	cmd.Stderr = stderrBuf
 
@@ -737,12 +800,19 @@ func startCrashHelperSubprocess(t *testing.T, mode, dbPath, idPath, barrierPath,
 	t.Cleanup(func() {
 		if err := p.KillAndReap(); err != nil {
 			if strings.Contains(err.Error(), "timeout waiting") {
-				t.Errorf("subprocess cleanup wait timed out: %v", err)
+				t.Errorf("subprocess cleanup failure: wait timed out: %v (stdout_trunc=%v, stderr_trunc=%v)",
+					err, p.StdoutTruncated(), p.StderrTruncated())
 			}
+			// Note: an ExitError after Process.Kill is expected forced termination, not a cleanup failure.
 		}
 	})
 
 	return p
+}
+
+func startCrashHelperSubprocess(t *testing.T, mode, dbPath, idPath, barrierPath, serverURL string) *ManagedCrashProcess {
+	t.Helper()
+	return startCrashHelperSubprocessWithLimit(t, mode, dbPath, idPath, barrierPath, serverURL, CrashStreamLimitBytes)
 }
 
 func waitForFileBarrier(t *testing.T, barrierPath string, timeout time.Duration) {
@@ -926,5 +996,65 @@ func TestCrashBoundary_SubprocessForwarder_ProcessTermination(t *testing.T) {
 	}
 	if id != "forwarder-inflight-event-001" || seqNo != 1 || state != "PENDING" {
 		t.Fatalf("expected in-flight event to remain in SQLite with id='forwarder-inflight-event-001', seqNo=1, state='PENDING'; got id=%s, seqNo=%d, state=%s", id, seqNo, state)
+	}
+}
+
+// 11. Noisy Child Process:
+// Verifies that a runaway child process producing high-volume output does not cause unbounded
+// buffer growth, that buffers truncate at the configured boundary, truncation is explicitly exposed,
+// and the process is killed and reaped within the bounded deadline with zero leaks.
+func TestCrashBoundary_NoisyChildProcess_BoundedOutputAndReap(t *testing.T) {
+	tmpDir := t.TempDir()
+	barrierPath := filepath.Join(tmpDir, "barrier.ready")
+
+	limit := 32 * 1024 // 32 KB per stream
+	p := startCrashHelperSubprocessWithLimit(t, "noisy_child", "", "", barrierPath, "", limit)
+	waitForFileBarrier(t, barrierPath, 5*time.Second)
+
+	// Allow child to produce at least a couple hundred KB of output
+	time.Sleep(100 * time.Millisecond)
+
+	// Terminate child and reap
+	killErr := p.KillAndReap()
+
+	// 1. Output must be bounded to approximately limit + truncation notice
+	stdoutLen := len(p.Stdout())
+	stderrLen := len(p.Stderr())
+
+	if stdoutLen > limit+512 {
+		t.Errorf("stdout exceeded bounded limit: %d bytes (limit was %d)", stdoutLen, limit)
+	}
+	if stderrLen > limit+512 {
+		t.Errorf("stderr exceeded bounded limit: %d bytes (limit was %d)", stderrLen, limit)
+	}
+
+	// 2. Truncation flags must be true
+	if !p.StdoutTruncated() {
+		t.Errorf("expected stdout to be marked truncated")
+	}
+	if !p.StderrTruncated() {
+		t.Errorf("expected stderr to be marked truncated")
+	}
+	if !p.Truncated() {
+		t.Errorf("expected Truncated() to report true")
+	}
+
+	// 3. Output must contain the explicit truncation notice
+	if !strings.Contains(p.Stdout(), "[OUTPUT TRUNCATED") {
+		t.Errorf("stdout missing truncation marker")
+	}
+	if !strings.Contains(p.Stderr(), "[OUTPUT TRUNCATED") {
+		t.Errorf("stderr missing truncation marker")
+	}
+
+	// 4. Reap must complete within 5s deadline (killErr must not be reap timeout)
+	if killErr != nil && strings.Contains(killErr.Error(), "timeout waiting") {
+		t.Fatalf("reap timed out: %v", killErr)
+	}
+
+	// 5. Diagnostics must report truncation and state correctly
+	diag := p.Diagnostics()
+	if !strings.Contains(diag, "trunc=true") {
+		t.Errorf("Diagnostics() did not record truncation status: %s", diag)
 	}
 }

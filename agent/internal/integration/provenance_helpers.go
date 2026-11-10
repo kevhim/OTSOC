@@ -565,6 +565,16 @@ func (m *RunDiagnosticManager) IsFinalized() bool {
 	return m.Finalized
 }
 
+// MarkSuccess marks the diagnostic session as successfully completed so testing cleanup does not finalize failure.
+func (m *RunDiagnosticManager) MarkSuccess() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Finalized = true
+}
+
 // RecordBoundaryCheck appends a verified boundary check to the diagnostic session.
 func (m *RunDiagnosticManager) RecordBoundaryCheck(check SourceBoundaryCheck) {
 	if m == nil {

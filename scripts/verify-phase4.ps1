@@ -115,40 +115,63 @@ if ($LASTEXITCODE -eq 0) {
 }
 
 # 7. Pipeline Integration & Offline Sync Tests
-Write-Host "`n--> [7/10] Running Pipeline Integration & Offline Sync Tests..." -ForegroundColor Magenta
+Write-Host "`n--> [7/11] Running Pipeline Integration & Offline Sync Tests..." -ForegroundColor Magenta
 $integrationOut = & go test -v ./agent/internal/integration -run "^(TestOffline|TestLostResponse|TestIntegration_LocalRemovalFailure|TestFocusedIngestion|TestPhase2E4|TestEndpointPipeline|TestFilesystemPipeline|TestInventoryPipeline|TestNetworkPipeline|TestPassiveNetworkPipeline|TestUSBPipeline|TestWorkloadDemonstration|TestMeasurement)" 2>&1
-if ($LASTEXITCODE -eq 0) {
+$intText = $integrationOut -join "`n"
+if ($LASTEXITCODE -eq 0 -and -not ($intText -match "\[no tests to run\]")) {
     Add-Result -Name "Integration & Offline Sync Tests" -Status "PASS" -Details "Pipeline end-to-end and offline sync recovery passed"
 } else {
-    Add-Result -Name "Integration & Offline Sync Tests" -Status "FAIL" -Details "Integration tests failed"
+    Add-Result -Name "Integration & Offline Sync Tests" -Status "FAIL" -Details "Integration tests failed or omitted: $intText"
 }
 
 # 8. Nearest-Rank Latency Percentile Statistics Tests
-Write-Host "`n--> [8/10] Running Latency Percentiles Statistics Tests..." -ForegroundColor Magenta
+Write-Host "`n--> [8/11] Running Latency Percentiles Statistics Tests..." -ForegroundColor Magenta
 $latOut = & go test -v ./agent/internal/integration -run "^TestLatencyPercentiles" 2>&1
-if ($LASTEXITCODE -eq 0) {
+$latText = $latOut -join "`n"
+if ($LASTEXITCODE -eq 0 -and -not ($latText -match "\[no tests to run\]")) {
     Add-Result -Name "Latency Percentiles Statistics" -Status "PASS" -Details "Nearest-rank method, unsorted inputs, and boundary cases verified"
 } else {
-    Add-Result -Name "Latency Percentiles Statistics" -Status "FAIL" -Details "Latency percentiles tests failed"
+    Add-Result -Name "Latency Percentiles Statistics" -Status "FAIL" -Details "Latency percentiles tests failed or omitted"
 }
 
 # 9. Diagnostic Retention, Error Propagation & Exclusive Evidence Export Tests
-Write-Host "`n--> [9/10] Running Diagnostic Retention, Error Propagation & Exclusive Export Tests..." -ForegroundColor Magenta
+Write-Host "`n--> [9/11] Running Diagnostic Retention, Error Propagation & Exclusive Export Tests..." -ForegroundColor Magenta
 $diagOut = & go test -v ./agent/internal/integration -run "^(TestDiagnostic|TestWriteEvidenceExclusive|TestExportEvidenceRun|TestParseBinaryProvenance|TestExecCommandWithTimeout|TestSubprocess|TestCheckSourceBoundary)" 2>&1
-if ($LASTEXITCODE -eq 0) {
+$diagText = $diagOut -join "`n"
+if ($LASTEXITCODE -eq 0 -and -not ($diagText -match "\[no tests to run\]")) {
     Add-Result -Name "Diagnostic Retention & Exclusive Export" -Status "PASS" -Details "Exclusive writes, failure retention, cleanup survival, and error propagation verified"
 } else {
-    Add-Result -Name "Diagnostic Retention & Exclusive Export" -Status "FAIL" -Details "Diagnostic retention or exclusive export tests failed"
+    Add-Result -Name "Diagnostic Retention & Exclusive Export" -Status "FAIL" -Details "Diagnostic retention or exclusive export tests failed or omitted"
 }
 
 # 10. Delivery Failure Boundaries & Crash Subprocess Regressions
-Write-Host "`n--> [10/10] Running Delivery Failure Boundaries & Crash Subprocess Tests..." -ForegroundColor Magenta
+Write-Host "`n--> [10/11] Running Delivery Failure Boundaries & Crash Subprocess Tests..." -ForegroundColor Magenta
 $deliveryOut = & go test -v ./agent/internal/integration -run "^(TestDeliveryBoundary|TestCrashBoundary)" 2>&1
-if ($LASTEXITCODE -eq 0) {
-    Add-Result -Name "Delivery Boundaries & Crash Regressions" -Status "PASS" -Details "Offline backoff, retry recovery, and OS process crash recovery verified"
+$delivText = $deliveryOut -join "`n"
+if ($LASTEXITCODE -eq 0 -and -not ($delivText -match "\[no tests to run\]")) {
+    Add-Result -Name "Delivery Boundaries & Crash Regressions" -Status "PASS" -Details "Offline backoff, retry recovery, bounded crash output, and OS process crash recovery verified"
 } else {
-    Add-Result -Name "Delivery Boundaries & Crash Regressions" -Status "FAIL" -Details "Delivery boundary or crash regression tests failed"
+    Add-Result -Name "Delivery Boundaries & Crash Regressions" -Status "FAIL" -Details "Delivery boundary or crash regression tests failed or omitted"
 }
+
+# 11. Linux Integration Test Cross-Compilation
+Write-Host "`n--> [11/11] Running Linux Cross-Compilation Check (GOOS=linux, amd64)..." -ForegroundColor Magenta
+$linuxTestBin = "$env:TEMP\linux_integ_verify.test"
+$env:GOOS = "linux"
+$env:GOARCH = "amd64"
+$env:CGO_ENABLED = "0"
+$linuxCompOut = & go test -c ./agent/internal/integration -o $linuxTestBin 2>&1
+$linuxCompExit = $LASTEXITCODE
+$env:GOOS = ""
+$env:GOARCH = ""
+if (Test-Path $linuxTestBin) { Remove-Item -Force $linuxTestBin }
+
+if ($linuxCompExit -eq 0) {
+    Add-Result -Name "Linux Integration Cross-Compilation" -Status "PASS" -Details "Cross-compiles for GOOS=linux GOARCH=amd64 (Compilation evidence only)"
+} else {
+    Add-Result -Name "Linux Integration Cross-Compilation" -Status "FAIL" -Details "Linux cross-compilation failed: $($linuxCompOut -join "`n")"
+}
+Add-Result -Name "Linux Runtime Execution Gate" -Status "BLOCKED" -Details "Runtime execution of Linux tests requires Linux environment (e.g. CI ubuntu-latest); cross-compilation alone is not runtime validation"
 
 # Conditional Flags: Race & NativeDetection
 Write-Host "`n--> Evaluating Optional / Mandatory -Race and -NativeDetection checks..." -ForegroundColor Magenta
@@ -197,7 +220,10 @@ if ($NativeDetection) {
         $env:CGO_ENABLED = "1"
         $detOut = & go test -v -tags=yara_x ./agent/internal/detection/... 2>&1
         $detExit = $LASTEXITCODE
-        if ($detExit -eq 0) {
+        $detText = $detOut -join "`n"
+        if ($detText -match "\[no tests to run\]" -or $detText -match "warning: no tests to run") {
+            Add-Result -Name "Native Detection (YARA-X C API)" -Status "FAIL" -Details "Omitted: Go reported no tests to run in agent/internal/detection"
+        } elseif ($detExit -eq 0) {
             Add-Result -Name "Native Detection (YARA-X C API)" -Status "PASS" -Details "Native YARA-X detection suite passed with libyara_x_capi ($yaraVer)"
         } else {
             Add-Result -Name "Native Detection (YARA-X C API)" -Status "FAIL" -Details "Detection test failure"
@@ -205,21 +231,31 @@ if ($NativeDetection) {
 
         $yaraxWorkloadOut = & go test -v ./agent/internal/integration -run "^TestWorkload_YaraX" 2>&1
         $yaraxExit = $LASTEXITCODE
-        if ($yaraxExit -eq 0) {
-            Add-Result -Name "Native YARA-X Component Workload" -Status "PASS" -Details "Component workload and evidence export verified (libyara_x_capi $yaraVer)"
+        $yaraxText = $yaraxWorkloadOut -join "`n"
+        if ($yaraxText -match "\[no tests to run\]" -or $yaraxText -match "warning: no tests to run") {
+            Add-Result -Name "Native YARA-X Component Workload" -Status "FAIL" -Details "Omitted: Go reported no tests to run under ^TestWorkload_YaraX"
+        } elseif ($yaraxExit -eq 0) {
+            Add-Result -Name "Native YARA-X Component Workload" -Status "PASS" -Details "Component workload, strict provenance, and cleanup survival verified (libyara_x_capi $yaraVer)"
         } else {
             Add-Result -Name "Native YARA-X Component Workload" -Status "FAIL" -Details "YARA-X workload or evidence export failed"
         }
 
         if ($Race) {
             $raceYaraxOut = & go test -race -v ./agent/internal/integration -run "^TestWorkload_YaraX" 2>&1
-            if ($LASTEXITCODE -eq 0) {
+            $raceYaraxExit = $LASTEXITCODE
+            $raceYaraxText = $raceYaraxOut -join "`n"
+            if ($raceYaraxText -match "\[no tests to run\]") {
+                Add-Result -Name "Go Test -Race (YARA-X Component Workload)" -Status "FAIL" -Details "Omitted: no tests to run under race detector"
+            } elseif ($raceYaraxExit -eq 0) {
                 Add-Result -Name "Go Test -Race (YARA-X Component Workload)" -Status "PASS" -Details "Zero race conditions in YARA-X component workload under CGO"
             } else {
                 Add-Result -Name "Go Test -Race (YARA-X Component Workload)" -Status "FAIL" -Details "Race detected in YARA-X component workload"
             }
         }
     }
+} else {
+    Add-Result -Name "Native Detection (YARA-X C API)" -Status "BLOCKED" -Details "Omitted: -NativeDetection switch not passed; CGO native evaluation omitted"
+    Add-Result -Name "Native YARA-X Component Workload" -Status "BLOCKED" -Details "Omitted: TestWorkload_YaraX requires -NativeDetection and libyara_x_capi"
 }
 
 # Summary Report
@@ -239,6 +275,9 @@ foreach ($res in $results) {
     Write-Host ("{0,-50} | {1,-8} | {2}" -f $res.Check, $res.Status, $res.Details) -ForegroundColor $col
 }
 
+Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host "NOTICE: Verification success indicates that automated test suites, bounded crash harnesses, and strict provenance checks pass cleanly." -ForegroundColor Cyan
+Write-Host "PHASE 4 STATUS: Remains OPEN. Threshold calibration, governor enforcement, endpoint binary rule loading (--rules-dir), and low-spec target hardware qualification remain subsequent tasks." -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 if ($hasFailures) {
