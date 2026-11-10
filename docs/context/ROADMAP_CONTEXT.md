@@ -57,6 +57,17 @@
 - Phase 2E.4 completes cross-source regression with a shared production ingestion engine, unified event ID ownership, single 10-second global shutdown drain deadline, SQLite contention resilience, and deterministic error cause preservation.
 
 
+## Phase 4 Linux Runtime Verification & Harness Qualification Checkpoint (2026-11-10)
+- **Status**: Completed on branch `fix/correctness-remediation-checkpoint`.
+- **Milestone Status**: Phase 4 remains **OPEN**. Do not calibrate governor thresholds or begin Phase 5.
+- **Key Deliverables**:
+  - Hardened Linux verification harness `scripts/verify-linux.sh` with exclusive run directory creation, source stability validation, explicit timeouts (`-count=1`), commands log, full execution transcript, and PASS/FAIL/BLOCKED accounting.
+  - Native Linux subsystem execution validated in WSL2 Ubuntu (Go 1.26.0): Core Storage, EventQueue, Governor, ResourceReport, Forwarder, Ingestion, Delivery Boundaries, Crash Subprocesses, and Diagnostic Retention all PASS.
+  - Native Linux endpoint binary build verified with `go version -m` metadata capture; 2-second bounded harmless monitoring run verified with valid measurement report generation (`linux_smoke_report.json`).
+  - CGO race detector verified on non-CGO core packages under GCC 15.2.0. Native YARA-X library and workload suites marked BLOCKED in local WSL (compiled in Linux CI).
+  - Preserved historical cached partial Linux evidence and imported fresh run under `docs/evidence/phase4/runs/linux_20261110_103917_57a49bd0/`.
+- **Next Milestone**: Prepare the bounded opt-in endpoint YARA-X rule-loading design (`--rules-dir`) for review (without implementing before review).
+
 ## Phase 4 Correctness-Remediation Checkpoint (2026-11-01)
 - **Status**: Completed on branch `fix/correctness-remediation-checkpoint`.
 - **Key Changes**:
