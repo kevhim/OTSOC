@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -382,11 +383,28 @@ func TestDiagnosticHelperProcess(t *testing.T) {
 	if runID == "" {
 		runID = "simulated_run_123"
 	}
+	markerFile := os.Getenv("DIAGNOSTIC_CANARY_FILE")
 
-	stagingDir := t.TempDir()
+	// Create partial artifacts inside t.TempDir()
+	childTempDir := t.TempDir()
+	stagingDir := filepath.Join(childTempDir, "staging")
+	if err := os.MkdirAll(stagingDir, 0755); err != nil {
+		t.Fatalf("failed to create staging dir: %v", err)
+	}
+
+	if markerFile != "" {
+		_ = os.WriteFile(markerFile, []byte(childTempDir), 0644)
+	}
+
+	canaryPath := filepath.Join(childTempDir, "canary_child_artifact.txt")
+	if err := os.WriteFile(canaryPath, []byte("must_be_cleaned_by_testing_framework"), 0644); err != nil {
+		t.Fatalf("failed to write canary file: %v", err)
+	}
+
 	tracker := &testTracker{}
-
 	diagMgr := NewRunDiagnosticManager(runID, diagDir, stagingDir, tracker)
+	// Use production harness testing finalizer
+	diagMgr.RegisterTestingFinalizer(t)
 
 	switch mode {
 	case "simulate_dirty_invalid":
@@ -396,22 +414,21 @@ func TestDiagnosticHelperProcess(t *testing.T) {
 			TimestampUTC: time.Now().UTC().Format(time.RFC3339),
 			Revision:     "mockrev123456",
 			Dirty:        true,
-			Valid:        true,
+			Valid:        false,
 			StatusNotes:  "M dirty_test_file.go",
 		}
 		diagMgr.RecordBoundaryCheck(chk)
-		_, err := diagMgr.FinalizeFailure(OutcomeInvalid, "qualification evidence requires clean checkout, but working tree is dirty", errors.New("dirty working tree"))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "FinalizeFailure error: %v\n", err)
-			os.Exit(2)
+		if _, err := diagMgr.FinalizeFailure(OutcomeInvalid, "qualification evidence requires clean checkout, but working tree is dirty", errors.New("dirty working tree")); err != nil {
+			t.Fatalf("FinalizeFailure error: %v", err)
 		}
-		os.Exit(1) // Nonzero exit because qualification failed
+		// Fail through testing framework allowing cleanup to execute; exits nonzero
+		t.Fatalf("simulated dirty checkout failure via testing framework")
 
 	case "simulate_subprocess_failure":
-		// Simulate partial report staged in stagingDir before a crash
+		// Simulate partial report staged in stagingDir before failure
 		partialData := []byte(`{"scenario":"idle_partial","status":"incomplete"}`)
 		if err := os.WriteFile(filepath.Join(stagingDir, "partial_idle_report.json"), partialData, 0644); err != nil {
-			os.Exit(3)
+			t.Fatalf("failed to write partial report: %v", err)
 		}
 
 		exitCode := 1
@@ -423,15 +440,12 @@ func TestDiagnosticHelperProcess(t *testing.T) {
 			ExitCode:   &exitCode,
 		})
 
-		_, err := diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe crashed during sustained scenario", errors.New("exit status 1"))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "FinalizeFailure error: %v\n", err)
-			os.Exit(2)
-		}
-		os.Exit(1) // Nonzero exit
+		// Trigger genuine failure through testing framework WITHOUT calling FinalizeFailure directly.
+		// RegisterTestingFinalizer will execute during test failure cleanup before childTempDir is deleted.
+		t.Fatalf("simulated endpoint.exe crashed during sustained scenario")
 
 	default:
-		os.Exit(99)
+		t.Fatalf("unknown helper mode: %s", mode)
 	}
 }
 
@@ -441,19 +455,36 @@ func TestDiagnosticRetention_FailedAndInvalidRuns(t *testing.T) {
 
 	t.Run("InvalidRun_DirtySourceRetained", func(t *testing.T) {
 		runID := "run_test_dirty_001"
-		cmd := exec.Command(os.Args[0], "-test.run=^TestDiagnosticHelperProcess$", "-test.v")
+		markerFile := filepath.Join(t.TempDir(), "child_temp_marker.txt")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDiagnosticHelperProcess$", "-test.v")
 		cmd.Env = append(os.Environ(),
 			"GO_WANT_DIAGNOSTIC_HELPER=1",
 			"DIAGNOSTIC_HELPER_MODE=simulate_dirty_invalid",
 			"DIAGNOSTIC_DIR="+persistentDiagDir,
 			"DIAGNOSTIC_RUN_ID="+runID,
+			"DIAGNOSTIC_CANARY_FILE="+markerFile,
 		)
 		out, err := cmd.CombinedOutput()
 		if err == nil {
 			t.Fatalf("expected child process to exit nonzero on invalid run, got success:\n%s", string(out))
 		}
 
-		// Verify persistent diagnostics directory retained
+		// Verify child temporary directory was wiped by testing framework cleanup
+		childTempData, err := os.ReadFile(markerFile)
+		if err != nil {
+			t.Fatalf("failed to read child marker file: %v", err)
+		}
+		childTempDir := strings.TrimSpace(string(childTempData))
+		canaryFile := filepath.Join(childTempDir, "canary_child_artifact.txt")
+		if _, statErr := os.Stat(canaryFile); !os.IsNotExist(statErr) {
+			t.Errorf("expected child temporary canary %s to be cleaned up by testing framework, but still exists", canaryFile)
+		}
+
+		// Verify persistent diagnostics directory retained outside child temp dir
 		targetDir := filepath.Join(persistentDiagDir, "invalid_"+runID)
 		if _, statErr := os.Stat(targetDir); statErr != nil {
 			t.Fatalf("expected invalid run directory to exist at %s: %v", targetDir, statErr)
@@ -492,19 +523,36 @@ func TestDiagnosticRetention_FailedAndInvalidRuns(t *testing.T) {
 
 	t.Run("FailedRun_SubprocessCrashAndPartialReportsRetained", func(t *testing.T) {
 		runID := "run_test_crash_002"
-		cmd := exec.Command(os.Args[0], "-test.run=^TestDiagnosticHelperProcess$", "-test.v")
+		markerFile := filepath.Join(t.TempDir(), "child_temp_marker.txt")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDiagnosticHelperProcess$", "-test.v")
 		cmd.Env = append(os.Environ(),
 			"GO_WANT_DIAGNOSTIC_HELPER=1",
 			"DIAGNOSTIC_HELPER_MODE=simulate_subprocess_failure",
 			"DIAGNOSTIC_DIR="+persistentDiagDir,
 			"DIAGNOSTIC_RUN_ID="+runID,
+			"DIAGNOSTIC_CANARY_FILE="+markerFile,
 		)
 		out, err := cmd.CombinedOutput()
 		if err == nil {
 			t.Fatalf("expected child process to exit nonzero on failed run, got success:\n%s", string(out))
 		}
 
-		// Verify persistent diagnostics directory retained
+		// Verify child temporary directory was wiped by testing framework cleanup
+		childTempData, err := os.ReadFile(markerFile)
+		if err != nil {
+			t.Fatalf("failed to read child marker file: %v", err)
+		}
+		childTempDir := strings.TrimSpace(string(childTempData))
+		canaryFile := filepath.Join(childTempDir, "canary_child_artifact.txt")
+		if _, statErr := os.Stat(canaryFile); !os.IsNotExist(statErr) {
+			t.Errorf("expected child temporary canary %s to be cleaned up by testing framework, but still exists", canaryFile)
+		}
+
+		// Verify persistent diagnostics directory retained outside child temp dir
 		targetDir := filepath.Join(persistentDiagDir, "failed_"+runID)
 		if _, statErr := os.Stat(targetDir); statErr != nil {
 			t.Fatalf("expected failed run directory to exist at %s: %v", targetDir, statErr)
@@ -535,6 +583,122 @@ func TestDiagnosticRetention_FailedAndInvalidRuns(t *testing.T) {
 		}
 		if !strings.Contains(string(repData), "idle_partial") {
 			t.Errorf("unexpected content in preserved partial report: %s", string(repData))
+		}
+	})
+}
+
+func makeUnreadableFileForTesting(t *testing.T, path string) func() {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		p, err := syscall.UTF16PtrFromString(path)
+		if err != nil {
+			t.Fatalf("failed to get utf16 ptr: %v", err)
+		}
+		// ShareMode = 0 gives exclusive access; os.ReadFile in any goroutine will fail with sharing violation
+		h, err := syscall.CreateFile(p, syscall.GENERIC_READ|syscall.GENERIC_WRITE, 0, nil, syscall.CREATE_ALWAYS, syscall.FILE_ATTRIBUTE_NORMAL, 0)
+		if err != nil {
+			t.Fatalf("failed to create locked file: %v", err)
+		}
+		return func() {
+			_ = syscall.CloseHandle(h)
+		}
+	}
+	// POSIX
+	if err := os.WriteFile(path, []byte("unreadable data"), 0000); err != nil {
+		t.Fatalf("failed to create 0000 file: %v", err)
+	}
+	return func() {
+		_ = os.Chmod(path, 0644)
+	}
+}
+
+func TestDiagnosticErrors_WriteAndCopyFailure(t *testing.T) {
+	t.Run("DiagnosticWriteFailure_RootUnwritable", func(t *testing.T) {
+		tempDir := t.TempDir()
+		blockerFile := filepath.Join(tempDir, "blocker.txt")
+		if err := os.WriteFile(blockerFile, []byte("I am a file, not a directory"), 0644); err != nil {
+			t.Fatalf("failed to write blocker file: %v", err)
+		}
+
+		// Set PersistentDiagDir to a file path so os.Mkdir(targetDir) fails
+		diagMgr := NewRunDiagnosticManager("run_write_err_001", blockerFile, tempDir, nil)
+		origErr := errors.New("original underlying test failure")
+
+		_, err := diagMgr.FinalizeFailure(OutcomeFailed, "test failure", origErr)
+		if err == nil {
+			t.Fatalf("expected FinalizeFailure to return error when root is a file, got nil")
+		}
+
+		// Verify both the original error and the diagnostic retention error are preserved
+		if !errors.Is(err, origErr) && !strings.Contains(err.Error(), origErr.Error()) {
+			t.Errorf("expected combined error to preserve original error, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "failed to create") {
+			t.Errorf("expected error to describe directory creation failure, got: %v", err)
+		}
+	})
+
+	t.Run("PartialCopyFailure_LockedOrUnreadableReport", func(t *testing.T) {
+		tempDir := t.TempDir()
+		persistentDiagDir := filepath.Join(tempDir, "diagnostics")
+		stagingDir := filepath.Join(tempDir, "staging")
+		if err := os.MkdirAll(stagingDir, 0755); err != nil {
+			t.Fatalf("failed to create staging dir: %v", err)
+		}
+
+		// 1. Valid partial report that can be copied
+		validPath := filepath.Join(stagingDir, "valid_report.json")
+		if err := os.WriteFile(validPath, []byte(`{"scenario":"valid"}`), 0644); err != nil {
+			t.Fatalf("failed to write valid report: %v", err)
+		}
+
+		// 2. Unreadable / exclusively locked partial report that fails copy
+		unreadablePath := filepath.Join(stagingDir, "unreadable_report.json")
+		cleanupHandle := makeUnreadableFileForTesting(t, unreadablePath)
+		defer cleanupHandle()
+
+		runID := "run_copy_err_002"
+		diagMgr := NewRunDiagnosticManager(runID, persistentDiagDir, stagingDir, nil)
+		origErr := errors.New("underlying scenario crash")
+
+		targetDir, err := diagMgr.FinalizeFailure(OutcomeFailed, "scenario crash with partial report read failure", origErr)
+		if err == nil {
+			t.Fatalf("expected FinalizeFailure to return joined error on unreadable report copy failure, got nil")
+		}
+
+		// Verify error preserves both original failure and partial report error
+		if !errors.Is(err, origErr) && !strings.Contains(err.Error(), origErr.Error()) {
+			t.Errorf("expected error to preserve original error, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "failed to read partial report") {
+			t.Errorf("expected error to report partial report read failure, got: %v", err)
+		}
+
+		// Verify manifest only lists the successfully copied report!
+		manifestPath := filepath.Join(targetDir, "diagnostic_manifest.json")
+		manifestData, readErr := os.ReadFile(manifestPath)
+		if readErr != nil {
+			t.Fatalf("failed to read manifest: %v", readErr)
+		}
+
+		var manifest DiagnosticManifest
+		if err := json.Unmarshal(manifestData, &manifest); err != nil {
+			t.Fatalf("failed to parse manifest: %v", err)
+		}
+
+		// MUST contain valid_report.json, MUST NOT contain unreadable_report.json
+		if len(manifest.PartialReports) != 1 || manifest.PartialReports[0] != "valid_report.json" {
+			t.Errorf("expected PartialReports to contain ONLY successfully copied 'valid_report.json', got: %v", manifest.PartialReports)
+		}
+
+		// DiagnosticErrors in manifest should record the read error
+		if len(manifest.DiagnosticErrors) == 0 {
+			t.Errorf("expected DiagnosticErrors in manifest to record the partial copy failure")
+		}
+
+		// Valid report was successfully preserved
+		if _, statErr := os.Stat(filepath.Join(targetDir, "valid_report.json")); statErr != nil {
+			t.Errorf("expected valid_report.json to exist in targetDir: %v", statErr)
 		}
 	})
 }

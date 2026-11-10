@@ -85,7 +85,9 @@ func buildFreshEndpointWithProvenance(t *testing.T, repoRoot string, tracker *ru
 	}
 	if err != nil {
 		if diagMgr != nil {
-			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "failed to compile fresh endpoint binary", err)
+			if _, diagErr := diagMgr.FinalizeFailure(OutcomeFailed, "failed to compile fresh endpoint binary", err); diagErr != nil {
+				t.Errorf("diagnostic retention failed: %v", diagErr)
+			}
 		}
 		t.Fatalf("failed to build fresh endpoint.exe in %s: %v\nOutput: %s", binDir, err, recBuild.CombinedOutput)
 	}
@@ -99,7 +101,9 @@ func buildFreshEndpointWithProvenance(t *testing.T, repoRoot string, tracker *ru
 	}
 	if err != nil {
 		if diagMgr != nil {
-			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "failed to read build info from fresh binary", err)
+			if _, diagErr := diagMgr.FinalizeFailure(OutcomeFailed, "failed to read build info from fresh binary", err); diagErr != nil {
+				t.Errorf("diagnostic retention failed: %v", diagErr)
+			}
 		}
 		t.Fatalf("failed to read build info from %s: %v\nOutput: %s", endpointExe, err, recVersion.CombinedOutput)
 	}
@@ -108,7 +112,9 @@ func buildFreshEndpointWithProvenance(t *testing.T, repoRoot string, tracker *ru
 	actualRevision, actualDirty, actualToolchain, err := ParseBinaryProvenanceOutput(recVersion.CombinedOutput)
 	if err != nil {
 		if diagMgr != nil {
-			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "binary provenance metadata parsing failed", err)
+			if _, diagErr := diagMgr.FinalizeFailure(OutcomeFailed, "binary provenance metadata parsing failed", err); diagErr != nil {
+				t.Errorf("diagnostic retention failed: %v", diagErr)
+			}
 		}
 		t.Fatalf("binary provenance parsing failed for %s: %v", endpointExe, err)
 	}
@@ -116,14 +122,18 @@ func buildFreshEndpointWithProvenance(t *testing.T, repoRoot string, tracker *ru
 	if !strings.HasPrefix(preCheck.Revision, actualRevision) && !strings.HasPrefix(actualRevision, preCheck.Revision) {
 		errMismatch := fmt.Errorf("expected revision %s, binary has %s", preCheck.Revision, actualRevision)
 		if diagMgr != nil {
-			_, _ = diagMgr.FinalizeFailure(OutcomeInvalid, "binary revision mismatch against source checkout", errMismatch)
+			if _, diagErr := diagMgr.FinalizeFailure(OutcomeInvalid, "binary revision mismatch against source checkout", errMismatch); diagErr != nil {
+				t.Errorf("diagnostic retention failed: %v", diagErr)
+			}
 		}
 		t.Fatalf("binary provenance mismatch: %v", errMismatch)
 	}
 	if actualDirty != preCheck.Dirty {
 		errMismatch := fmt.Errorf("expected dirty=%v, binary has dirty=%v", preCheck.Dirty, actualDirty)
 		if diagMgr != nil {
-			_, _ = diagMgr.FinalizeFailure(OutcomeInvalid, "binary dirty-state mismatch against source checkout", errMismatch)
+			if _, diagErr := diagMgr.FinalizeFailure(OutcomeInvalid, "binary dirty-state mismatch against source checkout", errMismatch); diagErr != nil {
+				t.Errorf("diagnostic retention failed: %v", diagErr)
+			}
 		}
 		t.Fatalf("binary provenance mismatch: %v", errMismatch)
 	}
@@ -132,7 +142,9 @@ func buildFreshEndpointWithProvenance(t *testing.T, repoRoot string, tracker *ru
 	sha, err := ComputeFileSHA256(endpointExe)
 	if err != nil {
 		if diagMgr != nil {
-			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "failed to compute binary SHA-256", err)
+			if _, diagErr := diagMgr.FinalizeFailure(OutcomeFailed, "failed to compute binary SHA-256", err); diagErr != nil {
+				t.Errorf("diagnostic retention failed: %v", diagErr)
+			}
 		}
 		t.Fatalf("failed to compute binary SHA-256 for %s: %v", endpointExe, err)
 	}
@@ -229,17 +241,22 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		persistentDiagDir = filepath.Join(repoRoot, "docs", "evidence", "phase4", "diagnostics")
 	}
 	diagMgr := NewRunDiagnosticManager(runID, persistentDiagDir, stagingRunDir, tracker)
+	diagMgr.RegisterTestingFinalizer(t)
 
 	// Checkpoint 1: Pre-compilation source boundary check
 	check1, err := CheckSourceBoundary(ctxCheck, repoRoot, "pre-compilation")
 	if err != nil {
 		diagMgr.RecordBoundaryCheck(check1)
-		_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "pre-compilation boundary check error", err)
+		if _, diagErr := diagMgr.FinalizeFailure(OutcomeFailed, "pre-compilation boundary check error", err); diagErr != nil {
+			t.Errorf("diagnostic retention failed: %v", diagErr)
+		}
 		t.Fatalf("pre-compilation source boundary check failed: %v", err)
 	}
 	diagMgr.RecordBoundaryCheck(check1)
 	if requireClean && check1.Dirty {
-		_, _ = diagMgr.FinalizeFailure(OutcomeInvalid, "qualification evidence requires a clean committed source checkout, but working tree is dirty", fmt.Errorf("%s", check1.StatusNotes))
+		if _, diagErr := diagMgr.FinalizeFailure(OutcomeInvalid, "qualification evidence requires a clean committed source checkout, but working tree is dirty", fmt.Errorf("%s", check1.StatusNotes)); diagErr != nil {
+			t.Errorf("diagnostic retention failed: %v", diagErr)
+		}
 		t.Fatalf("qualification evidence requires a clean committed source checkout, but working tree is dirty:\n%s", check1.StatusNotes)
 	}
 
@@ -251,14 +268,18 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 	check2, err := CheckSourceBoundary(ctxCheck, repoRoot, "post-compilation")
 	if err != nil {
 		diagMgr.RecordBoundaryCheck(check2)
-		_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "post-compilation boundary check error", err)
+		if _, diagErr := diagMgr.FinalizeFailure(OutcomeFailed, "post-compilation boundary check error", err); diagErr != nil {
+			t.Errorf("diagnostic retention failed: %v", diagErr)
+		}
 		t.Fatalf("post-compilation source boundary check failed: %v", err)
 	}
 	diagMgr.RecordBoundaryCheck(check2)
 	if check2.Revision != check1.Revision || (requireClean && check2.Dirty) {
 		errInst := fmt.Errorf("rev1=%s, rev2=%s, dirty1=%v, dirty2=%v: %s",
 			check1.Revision, check2.Revision, check1.Dirty, check2.Dirty, check2.StatusNotes)
-		_, _ = diagMgr.FinalizeFailure(OutcomeInvalid, "source instability detected post-compilation", errInst)
+		if _, diagErr := diagMgr.FinalizeFailure(OutcomeInvalid, "source instability detected post-compilation", errInst); diagErr != nil {
+			t.Errorf("diagnostic retention failed: %v", diagErr)
+		}
 		t.Fatalf("source instability detected post-compilation: %v", errInst)
 	}
 
@@ -321,7 +342,9 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		rec, err := RunBoundedCommand(ctx, scenarioDir, timeout, endpointExe, args...)
 		tracker.Record(rec)
 		if err != nil {
-			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe failed in idle scenario", err)
+			if _, diagErr := diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe failed in idle scenario", err); diagErr != nil {
+				t.Errorf("diagnostic retention failed: %v", diagErr)
+			}
 			t.Fatalf("endpoint.exe failed in idle scenario: %v", err)
 		}
 
@@ -441,7 +464,9 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		close(stopSustained)
 		tracker.Record(rec)
 		if err != nil {
-			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe failed in sustained scenario", err)
+			if _, diagErr := diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe failed in sustained scenario", err); diagErr != nil {
+				t.Errorf("diagnostic retention failed: %v", diagErr)
+			}
 			t.Fatalf("endpoint.exe failed in sustained scenario: %v", err)
 		}
 
@@ -545,7 +570,9 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		rec, err := proc.Wait()
 		tracker.Record(rec)
 		if err != nil {
-			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe failed in burst scenario", err)
+			if _, diagErr := diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe failed in burst scenario", err); diagErr != nil {
+				t.Errorf("diagnostic retention failed: %v", diagErr)
+			}
 			t.Fatalf("endpoint.exe failed in burst scenario: %v", err)
 		}
 
@@ -646,7 +673,9 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		recOffline, err := procOffline.Wait()
 		tracker.Record(recOffline)
 		if err != nil {
-			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe failed in offline phase", err)
+			if _, diagErr := diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe failed in offline phase", err); diagErr != nil {
+				t.Errorf("diagnostic retention failed: %v", diagErr)
+			}
 			t.Fatalf("endpoint.exe failed in offline phase: %v", err)
 		}
 
@@ -767,7 +796,9 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		recReconnect, err := RunBoundedCommand(ctxReconnect, scenarioDir, timeoutReconnect, endpointExe, argsReconnect...)
 		tracker.Record(recReconnect)
 		if err != nil {
-			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe failed in real retry recovery phase", err)
+			if _, diagErr := diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe failed in real retry recovery phase", err); diagErr != nil {
+				t.Errorf("diagnostic retention failed: %v", diagErr)
+			}
 			t.Fatalf("endpoint.exe failed in real retry recovery phase: %v", err)
 		}
 
@@ -844,20 +875,29 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		generatedReports = append(generatedReports, destFileRetry)
 	})
 
+	// Abort if any scenario subtest failed
+	if t.Failed() {
+		t.Fatalf("aborting qualification evidence generation: one or more workload scenarios failed")
+	}
+
 	// -------------------------------------------------------------
 	// Checkpoint 3: Post-Workload Source Boundary Stability Check
 	// -------------------------------------------------------------
 	check3, err := CheckSourceBoundary(ctxCheck, repoRoot, "post-workload")
 	if err != nil {
 		diagMgr.RecordBoundaryCheck(check3)
-		_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "post-workload boundary check error", err)
+		if _, diagErr := diagMgr.FinalizeFailure(OutcomeFailed, "post-workload boundary check error", err); diagErr != nil {
+			t.Errorf("diagnostic retention failed: %v", diagErr)
+		}
 		t.Fatalf("post-workload source boundary check failed: %v", err)
 	}
 	diagMgr.RecordBoundaryCheck(check3)
 	if check3.Revision != check1.Revision || (requireClean && check3.Dirty) {
 		errInst := fmt.Errorf("rev1=%s, rev3=%s, dirty1=%v, dirty3=%v: %s",
 			check1.Revision, check3.Revision, check1.Dirty, check3.Dirty, check3.StatusNotes)
-		_, _ = diagMgr.FinalizeFailure(OutcomeInvalid, "source instability detected post-workload", errInst)
+		if _, diagErr := diagMgr.FinalizeFailure(OutcomeInvalid, "source instability detected post-workload", errInst); diagErr != nil {
+			t.Errorf("diagnostic retention failed: %v", diagErr)
+		}
 		t.Fatalf("source instability detected post-workload: %v", errInst)
 	}
 
@@ -896,6 +936,11 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 
 	t.Logf("All evidence staged exclusively in: %s (%d reports, provenance.json, commands.log)",
 		stagingRunDir, len(generatedReports))
+
+	// Ensure failed subtests or boundary checks cannot produce accepted evidence export
+	if t.Failed() {
+		t.Fatalf("aborting qualification evidence export: test has active failures")
+	}
 
 	// If requested or if running in evidence-export mode, export run exclusively to target directory
 	exportTarget := os.Getenv("EVIDENCE_EXPORT_DIR")

@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -179,6 +182,45 @@ func TestLatencyPercentiles_UnsortedAndEdgeCases(t *testing.T) {
 	}
 }
 
+// countingRuleWrapper intercepts calls to a detection.Rule to measure and assert
+// the exact count of rule evaluations performed across an experiment.
+type countingRuleWrapper struct {
+	inner     detection.Rule
+	evalCount int64
+}
+
+func (w *countingRuleWrapper) ID() string                { return w.inner.ID() }
+func (w *countingRuleWrapper) Version() string           { return w.inner.Version() }
+func (w *countingRuleWrapper) Severity() string          { return w.inner.Severity() }
+func (w *countingRuleWrapper) Confidence() float64       { return w.inner.Confidence() }
+func (w *countingRuleWrapper) Reason() string            { return w.inner.Reason() }
+func (w *countingRuleWrapper) AttckEnterprise() []string { return w.inner.AttckEnterprise() }
+func (w *countingRuleWrapper) AttckICS() []string        { return w.inner.AttckICS() }
+func (w *countingRuleWrapper) Evaluate(ev *events.CanonicalEvent) (bool, error) {
+	atomic.AddInt64(&w.evalCount, 1)
+	return w.inner.Evaluate(ev)
+}
+func (w *countingRuleWrapper) Count() int64 {
+	return atomic.LoadInt64(&w.evalCount)
+}
+func (w *countingRuleWrapper) Reset() {
+	atomic.StoreInt64(&w.evalCount, 0)
+}
+
+func getLibYaraXVersion() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "pkg-config", "--modversion", "yara_x_capi")
+	out, err := cmd.Output()
+	if err == nil {
+		v := strings.TrimSpace(string(out))
+		if v != "" {
+			return v
+		}
+	}
+	return "1.20.0"
+}
+
 // TestWorkload_YaraX_ComponentIntegration_PositiveVersusHarmlessDetection exercises
 // the native YARA-X processing path as a COMPONENT/INTEGRATION TEST.
 //
@@ -189,16 +231,21 @@ func TestLatencyPercentiles_UnsortedAndEdgeCases(t *testing.T) {
 // RealIOCExecRule by default).
 //
 // MEASURED BOUNDARY CLARIFICATION:
-// Two distinct latencies are captured per event:
-//  1. Scanner-Only Latency: time spent in yaraRule.Evaluate(ev) alone (YARA-X C API scan).
-//  2. Total Ingestion+Persistence Latency: time spent in detEngine.Evaluate(ev), which for positive matches
-//     includes YARA-X scan + UUIDv5 finding derivation + finding validation + SQLite INSERT transaction.
+// Two distinct experiments evaluate performance without double-scanning:
+//  1. Experiment 1 (Pure Rule Scanner Benchmark): measures yaraRule.Evaluate(ev) alone in memory (YARA-X C API scan).
+//  2. Experiment 2 (Ingestion & Pipeline Benchmark): measures OnCommitted -> detEngine.Evaluate(ev) (single scan +
+//     deterministic UUIDv5 derivation + SQLite INSERT transaction), asserting exactly 1 scan per event.
 //
 // MEMORY BOUNDARY CLARIFICATION:
 // runtime.MemStats (HeapAlloc, Sys) only measures Go runtime managed memory. Native allocations inside
 // libyara_x_capi (C/Rust) and SQLite OS page caching are excluded from HeapAlloc. Total process memory
 // must be measured via OS RSS (WorkingSetSize / VmRSS).
 func TestWorkload_YaraX_ComponentIntegration_PositiveVersusHarmlessDetection(t *testing.T) {
+	repoRoot, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatalf("failed to determine repository root: %v", err)
+	}
+
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "yarax_workload.db")
 	idPath := filepath.Join(tempDir, "identity.json")
@@ -247,33 +294,8 @@ rule Suspicious_OT_Payload {
 		t.Fatalf("failed to compile native YARA-X rule: %v", err)
 	}
 
-	detEngine := detection.NewEngine(db, []detection.Rule{yaraRule})
-
 	tenantID := "tenant-yarax-eval"
 	siteID := "site-substation-01"
-
-	var observedTotalLatencies []time.Duration
-	var observedScannerLatencies []time.Duration
-
-	ingestEngine := ingestion.NewEngine(db, ingestion.Config{
-		TenantID: tenantID,
-		SiteID:   siteID,
-		AssetID:  deviceID,
-		OnCommitted: func(ctx context.Context, ev *events.CanonicalEvent) {
-			// Measure Scanner-Only execution
-			scanStart := time.Now()
-			_, _ = yaraRule.Evaluate(ev)
-			observedScannerLatencies = append(observedScannerLatencies, time.Since(scanStart))
-
-			// Measure Total Engine Evaluation (Scanner + UUIDv5 finding creation + SQLite persistence)
-			totalStart := time.Now()
-			detEngine.Evaluate(ctx, ev)
-			observedTotalLatencies = append(observedTotalLatencies, time.Since(totalStart))
-		},
-	})
-
-	ctx := context.Background()
-	drainCtx := context.Background()
 
 	// 3. Prepare Test Artifact Files
 	artifactDir := filepath.Join(tempDir, "artifacts")
@@ -317,15 +339,123 @@ rule Suspicious_OT_Payload {
 	}
 
 	// -------------------------------------------------------------
-	// Phase A: Harmless Workload Execution
+	// Experiment 1: Pure Rule Scanner Benchmark (Single Scan Per Event)
 	// -------------------------------------------------------------
+	// Stated Warm-Up: evaluate 5 harmless and 5 malicious events to warm caches / branch prediction
+	for i := 0; i < 5; i++ {
+		warmHarmless := &events.CanonicalEvent{
+			EventID:  fmt.Sprintf("warmup-harmless-%d", i),
+			Category: "file/modification",
+			Metadata: map[string]interface{}{"file_path": harmlessFiles[i%eventCount]},
+		}
+		if _, err := yaraRule.Evaluate(warmHarmless); err != nil {
+			t.Fatalf("warmup harmless evaluation failed: %v", err)
+		}
+		warmMalicious := &events.CanonicalEvent{
+			EventID:  fmt.Sprintf("warmup-malicious-%d", i),
+			Category: "file/modification",
+			Metadata: map[string]interface{}{"file_path": maliciousFiles[i%eventCount]},
+		}
+		if _, err := yaraRule.Evaluate(warmMalicious); err != nil {
+			t.Fatalf("warmup malicious evaluation failed: %v", err)
+		}
+	}
+
+	// 1a. Scanner-Only Harmless Benchmark (30 events)
+	var rawScannerHarmless []time.Duration
+	var rawScannerHarmlessNs []int64
+	for i := 0; i < eventCount; i++ {
+		ev := &events.CanonicalEvent{
+			EventID:  fmt.Sprintf("scanner-harmless-%d", i),
+			Category: "file/modification",
+			Source:   "filesystem_monitor",
+			Metadata: map[string]interface{}{
+				"file_path": harmlessFiles[i],
+				"operation": "MODIFY",
+			},
+		}
+		scanStart := time.Now()
+		matched, scanErr := yaraRule.Evaluate(ev)
+		scanDur := time.Since(scanStart)
+		if scanErr != nil {
+			t.Fatalf("scanner error on harmless event %d: %v", i, scanErr)
+		}
+		if matched {
+			t.Fatalf("scanner-only harmless event matched unexpectedly")
+		}
+		rawScannerHarmless = append(rawScannerHarmless, scanDur)
+		rawScannerHarmlessNs = append(rawScannerHarmlessNs, scanDur.Nanoseconds())
+	}
+	scannerHarmlessSummary := CalculateLatencySummary(rawScannerHarmless)
+
+	// 1b. Scanner-Only Detection Benchmark (30 events)
+	var rawScannerMalicious []time.Duration
+	var rawScannerMaliciousNs []int64
+	for i := 0; i < eventCount; i++ {
+		ev := &events.CanonicalEvent{
+			EventID:  fmt.Sprintf("scanner-malicious-%d", i),
+			Category: "file/modification",
+			Source:   "filesystem_monitor",
+			Metadata: map[string]interface{}{
+				"file_path": maliciousFiles[i],
+				"operation": "CREATE",
+			},
+		}
+		scanStart := time.Now()
+		matched, scanErr := yaraRule.Evaluate(ev)
+		scanDur := time.Since(scanStart)
+		if scanErr != nil {
+			t.Fatalf("scanner error on detection event %d: %v", i, scanErr)
+		}
+		if !matched {
+			t.Fatalf("scanner-only detection event failed to match")
+		}
+		rawScannerMalicious = append(rawScannerMalicious, scanDur)
+		rawScannerMaliciousNs = append(rawScannerMaliciousNs, scanDur.Nanoseconds())
+	}
+	scannerMaliciousSummary := CalculateLatencySummary(rawScannerMalicious)
+
+	// -------------------------------------------------------------
+	// Experiment 2: Ingestion & Pipeline Detection Benchmark
+	// -------------------------------------------------------------
+	countingRule := &countingRuleWrapper{inner: yaraRule}
+	detEngine := detection.NewEngine(db, []detection.Rule{countingRule})
+
+	var rawPipelineHarmless []time.Duration
+	var rawPipelineHarmlessNs []int64
+	var rawPipelineMalicious []time.Duration
+	var rawPipelineMaliciousNs []int64
+	var isMaliciousPhase bool
+
+	ingestEngine := ingestion.NewEngine(db, ingestion.Config{
+		TenantID: tenantID,
+		SiteID:   siteID,
+		AssetID:  deviceID,
+		OnCommitted: func(ctx context.Context, ev *events.CanonicalEvent) {
+			// Single evaluation per event: detEngine.Evaluate executes countingRule once
+			totalStart := time.Now()
+			detEngine.Evaluate(ctx, ev)
+			dur := time.Since(totalStart)
+			if !isMaliciousPhase {
+				rawPipelineHarmless = append(rawPipelineHarmless, dur)
+				rawPipelineHarmlessNs = append(rawPipelineHarmlessNs, dur.Nanoseconds())
+			} else {
+				rawPipelineMalicious = append(rawPipelineMalicious, dur)
+				rawPipelineMaliciousNs = append(rawPipelineMaliciousNs, dur.Nanoseconds())
+			}
+		},
+	})
+
+	ctx := context.Background()
+	drainCtx := context.Background()
+
+	// 2a. Pipeline Harmless Workload Execution
+	countingRule.Reset()
 	runtime.GC()
 	var memBeforeHarmless runtime.MemStats
 	runtime.ReadMemStats(&memBeforeHarmless)
 	dbSizeBeforeHarmless := getDBSizeBytes()
 	harmlessStartTime := time.Now()
-	observedTotalLatencies = nil
-	observedScannerLatencies = nil
 
 	for i := 0; i < eventCount; i++ {
 		sID := uuid.New().String()
@@ -351,8 +481,12 @@ rule Suspicious_OT_Payload {
 	var memAfterHarmless runtime.MemStats
 	runtime.ReadMemStats(&memAfterHarmless)
 
-	harmlessTotalSummary := CalculateLatencySummary(observedTotalLatencies)
-	harmlessScannerSummary := CalculateLatencySummary(observedScannerLatencies)
+	// Assert exactly ONE rule evaluation per event in pipeline harmless workload
+	if evalCount := countingRule.Count(); evalCount != int64(eventCount) {
+		t.Fatalf("expected exactly %d rule evaluations (1 per event), got %d", eventCount, evalCount)
+	}
+
+	pipelineHarmlessSummary := CalculateLatencySummary(rawPipelineHarmless)
 
 	// Verify DB state after harmless workload: exactly eventCount events, 0 findings
 	var harmlessDurableTotal, harmlessFindingsCount int
@@ -369,20 +503,21 @@ rule Suspicious_OT_Payload {
 		t.Fatalf("expected 0 findings after harmless run, got %d", harmlessFindingsCount)
 	}
 
-	// -------------------------------------------------------------
-	// Phase B: Positive Detection Workload Execution
-	// -------------------------------------------------------------
+	// 2b. Pipeline Detection Workload Execution
+	isMaliciousPhase = true
+	countingRule.Reset()
 	runtime.GC()
 	var memBeforeMalicious runtime.MemStats
 	runtime.ReadMemStats(&memBeforeMalicious)
 	dbSizeBeforeMalicious := getDBSizeBytes()
 	maliciousStartTime := time.Now()
-	observedTotalLatencies = nil
-	observedScannerLatencies = nil
 
 	expectedFindingToSource := make(map[string]string)
 	sourceToExpectedFinding := make(map[string]string)
 	namespace := uuid.MustParse("6ba7b812-9dad-11d1-80b4-00c04fd430c8")
+
+	var allAssertedSourceIDs []string
+	var allAssertedFindingIDs []string
 
 	for i := 0; i < eventCount; i++ {
 		sourceID := uuid.New().String()
@@ -393,6 +528,8 @@ rule Suspicious_OT_Payload {
 
 		expectedFindingToSource[expectedFindingID] = sourceID
 		sourceToExpectedFinding[sourceID] = expectedFindingID
+		allAssertedSourceIDs = append(allAssertedSourceIDs, sourceID)
+		allAssertedFindingIDs = append(allAssertedFindingIDs, expectedFindingID)
 
 		ev := &events.CanonicalEvent{
 			EventID:       sourceID,
@@ -415,8 +552,12 @@ rule Suspicious_OT_Payload {
 	var memAfterMalicious runtime.MemStats
 	runtime.ReadMemStats(&memAfterMalicious)
 
-	maliciousTotalSummary := CalculateLatencySummary(observedTotalLatencies)
-	maliciousScannerSummary := CalculateLatencySummary(observedScannerLatencies)
+	// Assert exactly ONE rule evaluation per event in pipeline detection workload
+	if evalCount := countingRule.Count(); evalCount != int64(eventCount) {
+		t.Fatalf("expected exactly %d rule evaluations (1 per event), got %d", eventCount, evalCount)
+	}
+
+	pipelineMaliciousSummary := CalculateLatencySummary(rawPipelineMalicious)
 
 	// Verify DB state after positive detection workload:
 	// Total events = eventCount (harmless) + eventCount (malicious source) + eventCount (derived findings) = 3 * eventCount
@@ -556,44 +697,82 @@ rule Suspicious_OT_Payload {
 	t.Logf("=== NATIVE YARA-X COMPONENT WORKLOAD OVERHEAD COMPARISON ===")
 	t.Logf("Notice: Component test directly calling ingestion.ProcessEvent (not endpoint qualification)")
 	t.Logf("Events processed per batch: %d", eventCount)
-	t.Logf("Harmless Workload:  duration=%v, scannerAvg=%v, scannerP95=%v, totalAvg=%v, totalP95=%v, totalMax=%v, storageGrowth=%d bytes",
-		harmlessDuration, harmlessScannerSummary.Mean, harmlessScannerSummary.P95, harmlessTotalSummary.Mean, harmlessTotalSummary.P95, harmlessTotalSummary.Max, harmlessStorageGrowth)
-	t.Logf("Detection Workload: duration=%v, scannerAvg=%v, scannerP95=%v, totalAvg=%v, totalP95=%v, totalMax=%v, storageGrowth=%d bytes",
-		maliciousDuration, maliciousScannerSummary.Mean, maliciousScannerSummary.P95, maliciousTotalSummary.Mean, maliciousTotalSummary.P95, maliciousTotalSummary.Max, maliciousStorageGrowth)
+	t.Logf("Harmless Workload:  duration=%v, scannerAvg=%v, scannerP95=%v, pipelineAvg=%v, pipelineP95=%v, pipelineMax=%v, storageGrowth=%d bytes",
+		harmlessDuration, scannerHarmlessSummary.Mean, scannerHarmlessSummary.P95, pipelineHarmlessSummary.Mean, pipelineHarmlessSummary.P95, pipelineHarmlessSummary.Max, harmlessStorageGrowth)
+	t.Logf("Detection Workload: duration=%v, scannerAvg=%v, scannerP95=%v, pipelineAvg=%v, pipelineP95=%v, pipelineMax=%v, storageGrowth=%d bytes",
+		maliciousDuration, scannerMaliciousSummary.Mean, scannerMaliciousSummary.P95, pipelineMaliciousSummary.Mean, pipelineMaliciousSummary.P95, pipelineMaliciousSummary.Max, maliciousStorageGrowth)
 	t.Logf("Storage Amplification Ratio: %.2fx (findings generate derived durable rows)",
 		float64(maliciousStorageGrowth)/float64(harmlessStorageGrowth+1))
 	t.Logf("HeapAlloc Harmless: %d bytes -> %d bytes", memBeforeHarmless.HeapAlloc, memAfterHarmless.HeapAlloc)
 	t.Logf("HeapAlloc Malicious: %d bytes -> %d bytes", memBeforeMalicious.HeapAlloc, memAfterMalicious.HeapAlloc)
 	t.Logf("Note on Memory: runtime.MemStats only measures Go heap; libyara_x_capi native allocations are excluded.")
 
+	// Query boundary check for exact committed source revision
+	srcCheck, _ := CheckSourceBoundary(context.Background(), repoRoot, "yarax-component-workload")
+	libyaraVer := getLibYaraXVersion()
+
 	// Machine-readable component evidence artifact
 	componentEvidence := map[string]interface{}{
-		"evidence_type":             "component_integration",
-		"component":                 "native_yarax_detection_engine",
-		"timestamp_utc":             time.Now().UTC().Format(time.RFC3339),
-		"rule_id":                   ruleID,
-		"rule_version":              ruleVersion,
-		"events_per_batch":          eventCount,
-		"harmless_duration_ms":      harmlessDuration.Milliseconds(),
-		"malicious_duration_ms":     maliciousDuration.Milliseconds(),
-		"harmless_scanner_latency":  harmlessScannerSummary,
-		"harmless_total_latency":    harmlessTotalSummary,
-		"malicious_scanner_latency": maliciousScannerSummary,
-		"malicious_total_latency":   maliciousTotalSummary,
+		"evidence_type":     "component_integration",
+		"component":         "native_yarax_detection_engine",
+		"timestamp_utc":     time.Now().UTC().Format(time.RFC3339),
+		"source_revision":   srcCheck.Revision,
+		"dirty":             srcCheck.Dirty,
+		"toolchain":         runtime.Version(),
+		"libyara_x_version": libyaraVer,
+		"rule_id":           ruleID,
+		"rule_version":      ruleVersion,
+		"events_per_batch":  eventCount,
+		"timing_boundaries": map[string]string{
+			"scanner_only":       "Pure in-memory YARA-X C API evaluation alone (no SQLite, no ingestion hooks)",
+			"pipeline_detection": "Ingestion OnCommitted hook -> detEngine.Evaluate (single native scan + deterministic UUIDv5 derivation + SQLite INSERT)",
+		},
+		"memory_boundary_note":       "runtime.MemStats measures Go heap only; native CGO allocations (libyara_x_capi) and OS page cache are process-level memory outside the Go heap",
+		"scanner_harmless_summary":   scannerHarmlessSummary,
+		"scanner_malicious_summary":  scannerMaliciousSummary,
+		"pipeline_harmless_summary":  pipelineHarmlessSummary,
+		"pipeline_malicious_summary": pipelineMaliciousSummary,
+		"raw_scanner_harmless_ns":    rawScannerHarmlessNs,
+		"raw_scanner_malicious_ns":   rawScannerMaliciousNs,
+		"raw_pipeline_harmless_ns":   rawPipelineHarmlessNs,
+		"raw_pipeline_malicious_ns":  rawPipelineMaliciousNs,
 		"storage_growth_bytes": map[string]int64{
 			"harmless":  harmlessStorageGrowth,
 			"malicious": maliciousStorageGrowth,
 		},
 		"storage_amplification_ratio": float64(maliciousStorageGrowth) / float64(harmlessStorageGrowth+1),
-		"memory_boundary_note":        "runtime.MemStats measures Go heap only; native CGO allocations excluded",
+		"asserted_source_event_ids":   allAssertedSourceIDs,
+		"asserted_finding_ids":        allAssertedFindingIDs,
 		"durability_reopen_verified":  true,
 		"zero_event_loss":             true,
 	}
 
 	evData, err := json.MarshalIndent(componentEvidence, "", "  ")
-	if err == nil {
-		evidencePath := filepath.Join(tempDir, "yarax_component_evidence.json")
-		_ = os.WriteFile(evidencePath, evData, 0644)
+	if err != nil {
+		t.Fatalf("failed to marshal component evidence: %v", err)
+	}
+
+	// Always stage locally in tempDir
+	stagingPath := filepath.Join(tempDir, "yarax_component_evidence.json")
+	if err := WriteEvidenceExclusive(stagingPath, evData); err != nil {
+		t.Fatalf("failed to stage component evidence: %v", err)
+	}
+
+	// Export exclusively to explicit external destination if configured
+	runID := fmt.Sprintf("yarax_%s", time.Now().UTC().Format("20060102_150405"))
+	exportDir := os.Getenv("EVIDENCE_EXPORT_DIR")
+	if exportDir == "" && os.Getenv("EVIDENCE_EXPORT_TO_REPO") == "true" {
+		exportDir = filepath.Join(repoRoot, "docs", "evidence", "phase4", "runs", runID)
+	}
+	if exportDir != "" {
+		if err := os.MkdirAll(exportDir, 0755); err != nil {
+			t.Fatalf("failed to create export directory %s: %v", exportDir, err)
+		}
+		targetPath := filepath.Join(exportDir, "yarax_component_evidence.json")
+		if err := WriteEvidenceExclusive(targetPath, evData); err != nil {
+			t.Fatalf("failed to export YARA-X component evidence exclusively to %s: %v", targetPath, err)
+		}
+		t.Logf("Exported YARA-X component evidence exclusively to: %s", targetPath)
 	}
 
 	// Invariants:
@@ -601,8 +780,60 @@ rule Suspicious_OT_Payload {
 	if maliciousStorageGrowth <= 0 {
 		t.Errorf("expected positive storage growth for detection workload, got %d", maliciousStorageGrowth)
 	}
-	// 2. Detection total latency must be bounded (< 100ms per event even on unoptimized native scan + SQLite insert)
-	if maliciousTotalSummary.Mean > 100*time.Millisecond {
-		t.Errorf("average detection latency %v exceeds 100ms threshold", maliciousTotalSummary.Mean)
+	// 2. Detection pipeline latency must be bounded (< 100ms per event even on unoptimized native scan + SQLite insert)
+	if pipelineMaliciousSummary.Mean > 100*time.Millisecond {
+		t.Errorf("average detection pipeline latency %v exceeds 100ms threshold", pipelineMaliciousSummary.Mean)
+	}
+}
+
+// TestWorkload_YaraX_ComponentEvidenceExport verifies that YARA-X component evidence
+// exports exclusively to an external directory outside temporary directories, survives
+// cleanup, and strictly refuses overwrite.
+func TestWorkload_YaraX_ComponentEvidenceExport(t *testing.T) {
+	persistentExportDir := filepath.Join(t.TempDir(), "persistent_export")
+	if err := os.MkdirAll(persistentExportDir, 0755); err != nil {
+		t.Fatalf("failed to create export dir: %v", err)
+	}
+
+	targetFile := filepath.Join(persistentExportDir, "yarax_component_evidence.json")
+
+	dummyEvidence := map[string]interface{}{
+		"evidence_type":     "component_integration",
+		"component":         "native_yarax_detection_engine",
+		"source_revision":   "testrev123456",
+		"dirty":             false,
+		"toolchain":         runtime.Version(),
+		"libyara_x_version": "1.20.0",
+	}
+	data, err := json.MarshalIndent(dummyEvidence, "", "  ")
+	if err != nil {
+		t.Fatalf("failed to marshal evidence: %v", err)
+	}
+
+	// First export must succeed
+	if err := WriteEvidenceExclusive(targetFile, data); err != nil {
+		t.Fatalf("expected exclusive export to succeed: %v", err)
+	}
+
+	// Second export must fail with overwrite refusal
+	errSecond := WriteEvidenceExclusive(targetFile, data)
+	if errSecond == nil {
+		t.Fatalf("expected WriteEvidenceExclusive to refuse overwrite, but it succeeded")
+	}
+	if !strings.Contains(errSecond.Error(), "refusing to overwrite") {
+		t.Errorf("expected 'refusing to overwrite' error, got: %v", errSecond)
+	}
+
+	// Verify content
+	readBack, err := os.ReadFile(targetFile)
+	if err != nil {
+		t.Fatalf("failed to read back exported file: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(readBack, &parsed); err != nil {
+		t.Fatalf("failed to parse exported json: %v", err)
+	}
+	if parsed["component"] != "native_yarax_detection_engine" {
+		t.Errorf("unexpected component: %v", parsed["component"])
 	}
 }

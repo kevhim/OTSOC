@@ -115,7 +115,7 @@ if ($LASTEXITCODE -eq 0) {
 }
 
 # 7. Pipeline Integration & Offline Sync Tests
-Write-Host "`n--> [7/8] Running Pipeline Integration & Offline Sync Tests..." -ForegroundColor Magenta
+Write-Host "`n--> [7/10] Running Pipeline Integration & Offline Sync Tests..." -ForegroundColor Magenta
 $integrationOut = & go test -v ./agent/internal/integration -run "^(TestOffline|TestLostResponse|TestIntegration_LocalRemovalFailure|TestFocusedIngestion|TestPhase2E4|TestEndpointPipeline|TestFilesystemPipeline|TestInventoryPipeline|TestNetworkPipeline|TestPassiveNetworkPipeline|TestUSBPipeline|TestWorkloadDemonstration|TestMeasurement)" 2>&1
 if ($LASTEXITCODE -eq 0) {
     Add-Result -Name "Integration & Offline Sync Tests" -Status "PASS" -Details "Pipeline end-to-end and offline sync recovery passed"
@@ -123,8 +123,35 @@ if ($LASTEXITCODE -eq 0) {
     Add-Result -Name "Integration & Offline Sync Tests" -Status "FAIL" -Details "Integration tests failed"
 }
 
-# 8. Optional / Conditional Flags: Race & NativeDetection
-Write-Host "`n--> [8/8] Evaluating -Race and -NativeDetection checks..." -ForegroundColor Magenta
+# 8. Nearest-Rank Latency Percentile Statistics Tests
+Write-Host "`n--> [8/10] Running Latency Percentiles Statistics Tests..." -ForegroundColor Magenta
+$latOut = & go test -v ./agent/internal/integration -run "^TestLatencyPercentiles" 2>&1
+if ($LASTEXITCODE -eq 0) {
+    Add-Result -Name "Latency Percentiles Statistics" -Status "PASS" -Details "Nearest-rank method, unsorted inputs, and boundary cases verified"
+} else {
+    Add-Result -Name "Latency Percentiles Statistics" -Status "FAIL" -Details "Latency percentiles tests failed"
+}
+
+# 9. Diagnostic Retention, Error Propagation & Exclusive Evidence Export Tests
+Write-Host "`n--> [9/10] Running Diagnostic Retention, Error Propagation & Exclusive Export Tests..." -ForegroundColor Magenta
+$diagOut = & go test -v ./agent/internal/integration -run "^(TestDiagnostic|TestWriteEvidenceExclusive|TestExportEvidenceRun|TestParseBinaryProvenance|TestExecCommandWithTimeout|TestSubprocess|TestCheckSourceBoundary)" 2>&1
+if ($LASTEXITCODE -eq 0) {
+    Add-Result -Name "Diagnostic Retention & Exclusive Export" -Status "PASS" -Details "Exclusive writes, failure retention, cleanup survival, and error propagation verified"
+} else {
+    Add-Result -Name "Diagnostic Retention & Exclusive Export" -Status "FAIL" -Details "Diagnostic retention or exclusive export tests failed"
+}
+
+# 10. Delivery Failure Boundaries & Crash Subprocess Regressions
+Write-Host "`n--> [10/10] Running Delivery Failure Boundaries & Crash Subprocess Tests..." -ForegroundColor Magenta
+$deliveryOut = & go test -v ./agent/internal/integration -run "^(TestDeliveryBoundary|TestCrashBoundary)" 2>&1
+if ($LASTEXITCODE -eq 0) {
+    Add-Result -Name "Delivery Boundaries & Crash Regressions" -Status "PASS" -Details "Offline backoff, retry recovery, and OS process crash recovery verified"
+} else {
+    Add-Result -Name "Delivery Boundaries & Crash Regressions" -Status "FAIL" -Details "Delivery boundary or crash regression tests failed"
+}
+
+# Conditional Flags: Race & NativeDetection
+Write-Host "`n--> Evaluating Optional / Mandatory -Race and -NativeDetection checks..." -ForegroundColor Magenta
 
 if ($Race) {
     Write-Host "Probing local 64-bit CGO / UCRT64 race detector..." -ForegroundColor Cyan
@@ -165,13 +192,32 @@ if ($NativeDetection) {
     }
     if (-not $hasYaraX) {
         Add-Result -Name "Native Detection (YARA-X C API)" -Status "BLOCKED" -Details "pkg-config or libyara_x_capi not installed on local host. Real YARA-X native detection verified in Linux CI."
+        Add-Result -Name "Native YARA-X Component Workload" -Status "BLOCKED" -Details "Omitted TestWorkload_YaraX due to missing libyara_x_capi dependency"
     } else {
         $env:CGO_ENABLED = "1"
         $detOut = & go test -v -tags=yara_x ./agent/internal/detection/... 2>&1
-        if ($LASTEXITCODE -eq 0) {
+        $detExit = $LASTEXITCODE
+        if ($detExit -eq 0) {
             Add-Result -Name "Native Detection (YARA-X C API)" -Status "PASS" -Details "Native YARA-X detection suite passed with libyara_x_capi ($yaraVer)"
         } else {
             Add-Result -Name "Native Detection (YARA-X C API)" -Status "FAIL" -Details "Detection test failure"
+        }
+
+        $yaraxWorkloadOut = & go test -v ./agent/internal/integration -run "^TestWorkload_YaraX" 2>&1
+        $yaraxExit = $LASTEXITCODE
+        if ($yaraxExit -eq 0) {
+            Add-Result -Name "Native YARA-X Component Workload" -Status "PASS" -Details "Component workload and evidence export verified (libyara_x_capi $yaraVer)"
+        } else {
+            Add-Result -Name "Native YARA-X Component Workload" -Status "FAIL" -Details "YARA-X workload or evidence export failed"
+        }
+
+        if ($Race) {
+            $raceYaraxOut = & go test -race -v ./agent/internal/integration -run "^TestWorkload_YaraX" 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Add-Result -Name "Go Test -Race (YARA-X Component Workload)" -Status "PASS" -Details "Zero race conditions in YARA-X component workload under CGO"
+            } else {
+                Add-Result -Name "Go Test -Race (YARA-X Component Workload)" -Status "FAIL" -Details "Race detected in YARA-X component workload"
+            }
         }
     }
 }
@@ -182,14 +228,15 @@ Write-Host "                   VERIFICATION SUMMARY                   " -Foregro
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 $hasFailures = $false
+$hasBlocked = $false
 foreach ($res in $results) {
     $col = switch ($res.Status) {
         "PASS" { "Green" }
         "FAIL" { "Red"; $hasFailures = $true }
-        "BLOCKED" { "Yellow" }
+        "BLOCKED" { "Yellow"; $hasBlocked = $true }
         Default { "White" }
     }
-    Write-Host ("{0,-48} | {1,-8} | {2}" -f $res.Check, $res.Status, $res.Details) -ForegroundColor $col
+    Write-Host ("{0,-50} | {1,-8} | {2}" -f $res.Check, $res.Status, $res.Details) -ForegroundColor $col
 }
 
 Write-Host "==========================================================" -ForegroundColor Cyan
@@ -197,7 +244,10 @@ Write-Host "==========================================================" -Foregro
 if ($hasFailures) {
     Write-Host "Verification check FAILED with active test failures." -ForegroundColor Red
     exit 1
+} elseif ($hasBlocked) {
+    Write-Host "Verification check COMPLETED WITH BLOCKED DEPENDENCIES: Qualification readiness remains BLOCKED until all mandatory dependencies are satisfied." -ForegroundColor Yellow
+    exit 2
 } else {
-    Write-Host "Verification check SUCCEEDED (All runnable checks passed; blocked dependencies logged)." -ForegroundColor Green
+    Write-Host "Verification check SUCCEEDED (All qualification checks passed cleanly)." -ForegroundColor Green
     exit 0
 }

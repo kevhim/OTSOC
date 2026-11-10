@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 )
 
@@ -504,6 +505,7 @@ type DiagnosticManifest struct {
 	SourceBoundaryChecks []SourceBoundaryCheck    `json:"source_boundary_checks"`
 	ExecutedCommands     []CommandExecutionRecord `json:"executed_commands"`
 	PartialReports       []string                 `json:"partial_reports"`
+	DiagnosticErrors     []string                 `json:"diagnostic_errors,omitempty"`
 	StatusNotes          string                   `json:"status_notes,omitempty"`
 }
 
@@ -534,6 +536,35 @@ func NewRunDiagnosticManager(runID string, persistentDiagDir string, stagingDir 
 	}
 }
 
+// RegisterTestingFinalizer registers a cleanup hook on the test so that assertion failures,
+// parsing failures, panics, or early returns automatically retain diagnostics if not already finalized.
+func (m *RunDiagnosticManager) RegisterTestingFinalizer(t *testing.T) {
+	if m == nil {
+		return
+	}
+	t.Cleanup(func() {
+		m.mu.Lock()
+		finalized := m.Finalized
+		m.mu.Unlock()
+		if !finalized && t.Failed() {
+			_, err := m.FinalizeFailure(OutcomeFailed, "test failed during scenario or boundary execution", fmt.Errorf("test marked as failed by testing framework"))
+			if err != nil {
+				t.Errorf("testing finalizer diagnostic retention failed: %v", err)
+			}
+		}
+	})
+}
+
+// IsFinalized reports whether FinalizeFailure has been executed.
+func (m *RunDiagnosticManager) IsFinalized() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.Finalized
+}
+
 // RecordBoundaryCheck appends a verified boundary check to the diagnostic session.
 func (m *RunDiagnosticManager) RecordBoundaryCheck(check SourceBoundaryCheck) {
 	if m == nil {
@@ -546,6 +577,7 @@ func (m *RunDiagnosticManager) RecordBoundaryCheck(check SourceBoundaryCheck) {
 
 // FinalizeFailure writes failure diagnostics exclusively into PersistentDiagDir under failed_<runID> or invalid_<runID>.
 // It exports diagnostic_manifest.json, commands.log, and any partial reports staged prior to failure.
+// It preserves and reports both the original failure and diagnostic retention/copy errors.
 func (m *RunDiagnosticManager) FinalizeFailure(outcome DiagnosticOutcome, reason string, origErr error) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -570,30 +602,55 @@ func (m *RunDiagnosticManager) FinalizeFailure(outcome DiagnosticOutcome, reason
 	}
 	targetDir := filepath.Join(diagDir, prefix+m.RunID)
 
+	var diagErrors []error
+
 	if err := os.MkdirAll(diagDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create persistent diagnostics root %s: %w", diagDir, err)
+		diagErr := fmt.Errorf("failed to create persistent diagnostics root %s: %w", diagDir, err)
+		if origErr != nil {
+			return "", errors.Join(origErr, diagErr)
+		}
+		return "", diagErr
 	}
 
 	// Create targetDir exclusively (fails if already exists)
 	if err := os.Mkdir(targetDir, 0755); err != nil {
+		var diagErr error
 		if os.IsExist(err) {
-			return "", fmt.Errorf("diagnostic target directory already exists at %s: %w", targetDir, err)
+			diagErr = fmt.Errorf("diagnostic target directory already exists at %s: %w", targetDir, err)
+		} else {
+			diagErr = fmt.Errorf("failed to create diagnostic directory %s: %w", targetDir, err)
 		}
-		return "", fmt.Errorf("failed to create diagnostic directory %s: %w", targetDir, err)
+		if origErr != nil {
+			return "", errors.Join(origErr, diagErr)
+		}
+		return "", diagErr
 	}
 
-	// List partial reports from staging directory if present
+	// List and copy partial reports from staging directory
 	var partialReports []string
 	if m.StagingDir != "" {
-		if entries, err := os.ReadDir(m.StagingDir); err == nil {
+		entries, err := os.ReadDir(m.StagingDir)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				diagErrors = append(diagErrors, fmt.Errorf("failed to read staging directory %s: %w", m.StagingDir, err))
+			}
+		} else {
 			for _, entry := range entries {
 				if !entry.IsDir() {
-					partialReports = append(partialReports, entry.Name())
-					// Copy partial report to targetDir exclusively
-					data, readErr := os.ReadFile(filepath.Join(m.StagingDir, entry.Name()))
-					if readErr == nil {
-						_ = WriteEvidenceExclusive(filepath.Join(targetDir, entry.Name()), data)
+					srcPath := filepath.Join(m.StagingDir, entry.Name())
+					dstPath := filepath.Join(targetDir, entry.Name())
+
+					data, readErr := os.ReadFile(srcPath)
+					if readErr != nil {
+						diagErrors = append(diagErrors, fmt.Errorf("failed to read partial report %s: %w", srcPath, readErr))
+						continue
 					}
+					if writeErr := WriteEvidenceExclusive(dstPath, data); writeErr != nil {
+						diagErrors = append(diagErrors, fmt.Errorf("failed to copy partial report %s to %s: %w", srcPath, dstPath, writeErr))
+						continue
+					}
+					// Only list partial report if write succeeded!
+					partialReports = append(partialReports, entry.Name())
 				}
 			}
 		}
@@ -602,6 +659,11 @@ func (m *RunDiagnosticManager) FinalizeFailure(outcome DiagnosticOutcome, reason
 	errMsg := ""
 	if origErr != nil {
 		errMsg = origErr.Error()
+	}
+
+	var diagErrorStrings []string
+	for _, de := range diagErrors {
+		diagErrorStrings = append(diagErrorStrings, de.Error())
 	}
 
 	var executedCmds []CommandExecutionRecord
@@ -618,15 +680,14 @@ func (m *RunDiagnosticManager) FinalizeFailure(outcome DiagnosticOutcome, reason
 		SourceBoundaryChecks: m.BoundaryChecks,
 		ExecutedCommands:     executedCmds,
 		PartialReports:       partialReports,
+		DiagnosticErrors:     diagErrorStrings,
 	}
 
 	manifestData, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
-		return targetDir, fmt.Errorf("failed to marshal diagnostic manifest: %w", err)
-	}
-
-	if err := WriteEvidenceExclusive(filepath.Join(targetDir, "diagnostic_manifest.json"), manifestData); err != nil {
-		return targetDir, fmt.Errorf("failed to write diagnostic manifest: %w", err)
+		diagErrors = append(diagErrors, fmt.Errorf("failed to marshal diagnostic manifest: %w", err))
+	} else if err := WriteEvidenceExclusive(filepath.Join(targetDir, "diagnostic_manifest.json"), manifestData); err != nil {
+		diagErrors = append(diagErrors, fmt.Errorf("failed to write diagnostic manifest: %w", err))
 	}
 
 	rev := ""
@@ -637,7 +698,15 @@ func (m *RunDiagnosticManager) FinalizeFailure(outcome DiagnosticOutcome, reason
 	}
 	commandsLog := FormatCommandsLog(m.RunID, manifest.TimestampUTC, rev, dirty, "", "", m.BoundaryChecks, executedCmds)
 	if err := WriteEvidenceExclusive(filepath.Join(targetDir, "commands.log"), []byte(commandsLog)); err != nil {
-		return targetDir, fmt.Errorf("failed to write diagnostic commands.log: %w", err)
+		diagErrors = append(diagErrors, fmt.Errorf("failed to write diagnostic commands.log: %w", err))
+	}
+
+	if len(diagErrors) > 0 {
+		allErrs := diagErrors
+		if origErr != nil {
+			allErrs = append([]error{origErr}, diagErrors...)
+		}
+		return targetDir, errors.Join(allErrs...)
 	}
 
 	return targetDir, nil

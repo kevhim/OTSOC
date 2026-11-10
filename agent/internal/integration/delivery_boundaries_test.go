@@ -1,8 +1,10 @@
 package integration
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -567,7 +570,10 @@ func TestDeliveryCrashHelperProcess(t *testing.T) {
 
 	signalBarrier := func() {
 		if barrierPath != "" {
-			_ = os.WriteFile(barrierPath, []byte("ready\n"), 0644)
+			if err := os.WriteFile(barrierPath, []byte("ready\n"), 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to write barrier file %s: %v\n", barrierPath, err)
+				os.Exit(5)
+			}
 		}
 	}
 
@@ -665,9 +671,42 @@ func TestDeliveryCrashHelperProcess(t *testing.T) {
 	}
 }
 
-func startCrashHelperSubprocess(t *testing.T, mode, dbPath, idPath, barrierPath, serverURL string) *exec.Cmd {
+// ManagedCrashProcess governs an external crash-test child process with bounded buffers,
+// explicit timeout contexts, and guaranteed single reap via sync.Once.
+type ManagedCrashProcess struct {
+	cmd       *exec.Cmd
+	stdoutBuf *bytes.Buffer
+	stderrBuf *bytes.Buffer
+	reapOnce  sync.Once
+	reapErr   error
+	cancelCtx context.CancelFunc
+}
+
+// KillAndReap terminates the child process and reaps its exit state exactly once within a bounded 5s deadline.
+func (p *ManagedCrashProcess) KillAndReap() error {
+	p.reapOnce.Do(func() {
+		defer p.cancelCtx()
+		if p.cmd.Process != nil {
+			_ = p.cmd.Process.Kill()
+		}
+		done := make(chan error, 1)
+		go func() {
+			done <- p.cmd.Wait()
+		}()
+		select {
+		case err := <-done:
+			p.reapErr = err
+		case <-time.After(5 * time.Second):
+			p.reapErr = errors.New("timeout waiting for crash subprocess reap")
+		}
+	})
+	return p.reapErr
+}
+
+func startCrashHelperSubprocess(t *testing.T, mode, dbPath, idPath, barrierPath, serverURL string) *ManagedCrashProcess {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestDeliveryCrashHelperProcess$", "-test.v")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDeliveryCrashHelperProcess$", "-test.v")
 	cmd.Env = append(os.Environ(),
 		"GO_WANT_DELIVERY_CRASH_HELPER=1",
 		"DELIVERY_CRASH_MODE="+mode,
@@ -676,10 +715,34 @@ func startCrashHelperSubprocess(t *testing.T, mode, dbPath, idPath, barrierPath,
 		"DELIVERY_CRASH_BARRIER_PATH="+barrierPath,
 		"DELIVERY_CRASH_SERVER_URL="+serverURL,
 	)
+
+	stdoutBuf := new(bytes.Buffer)
+	stderrBuf := new(bytes.Buffer)
+	cmd.Stdout = stdoutBuf
+	cmd.Stderr = stderrBuf
+
 	if err := cmd.Start(); err != nil {
+		cancel()
 		t.Fatalf("failed to start crash helper subprocess: %v", err)
 	}
-	return cmd
+
+	p := &ManagedCrashProcess{
+		cmd:       cmd,
+		stdoutBuf: stdoutBuf,
+		stderrBuf: stderrBuf,
+		cancelCtx: cancel,
+	}
+
+	// Register cleanup immediately after successful Start so child is always reaped
+	t.Cleanup(func() {
+		if err := p.KillAndReap(); err != nil {
+			if strings.Contains(err.Error(), "timeout waiting") {
+				t.Errorf("subprocess cleanup wait timed out: %v", err)
+			}
+		}
+	})
+
+	return p
 }
 
 func waitForFileBarrier(t *testing.T, barrierPath string, timeout time.Duration) {
@@ -706,20 +769,11 @@ func TestCrashBoundary_SubprocessStorageCrash_ProcessTermination(t *testing.T) {
 	idPath := filepath.Join(tmpDir, "identity.json")
 	barrierPath := filepath.Join(tmpDir, "barrier.ready")
 
-	cmd := startCrashHelperSubprocess(t, "storage_commit_and_hang", dbPath, idPath, barrierPath, "")
-	defer func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-	}()
-
+	p := startCrashHelperSubprocess(t, "storage_commit_and_hang", dbPath, idPath, barrierPath, "")
 	waitForFileBarrier(t, barrierPath, 5*time.Second)
 
-	// Abruptly terminate the subprocess without clean shutdown / DB close
-	if err := cmd.Process.Kill(); err != nil {
-		t.Fatalf("failed to kill subprocess: %v", err)
-	}
-	_ = cmd.Wait()
+	// Abruptly terminate the subprocess and reap cleanly
+	_ = p.KillAndReap()
 
 	// Reopen storage independently
 	store := storage.NewSQLiteStorage(dbPath, idPath, 10*1024*1024)
@@ -732,34 +786,40 @@ func TestCrashBoundary_SubprocessStorageCrash_ProcessTermination(t *testing.T) {
 		}
 	}()
 
-	rows, err := store.GetDB().Query("SELECT event_id, state FROM events ORDER BY seq_no ASC")
+	rows, err := store.GetDB().Query("SELECT event_id, seq_no, state FROM events ORDER BY seq_no ASC")
 	if err != nil {
 		t.Fatalf("query failed: %v", err)
 	}
 	defer rows.Close()
 
-	var eventIDs []string
+	type recoveredEvent struct {
+		id    string
+		seqNo int64
+		state string
+	}
+	var recovered []recoveredEvent
 	for rows.Next() {
-		var id, state string
-		if err := rows.Scan(&id, &state); err != nil {
+		var r recoveredEvent
+		if err := rows.Scan(&r.id, &r.seqNo, &r.state); err != nil {
 			t.Fatalf("scan failed: %v", err)
 		}
-		if state != "PENDING" {
-			t.Errorf("expected state PENDING, got %s for event %s", state, id)
-		}
-		eventIDs = append(eventIDs, id)
+		recovered = append(recovered, r)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows iteration error: %v", err)
 	}
 
-	expectedIDs := []string{"crash-event-001", "crash-event-002", "crash-event-003"}
-	if len(eventIDs) != len(expectedIDs) {
-		t.Fatalf("expected %d events recovered, found %d: %v", len(expectedIDs), len(eventIDs), eventIDs)
+	expected := []recoveredEvent{
+		{id: "crash-event-001", seqNo: 1, state: "PENDING"},
+		{id: "crash-event-002", seqNo: 2, state: "PENDING"},
+		{id: "crash-event-003", seqNo: 3, state: "PENDING"},
 	}
-	for i, exp := range expectedIDs {
-		if eventIDs[i] != exp {
-			t.Errorf("mismatch at index %d: expected %s, got %s", i, exp, eventIDs[i])
+	if len(recovered) != len(expected) {
+		t.Fatalf("expected %d events recovered, found %d: %+v", len(expected), len(recovered), recovered)
+	}
+	for i, exp := range expected {
+		if recovered[i] != exp {
+			t.Errorf("mismatch at index %d: expected %+v, got %+v", i, exp, recovered[i])
 		}
 	}
 }
@@ -773,20 +833,11 @@ func TestCrashBoundary_SubprocessUncommittedDelete_ProcessTermination(t *testing
 	idPath := filepath.Join(tmpDir, "identity.json")
 	barrierPath := filepath.Join(tmpDir, "barrier.ready")
 
-	cmd := startCrashHelperSubprocess(t, "storage_uncommitted_delete_and_hang", dbPath, idPath, barrierPath, "")
-	defer func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-	}()
-
+	p := startCrashHelperSubprocess(t, "storage_uncommitted_delete_and_hang", dbPath, idPath, barrierPath, "")
 	waitForFileBarrier(t, barrierPath, 5*time.Second)
 
 	// Kill while transaction is open and uncommitted
-	if err := cmd.Process.Kill(); err != nil {
-		t.Fatalf("failed to kill subprocess: %v", err)
-	}
-	_ = cmd.Wait()
+	_ = p.KillAndReap()
 
 	// Reopen storage independently
 	store := storage.NewSQLiteStorage(dbPath, idPath, 10*1024*1024)
@@ -799,13 +850,14 @@ func TestCrashBoundary_SubprocessUncommittedDelete_ProcessTermination(t *testing
 		}
 	}()
 
-	var count int
-	err := store.GetDB().QueryRow("SELECT COUNT(*) FROM events WHERE event_id = 'uncommitted-delete-event-001' AND state = 'PENDING'").Scan(&count)
+	var id, state string
+	var seqNo int64
+	err := store.GetDB().QueryRow("SELECT event_id, seq_no, state FROM events WHERE event_id = 'uncommitted-delete-event-001'").Scan(&id, &seqNo, &state)
 	if err != nil {
 		t.Fatalf("query failed: %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("expected uncommitted delete to be rolled back (count=1), found count=%d", count)
+	if id != "uncommitted-delete-event-001" || seqNo != 1 || state != "PENDING" {
+		t.Fatalf("expected uncommitted delete to roll back to id='uncommitted-delete-event-001', seqNo=1, state='PENDING'; got id=%s, seqNo=%d, state=%s", id, seqNo, state)
 	}
 }
 
@@ -842,13 +894,7 @@ func TestCrashBoundary_SubprocessForwarder_ProcessTermination(t *testing.T) {
 		}
 	}()
 
-	cmd := startCrashHelperSubprocess(t, "forwarder_in_flight_crash", dbPath, idPath, barrierPath, srv.URL)
-	defer func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-	}()
-
+	p := startCrashHelperSubprocess(t, "forwarder_in_flight_crash", dbPath, idPath, barrierPath, srv.URL)
 	waitForFileBarrier(t, barrierPath, 5*time.Second)
 
 	// Wait until server receives the in-flight forwarder request
@@ -859,10 +905,7 @@ func TestCrashBoundary_SubprocessForwarder_ProcessTermination(t *testing.T) {
 	}
 
 	// Terminate child while request is in-flight before HTTP 202 response or deletion
-	if err := cmd.Process.Kill(); err != nil {
-		t.Fatalf("failed to kill forwarder subprocess: %v", err)
-	}
-	_ = cmd.Wait()
+	_ = p.KillAndReap()
 
 	// Reopen storage independently and verify event was NOT deleted prematurely
 	store := storage.NewSQLiteStorage(dbPath, idPath, 10*1024*1024)
@@ -875,12 +918,13 @@ func TestCrashBoundary_SubprocessForwarder_ProcessTermination(t *testing.T) {
 		}
 	}()
 
-	var count int
-	err := store.GetDB().QueryRow("SELECT COUNT(*) FROM events WHERE event_id = 'forwarder-inflight-event-001' AND state = 'PENDING'").Scan(&count)
+	var id, state string
+	var seqNo int64
+	err := store.GetDB().QueryRow("SELECT event_id, seq_no, state FROM events WHERE event_id = 'forwarder-inflight-event-001'").Scan(&id, &seqNo, &state)
 	if err != nil {
 		t.Fatalf("query failed: %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("expected in-flight event to remain in SQLite PENDING state, found %d", count)
+	if id != "forwarder-inflight-event-001" || seqNo != 1 || state != "PENDING" {
+		t.Fatalf("expected in-flight event to remain in SQLite with id='forwarder-inflight-event-001', seqNo=1, state='PENDING'; got id=%s, seqNo=%d, state=%s", id, seqNo, state)
 	}
 }
