@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -474,4 +475,224 @@ func CheckSourceBoundary(ctx context.Context, repoRoot string, checkpoint string
 		check.StatusNotes = fmt.Sprintf("uncommitted changes detected:\n%s", statusStr)
 	}
 	return check, nil
+}
+
+// =============================================================================
+// Run Diagnostic Manager & Failed Run Retention
+// =============================================================================
+
+// DiagnosticOutcome indicates whether an unaccepted qualification attempt failed or was invalid.
+type DiagnosticOutcome string
+
+const (
+	OutcomeFailed  DiagnosticOutcome = "FAILED"
+	OutcomeInvalid DiagnosticOutcome = "INVALID"
+)
+
+// CommandTracker provides access to executed subprocess command records.
+type CommandTracker interface {
+	Commands() []CommandExecutionRecord
+}
+
+// DiagnosticManifest records the post-mortem diagnostics of an aborted or failed qualification run.
+type DiagnosticManifest struct {
+	RunID                string                   `json:"run_id"`
+	Outcome              DiagnosticOutcome        `json:"outcome"` // "FAILED" or "INVALID"
+	FailureReason        string                   `json:"failure_reason"`
+	ErrorMessage         string                   `json:"error_message,omitempty"`
+	TimestampUTC         string                   `json:"timestamp_utc"`
+	SourceBoundaryChecks []SourceBoundaryCheck    `json:"source_boundary_checks"`
+	ExecutedCommands     []CommandExecutionRecord `json:"executed_commands"`
+	PartialReports       []string                 `json:"partial_reports"`
+	StatusNotes          string                   `json:"status_notes,omitempty"`
+}
+
+// RunDiagnosticManager manages persistent diagnostic retention for failed or invalid evidence runs.
+// Stored outside t.TempDir() so evidence of failed qualification attempts is permanently retained.
+type RunDiagnosticManager struct {
+	mu                sync.Mutex
+	RunID             string
+	PersistentDiagDir string
+	StagingDir        string
+	Tracker           CommandTracker
+	BoundaryChecks    []SourceBoundaryCheck
+	Finalized         bool
+}
+
+// NewRunDiagnosticManager creates a new diagnostic manager for a qualification evidence run.
+func NewRunDiagnosticManager(runID string, persistentDiagDir string, stagingDir string, tracker CommandTracker) *RunDiagnosticManager {
+	if persistentDiagDir == "" {
+		if envDir := os.Getenv("DIAGNOSTIC_DIR"); envDir != "" {
+			persistentDiagDir = envDir
+		}
+	}
+	return &RunDiagnosticManager{
+		RunID:             runID,
+		PersistentDiagDir: persistentDiagDir,
+		StagingDir:        stagingDir,
+		Tracker:           tracker,
+	}
+}
+
+// RecordBoundaryCheck appends a verified boundary check to the diagnostic session.
+func (m *RunDiagnosticManager) RecordBoundaryCheck(check SourceBoundaryCheck) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.BoundaryChecks = append(m.BoundaryChecks, check)
+}
+
+// FinalizeFailure writes failure diagnostics exclusively into PersistentDiagDir under failed_<runID> or invalid_<runID>.
+// It exports diagnostic_manifest.json, commands.log, and any partial reports staged prior to failure.
+func (m *RunDiagnosticManager) FinalizeFailure(outcome DiagnosticOutcome, reason string, origErr error) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.Finalized {
+		return "", errors.New("diagnostic manager already finalized")
+	}
+	m.Finalized = true
+
+	diagDir := m.PersistentDiagDir
+	if diagDir == "" {
+		if env := os.Getenv("DIAGNOSTIC_DIR"); env != "" {
+			diagDir = env
+		} else {
+			diagDir = filepath.Join("docs", "evidence", "phase4", "diagnostics")
+		}
+	}
+
+	prefix := "failed_"
+	if outcome == OutcomeInvalid {
+		prefix = "invalid_"
+	}
+	targetDir := filepath.Join(diagDir, prefix+m.RunID)
+
+	if err := os.MkdirAll(diagDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create persistent diagnostics root %s: %w", diagDir, err)
+	}
+
+	// Create targetDir exclusively (fails if already exists)
+	if err := os.Mkdir(targetDir, 0755); err != nil {
+		if os.IsExist(err) {
+			return "", fmt.Errorf("diagnostic target directory already exists at %s: %w", targetDir, err)
+		}
+		return "", fmt.Errorf("failed to create diagnostic directory %s: %w", targetDir, err)
+	}
+
+	// List partial reports from staging directory if present
+	var partialReports []string
+	if m.StagingDir != "" {
+		if entries, err := os.ReadDir(m.StagingDir); err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					partialReports = append(partialReports, entry.Name())
+					// Copy partial report to targetDir exclusively
+					data, readErr := os.ReadFile(filepath.Join(m.StagingDir, entry.Name()))
+					if readErr == nil {
+						_ = WriteEvidenceExclusive(filepath.Join(targetDir, entry.Name()), data)
+					}
+				}
+			}
+		}
+	}
+
+	errMsg := ""
+	if origErr != nil {
+		errMsg = origErr.Error()
+	}
+
+	var executedCmds []CommandExecutionRecord
+	if m.Tracker != nil {
+		executedCmds = m.Tracker.Commands()
+	}
+
+	manifest := DiagnosticManifest{
+		RunID:                m.RunID,
+		Outcome:              outcome,
+		FailureReason:        reason,
+		ErrorMessage:         errMsg,
+		TimestampUTC:         time.Now().UTC().Format(time.RFC3339),
+		SourceBoundaryChecks: m.BoundaryChecks,
+		ExecutedCommands:     executedCmds,
+		PartialReports:       partialReports,
+	}
+
+	manifestData, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return targetDir, fmt.Errorf("failed to marshal diagnostic manifest: %w", err)
+	}
+
+	if err := WriteEvidenceExclusive(filepath.Join(targetDir, "diagnostic_manifest.json"), manifestData); err != nil {
+		return targetDir, fmt.Errorf("failed to write diagnostic manifest: %w", err)
+	}
+
+	rev := ""
+	dirty := false
+	if len(m.BoundaryChecks) > 0 {
+		rev = m.BoundaryChecks[0].Revision
+		dirty = m.BoundaryChecks[0].Dirty
+	}
+	commandsLog := FormatCommandsLog(m.RunID, manifest.TimestampUTC, rev, dirty, "", "", m.BoundaryChecks, executedCmds)
+	if err := WriteEvidenceExclusive(filepath.Join(targetDir, "commands.log"), []byte(commandsLog)); err != nil {
+		return targetDir, fmt.Errorf("failed to write diagnostic commands.log: %w", err)
+	}
+
+	return targetDir, nil
+}
+
+// FormatCommandsLog produces a truthful, human-readable execution transcript with boundary checks and command records.
+func FormatCommandsLog(runID, timestamp, rev string, dirty bool, toolchain, sha256 string, boundaryChecks []SourceBoundaryCheck, commands []CommandExecutionRecord) string {
+	var logLines []string
+	logLines = append(logLines, fmt.Sprintf("=== RUN: %s ===", runID))
+	logLines = append(logLines, fmt.Sprintf("Timestamp: %s", timestamp))
+	if rev != "" {
+		logLines = append(logLines, fmt.Sprintf("Revision:  %s (dirty=%v)", rev, dirty))
+	}
+	if toolchain != "" {
+		logLines = append(logLines, fmt.Sprintf("Toolchain: %s", toolchain))
+	}
+	if sha256 != "" {
+		logLines = append(logLines, fmt.Sprintf("Binary SHA256: %s", sha256))
+	}
+	logLines = append(logLines, "")
+	logLines = append(logLines, "=== SOURCE BOUNDARY STABILITY CHECKS ===")
+	if len(boundaryChecks) == 0 {
+		logLines = append(logLines, "None recorded")
+	} else {
+		for i, chk := range boundaryChecks {
+			logLines = append(logLines, fmt.Sprintf("[%d] Checkpoint: %-17s | Rev: %s | Dirty: %-5v | Valid: %v",
+				i+1, chk.Checkpoint, chk.Revision, chk.Dirty, chk.Valid))
+			if chk.StatusNotes != "" {
+				logLines = append(logLines, fmt.Sprintf("    Notes: %s", chk.StatusNotes))
+			}
+		}
+	}
+	logLines = append(logLines, "Note: Boundary checks establish boundary-state consistency; they cannot prove no transient edit occurred between checkpoints.")
+	logLines = append(logLines, "")
+	logLines = append(logLines, "=== EXECUTED COMMANDS ===")
+	if len(commands) == 0 {
+		logLines = append(logLines, "None executed")
+	} else {
+		for i, cmd := range commands {
+			status := string(cmd.Outcome)
+			if cmd.ExitCode != nil {
+				status = fmt.Sprintf("%s (exit=%d)", cmd.Outcome, *cmd.ExitCode)
+			} else {
+				status = fmt.Sprintf("%s (process not started)", cmd.Outcome)
+			}
+			if cmd.ErrorMessage != "" && cmd.Outcome != OutcomeSuccess {
+				status = fmt.Sprintf("%s: %s", status, cmd.ErrorMessage)
+			}
+			if cmd.Truncated {
+				status += " [OUTPUT TRUNCATED]"
+			}
+			logLines = append(logLines, fmt.Sprintf("[%02d] %s %s", i+1, cmd.Command, strings.Join(cmd.Args, " ")))
+			logLines = append(logLines, fmt.Sprintf("     Dir: %s | Timeout: %v | Duration: %dms | Status: %s",
+				cmd.WorkingDir, cmd.Timeout, cmd.DurationMs, status))
+		}
+	}
+	return strings.Join(logLines, "\n") + "\n"
 }

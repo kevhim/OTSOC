@@ -71,7 +71,7 @@ func (m *mockIngestReceiver) ReceivedEvents() []*events.CanonicalEvent {
 // buildFreshEndpointWithProvenance compiles a fresh endpoint binary directly into an isolated
 // temporary test directory and validates its embedded build metadata against git provenance.
 // All external commands execute with explicit timeouts and capture diagnostic output.
-func buildFreshEndpointWithProvenance(t *testing.T, repoRoot string, tracker *runTracker, preCheck SourceBoundaryCheck) BinaryProvenance {
+func buildFreshEndpointWithProvenance(t *testing.T, repoRoot string, tracker *runTracker, preCheck SourceBoundaryCheck, diagMgr *RunDiagnosticManager) BinaryProvenance {
 	t.Helper()
 	binDir := t.TempDir()
 	endpointExe := filepath.Join(binDir, "endpoint.exe")
@@ -84,6 +84,9 @@ func buildFreshEndpointWithProvenance(t *testing.T, repoRoot string, tracker *ru
 		tracker.Record(recBuild)
 	}
 	if err != nil {
+		if diagMgr != nil {
+			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "failed to compile fresh endpoint binary", err)
+		}
 		t.Fatalf("failed to build fresh endpoint.exe in %s: %v\nOutput: %s", binDir, err, recBuild.CombinedOutput)
 	}
 
@@ -95,25 +98,42 @@ func buildFreshEndpointWithProvenance(t *testing.T, repoRoot string, tracker *ru
 		tracker.Record(recVersion)
 	}
 	if err != nil {
+		if diagMgr != nil {
+			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "failed to read build info from fresh binary", err)
+		}
 		t.Fatalf("failed to read build info from %s: %v\nOutput: %s", endpointExe, err, recVersion.CombinedOutput)
 	}
 
 	// 3. Validate binary build metadata against recorded provenance
 	actualRevision, actualDirty, actualToolchain, err := ParseBinaryProvenanceOutput(recVersion.CombinedOutput)
 	if err != nil {
+		if diagMgr != nil {
+			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "binary provenance metadata parsing failed", err)
+		}
 		t.Fatalf("binary provenance parsing failed for %s: %v", endpointExe, err)
 	}
 
 	if !strings.HasPrefix(preCheck.Revision, actualRevision) && !strings.HasPrefix(actualRevision, preCheck.Revision) {
-		t.Fatalf("binary provenance mismatch: expected revision %s, binary has %s", preCheck.Revision, actualRevision)
+		errMismatch := fmt.Errorf("expected revision %s, binary has %s", preCheck.Revision, actualRevision)
+		if diagMgr != nil {
+			_, _ = diagMgr.FinalizeFailure(OutcomeInvalid, "binary revision mismatch against source checkout", errMismatch)
+		}
+		t.Fatalf("binary provenance mismatch: %v", errMismatch)
 	}
 	if actualDirty != preCheck.Dirty {
-		t.Fatalf("binary provenance mismatch: expected dirty=%v, binary has dirty=%v", preCheck.Dirty, actualDirty)
+		errMismatch := fmt.Errorf("expected dirty=%v, binary has dirty=%v", preCheck.Dirty, actualDirty)
+		if diagMgr != nil {
+			_, _ = diagMgr.FinalizeFailure(OutcomeInvalid, "binary dirty-state mismatch against source checkout", errMismatch)
+		}
+		t.Fatalf("binary provenance mismatch: %v", errMismatch)
 	}
 
 	// 4. Compute binary SHA-256
 	sha, err := ComputeFileSHA256(endpointExe)
 	if err != nil {
+		if diagMgr != nil {
+			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "failed to compute binary SHA-256", err)
+		}
 		t.Fatalf("failed to compute binary SHA-256 for %s: %v", endpointExe, err)
 	}
 
@@ -195,40 +215,51 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 
 	ctxCheck := context.Background()
 
-	// Checkpoint 1: Pre-compilation source boundary check
-	check1, err := CheckSourceBoundary(ctxCheck, repoRoot, "pre-compilation")
-	if err != nil {
-		t.Fatalf("pre-compilation source boundary check failed: %v", err)
-	}
-	if requireClean && check1.Dirty {
-		t.Fatalf("qualification evidence requires a clean committed source checkout, but working tree is dirty:\n%s", check1.StatusNotes)
-	}
-
-	// Always compile a fresh endpoint into an isolated test temporary directory
-	provenance := buildFreshEndpointWithProvenance(t, repoRoot, tracker, check1)
-	endpointExe := provenance.ExePath
-
-	// Checkpoint 2: Post-compilation source boundary check
-	check2, err := CheckSourceBoundary(ctxCheck, repoRoot, "post-compilation")
-	if err != nil {
-		t.Fatalf("post-compilation source boundary check failed: %v", err)
-	}
-	if check2.Revision != check1.Revision || (requireClean && check2.Dirty) {
-		t.Fatalf("source instability detected post-compilation: rev1=%s, rev2=%s, dirty1=%v, dirty2=%v\nNotes: %s",
-			check1.Revision, check2.Revision, check1.Dirty, check2.Dirty, check2.StatusNotes)
-	}
-
 	// Unique run identifier and run directory
-	shortRev := provenance.SourceRevision
-	if len(shortRev) > 8 {
-		shortRev = shortRev[:8]
-	}
-	runID := fmt.Sprintf("run_%s_%s", time.Now().UTC().Format("20060102_150405"), shortRev)
+	runID := fmt.Sprintf("run_%s", time.Now().UTC().Format("20060102_150405"))
 
 	// Stage all run files into an isolated directory first
 	stagingRunDir := filepath.Join(t.TempDir(), runID)
 	if err := os.MkdirAll(stagingRunDir, 0755); err != nil {
 		t.Fatalf("failed to create staging run directory: %v", err)
+	}
+
+	persistentDiagDir := os.Getenv("DIAGNOSTIC_DIR")
+	if persistentDiagDir == "" {
+		persistentDiagDir = filepath.Join(repoRoot, "docs", "evidence", "phase4", "diagnostics")
+	}
+	diagMgr := NewRunDiagnosticManager(runID, persistentDiagDir, stagingRunDir, tracker)
+
+	// Checkpoint 1: Pre-compilation source boundary check
+	check1, err := CheckSourceBoundary(ctxCheck, repoRoot, "pre-compilation")
+	if err != nil {
+		diagMgr.RecordBoundaryCheck(check1)
+		_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "pre-compilation boundary check error", err)
+		t.Fatalf("pre-compilation source boundary check failed: %v", err)
+	}
+	diagMgr.RecordBoundaryCheck(check1)
+	if requireClean && check1.Dirty {
+		_, _ = diagMgr.FinalizeFailure(OutcomeInvalid, "qualification evidence requires a clean committed source checkout, but working tree is dirty", fmt.Errorf("%s", check1.StatusNotes))
+		t.Fatalf("qualification evidence requires a clean committed source checkout, but working tree is dirty:\n%s", check1.StatusNotes)
+	}
+
+	// Always compile a fresh endpoint into an isolated test temporary directory
+	provenance := buildFreshEndpointWithProvenance(t, repoRoot, tracker, check1, diagMgr)
+	endpointExe := provenance.ExePath
+
+	// Checkpoint 2: Post-compilation source boundary check
+	check2, err := CheckSourceBoundary(ctxCheck, repoRoot, "post-compilation")
+	if err != nil {
+		diagMgr.RecordBoundaryCheck(check2)
+		_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "post-compilation boundary check error", err)
+		t.Fatalf("post-compilation source boundary check failed: %v", err)
+	}
+	diagMgr.RecordBoundaryCheck(check2)
+	if check2.Revision != check1.Revision || (requireClean && check2.Dirty) {
+		errInst := fmt.Errorf("rev1=%s, rev2=%s, dirty1=%v, dirty2=%v: %s",
+			check1.Revision, check2.Revision, check1.Dirty, check2.Dirty, check2.StatusNotes)
+		_, _ = diagMgr.FinalizeFailure(OutcomeInvalid, "source instability detected post-compilation", errInst)
+		t.Fatalf("source instability detected post-compilation: %v", errInst)
 	}
 
 	var generatedReports []string
@@ -290,6 +321,7 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		rec, err := RunBoundedCommand(ctx, scenarioDir, timeout, endpointExe, args...)
 		tracker.Record(rec)
 		if err != nil {
+			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe failed in idle scenario", err)
 			t.Fatalf("endpoint.exe failed in idle scenario: %v", err)
 		}
 
@@ -409,6 +441,7 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		close(stopSustained)
 		tracker.Record(rec)
 		if err != nil {
+			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe failed in sustained scenario", err)
 			t.Fatalf("endpoint.exe failed in sustained scenario: %v", err)
 		}
 
@@ -512,6 +545,7 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		rec, err := proc.Wait()
 		tracker.Record(rec)
 		if err != nil {
+			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe failed in burst scenario", err)
 			t.Fatalf("endpoint.exe failed in burst scenario: %v", err)
 		}
 
@@ -612,6 +646,7 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		recOffline, err := procOffline.Wait()
 		tracker.Record(recOffline)
 		if err != nil {
+			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe failed in offline phase", err)
 			t.Fatalf("endpoint.exe failed in offline phase: %v", err)
 		}
 
@@ -732,6 +767,7 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 		recReconnect, err := RunBoundedCommand(ctxReconnect, scenarioDir, timeoutReconnect, endpointExe, argsReconnect...)
 		tracker.Record(recReconnect)
 		if err != nil {
+			_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe failed in real retry recovery phase", err)
 			t.Fatalf("endpoint.exe failed in real retry recovery phase: %v", err)
 		}
 
@@ -813,11 +849,16 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 	// -------------------------------------------------------------
 	check3, err := CheckSourceBoundary(ctxCheck, repoRoot, "post-workload")
 	if err != nil {
+		diagMgr.RecordBoundaryCheck(check3)
+		_, _ = diagMgr.FinalizeFailure(OutcomeFailed, "post-workload boundary check error", err)
 		t.Fatalf("post-workload source boundary check failed: %v", err)
 	}
+	diagMgr.RecordBoundaryCheck(check3)
 	if check3.Revision != check1.Revision || (requireClean && check3.Dirty) {
-		t.Fatalf("source instability detected post-workload: rev1=%s, rev3=%s, dirty1=%v, dirty3=%v\nNotes: %s",
+		errInst := fmt.Errorf("rev1=%s, rev3=%s, dirty1=%v, dirty3=%v: %s",
 			check1.Revision, check3.Revision, check1.Dirty, check3.Dirty, check3.StatusNotes)
+		_, _ = diagMgr.FinalizeFailure(OutcomeInvalid, "source instability detected post-workload", errInst)
+		t.Fatalf("source instability detected post-workload: %v", errInst)
 	}
 
 	// -------------------------------------------------------------
@@ -848,42 +889,7 @@ func TestWorkload_WindowsMeasurementReports(t *testing.T) {
 	}
 
 	// Format commands.log
-	var logLines []string
-	logLines = append(logLines, fmt.Sprintf("=== RUN: %s ===", runID))
-	logLines = append(logLines, fmt.Sprintf("Timestamp: %s", provManifest.TimestampUTC))
-	logLines = append(logLines, fmt.Sprintf("Revision:  %s (dirty=%v)", provenance.SourceRevision, provenance.Dirty))
-	logLines = append(logLines, fmt.Sprintf("Toolchain: %s", provenance.Toolchain))
-	logLines = append(logLines, fmt.Sprintf("Binary SHA256: %s", provenance.SHA256))
-	logLines = append(logLines, "")
-	logLines = append(logLines, "=== SOURCE BOUNDARY STABILITY CHECKS ===")
-	for i, chk := range provManifest.SourceBoundaryChecks {
-		logLines = append(logLines, fmt.Sprintf("[%d] Checkpoint: %-17s | Rev: %s | Dirty: %-5v | Valid: %v",
-			i+1, chk.Checkpoint, chk.Revision, chk.Dirty, chk.Valid))
-		if chk.StatusNotes != "" {
-			logLines = append(logLines, fmt.Sprintf("    Notes: %s", chk.StatusNotes))
-		}
-	}
-	logLines = append(logLines, "Note: Boundary checks establish boundary-state consistency; they cannot prove no transient edit occurred between checkpoints.")
-	logLines = append(logLines, "")
-	logLines = append(logLines, "=== EXECUTED COMMANDS ===")
-	for i, cmd := range tracker.Commands() {
-		status := string(cmd.Outcome)
-		if cmd.ExitCode != nil {
-			status = fmt.Sprintf("%s (exit=%d)", cmd.Outcome, *cmd.ExitCode)
-		} else {
-			status = fmt.Sprintf("%s (process not started)", cmd.Outcome)
-		}
-		if cmd.ErrorMessage != "" && cmd.Outcome != OutcomeSuccess {
-			status = fmt.Sprintf("%s: %s", status, cmd.ErrorMessage)
-		}
-		if cmd.Truncated {
-			status += " [OUTPUT TRUNCATED]"
-		}
-		logLines = append(logLines, fmt.Sprintf("[%02d] %s %s", i+1, cmd.Command, strings.Join(cmd.Args, " ")))
-		logLines = append(logLines, fmt.Sprintf("     Dir: %s | Timeout: %v | Duration: %dms | Status: %s",
-			cmd.WorkingDir, cmd.Timeout, cmd.DurationMs, status))
-	}
-	commandsLog := strings.Join(logLines, "\n") + "\n"
+	commandsLog := FormatCommandsLog(runID, provManifest.TimestampUTC, provenance.SourceRevision, provenance.Dirty, provenance.Toolchain, provenance.SHA256, provManifest.SourceBoundaryChecks, tracker.Commands())
 	if err := WriteEvidenceExclusive(filepath.Join(stagingRunDir, "commands.log"), []byte(commandsLog)); err != nil {
 		t.Fatalf("failed to write commands.log: %v", err)
 	}

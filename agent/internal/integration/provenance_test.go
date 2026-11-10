@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -342,4 +344,197 @@ func TestCheckSourceBoundary_ValidAndRecordsStatus(t *testing.T) {
 	if check.TimestampUTC == "" {
 		t.Errorf("expected non-empty timestamp")
 	}
+}
+
+// =============================================================================
+// Truthful Diagnostic Retention Regressions for Failed / Invalid Runs
+// =============================================================================
+
+type testTracker struct {
+	mu   sync.Mutex
+	cmds []CommandExecutionRecord
+}
+
+func (tr *testTracker) Add(rec CommandExecutionRecord) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.cmds = append(tr.cmds, rec)
+}
+
+func (tr *testTracker) Commands() []CommandExecutionRecord {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	res := make([]CommandExecutionRecord, len(tr.cmds))
+	copy(res, tr.cmds)
+	return res
+}
+
+// TestDiagnosticHelperProcess is invoked as a subprocess to simulate qualification failures
+// and verify that RunDiagnosticManager persists diagnostics outside the child's temporary directory.
+func TestDiagnosticHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_DIAGNOSTIC_HELPER") != "1" {
+		return
+	}
+
+	mode := os.Getenv("DIAGNOSTIC_HELPER_MODE")
+	diagDir := os.Getenv("DIAGNOSTIC_DIR")
+	runID := os.Getenv("DIAGNOSTIC_RUN_ID")
+	if runID == "" {
+		runID = "simulated_run_123"
+	}
+
+	stagingDir := t.TempDir()
+	tracker := &testTracker{}
+
+	diagMgr := NewRunDiagnosticManager(runID, diagDir, stagingDir, tracker)
+
+	switch mode {
+	case "simulate_dirty_invalid":
+		// Simulate discovering an uncommitted dirty file during a clean qualification run
+		chk := SourceBoundaryCheck{
+			Checkpoint:   "pre-compilation",
+			TimestampUTC: time.Now().UTC().Format(time.RFC3339),
+			Revision:     "mockrev123456",
+			Dirty:        true,
+			Valid:        true,
+			StatusNotes:  "M dirty_test_file.go",
+		}
+		diagMgr.RecordBoundaryCheck(chk)
+		_, err := diagMgr.FinalizeFailure(OutcomeInvalid, "qualification evidence requires clean checkout, but working tree is dirty", errors.New("dirty working tree"))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "FinalizeFailure error: %v\n", err)
+			os.Exit(2)
+		}
+		os.Exit(1) // Nonzero exit because qualification failed
+
+	case "simulate_subprocess_failure":
+		// Simulate partial report staged in stagingDir before a crash
+		partialData := []byte(`{"scenario":"idle_partial","status":"incomplete"}`)
+		if err := os.WriteFile(filepath.Join(stagingDir, "partial_idle_report.json"), partialData, 0644); err != nil {
+			os.Exit(3)
+		}
+
+		exitCode := 1
+		tracker.Add(CommandExecutionRecord{
+			Command:    "endpoint.exe",
+			Args:       []string{"-measure-profile=windows-smoke-sustained"},
+			WorkingDir: stagingDir,
+			Outcome:    OutcomeNonzeroExit,
+			ExitCode:   &exitCode,
+		})
+
+		_, err := diagMgr.FinalizeFailure(OutcomeFailed, "endpoint.exe crashed during sustained scenario", errors.New("exit status 1"))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "FinalizeFailure error: %v\n", err)
+			os.Exit(2)
+		}
+		os.Exit(1) // Nonzero exit
+
+	default:
+		os.Exit(99)
+	}
+}
+
+func TestDiagnosticRetention_FailedAndInvalidRuns(t *testing.T) {
+	// Root persistent diagnostic directory outside any child t.TempDir
+	persistentDiagDir := filepath.Join(t.TempDir(), "persistent_diagnostics")
+
+	t.Run("InvalidRun_DirtySourceRetained", func(t *testing.T) {
+		runID := "run_test_dirty_001"
+		cmd := exec.Command(os.Args[0], "-test.run=^TestDiagnosticHelperProcess$", "-test.v")
+		cmd.Env = append(os.Environ(),
+			"GO_WANT_DIAGNOSTIC_HELPER=1",
+			"DIAGNOSTIC_HELPER_MODE=simulate_dirty_invalid",
+			"DIAGNOSTIC_DIR="+persistentDiagDir,
+			"DIAGNOSTIC_RUN_ID="+runID,
+		)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatalf("expected child process to exit nonzero on invalid run, got success:\n%s", string(out))
+		}
+
+		// Verify persistent diagnostics directory retained
+		targetDir := filepath.Join(persistentDiagDir, "invalid_"+runID)
+		if _, statErr := os.Stat(targetDir); statErr != nil {
+			t.Fatalf("expected invalid run directory to exist at %s: %v", targetDir, statErr)
+		}
+
+		manifestPath := filepath.Join(targetDir, "diagnostic_manifest.json")
+		manifestData, err := os.ReadFile(manifestPath)
+		if err != nil {
+			t.Fatalf("failed to read diagnostic manifest: %v", err)
+		}
+
+		var manifest DiagnosticManifest
+		if err := json.Unmarshal(manifestData, &manifest); err != nil {
+			t.Fatalf("failed to parse diagnostic manifest: %v", err)
+		}
+		if manifest.Outcome != OutcomeInvalid {
+			t.Errorf("expected Outcome %s, got %s", OutcomeInvalid, manifest.Outcome)
+		}
+		if manifest.RunID != runID {
+			t.Errorf("expected RunID %s, got %s", runID, manifest.RunID)
+		}
+		if len(manifest.SourceBoundaryChecks) != 1 || !manifest.SourceBoundaryChecks[0].Dirty {
+			t.Errorf("expected dirty source boundary check recorded, got: %+v", manifest.SourceBoundaryChecks)
+		}
+
+		// Verify commands.log exists and contains run ID
+		cmdLogPath := filepath.Join(targetDir, "commands.log")
+		logData, err := os.ReadFile(cmdLogPath)
+		if err != nil {
+			t.Fatalf("failed to read commands.log: %v", err)
+		}
+		if !strings.Contains(string(logData), runID) {
+			t.Errorf("expected commands.log to contain run ID %s", runID)
+		}
+	})
+
+	t.Run("FailedRun_SubprocessCrashAndPartialReportsRetained", func(t *testing.T) {
+		runID := "run_test_crash_002"
+		cmd := exec.Command(os.Args[0], "-test.run=^TestDiagnosticHelperProcess$", "-test.v")
+		cmd.Env = append(os.Environ(),
+			"GO_WANT_DIAGNOSTIC_HELPER=1",
+			"DIAGNOSTIC_HELPER_MODE=simulate_subprocess_failure",
+			"DIAGNOSTIC_DIR="+persistentDiagDir,
+			"DIAGNOSTIC_RUN_ID="+runID,
+		)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatalf("expected child process to exit nonzero on failed run, got success:\n%s", string(out))
+		}
+
+		// Verify persistent diagnostics directory retained
+		targetDir := filepath.Join(persistentDiagDir, "failed_"+runID)
+		if _, statErr := os.Stat(targetDir); statErr != nil {
+			t.Fatalf("expected failed run directory to exist at %s: %v", targetDir, statErr)
+		}
+
+		manifestPath := filepath.Join(targetDir, "diagnostic_manifest.json")
+		manifestData, err := os.ReadFile(manifestPath)
+		if err != nil {
+			t.Fatalf("failed to read diagnostic manifest: %v", err)
+		}
+
+		var manifest DiagnosticManifest
+		if err := json.Unmarshal(manifestData, &manifest); err != nil {
+			t.Fatalf("failed to parse diagnostic manifest: %v", err)
+		}
+		if manifest.Outcome != OutcomeFailed {
+			t.Errorf("expected Outcome %s, got %s", OutcomeFailed, manifest.Outcome)
+		}
+		if len(manifest.PartialReports) != 1 || manifest.PartialReports[0] != "partial_idle_report.json" {
+			t.Errorf("expected partial report partial_idle_report.json recorded, got: %v", manifest.PartialReports)
+		}
+
+		// Verify partial report was preserved inside targetDir
+		preservedReport := filepath.Join(targetDir, "partial_idle_report.json")
+		repData, err := os.ReadFile(preservedReport)
+		if err != nil {
+			t.Fatalf("failed to read preserved partial report: %v", err)
+		}
+		if !strings.Contains(string(repData), "idle_partial") {
+			t.Errorf("unexpected content in preserved partial report: %s", string(repData))
+		}
+	})
 }

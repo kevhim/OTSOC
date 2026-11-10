@@ -3,6 +3,22 @@
 - **Current Git Branch**: `fix/correctness-remediation-checkpoint`
 - **Current Commit Hash**: `HEAD`
 
+## Phase 4 Qualification & Evidence Hardening Checkpoint (2026-11-10)
+- **Status**: Completed on branch `fix/correctness-remediation-checkpoint`.
+- **Phase 4 Status**: Remains **OPEN**. Do not calibrate governor thresholds or begin Phase 5.
+- **Key Deliverables**:
+  1. **Latency Statistics & Percentile Convention**: Implemented `CalculateLatencySummary` in `workload_detection_yarax_test.go` using the Nearest-Rank method ($\lceil P \times N \rceil - 1$) on an isolated sorted copy. Handles empty ($N=0$) and single ($N=1$) samples gracefully. Validated via `TestLatencyPercentiles_UnsortedAndEdgeCases` with deliberately unsorted values. Evaluates both scanner execution latency (`yaraRule.Evaluate`) and total finding persistence latency (`detEngine.Evaluate` + SQLite insert). Emits machine-readable component JSON evidence. Explicitly notes that `runtime.MemStats.HeapAlloc` measures Go runtime heap only, excluding native CGO allocations (`libyara_x_capi`).
+  2. **Finding Identity & Causal Linkage**: Deserializes canonical events from SQLite payload, asserting expected rule ID (`YARA-OT-MALWARE-001`), version (`1.0`), severity (`CRITICAL`), category (`detection/finding`), and source (`local_detection`). Enforces exact bijective causal linkage in `Metadata["evidence_event_ids"]`, verifies deterministic UUIDv5 generation, proves 0 false positives on harmless inputs, verifies `rows.Err()`, and re-verifies all finding invariants after storage close and independent database reopen.
+  3. **Truthful Subprocess Crash Coverage**: Re-labeled graceful restart (`TestDeliveryBoundary_GracefulRestartWithPendingSQLiteEvents`) and transaction rollback (`TestDeliveryBoundary_StorageTransactionRollbackDurability`) tests. Added real child-process crash regressions via `cmd.Process.Kill()`:
+     - `TestCrashBoundary_SubprocessStorageCrash_ProcessTermination`: child stores events and is killed before cleanup; verify on restart all events recovered in `PENDING` state.
+     - `TestCrashBoundary_SubprocessUncommittedDelete_ProcessTermination`: child holds uncommitted DELETE transaction; killed by parent; verify uncommitted delete rolled back.
+     - `TestCrashBoundary_SubprocessForwarder_ProcessTermination`: child killed while forwarder request is in-flight on the wire; verify event remains in SQLite and was not prematurely deleted.
+     - Explicitly removed unsupported physical power-loss claims, documenting the boundary between OS process crashes and hardware disk-cache flush barriers.
+  4. **Detection Evidence Scoping & Blocker Analysis**: Authored `docs/evidence/phase4/detection_evidence_scoping.md` documenting that YARA-X tests are component integration tests bypassing collectors and eventqueue. Identified concrete blocker in `agent/cmd/endpoint/main.go` (hardcoded `RealIOCExecRule` without dynamic `.yar` compilation) and outlined smallest design change (`RulesDir` in config and CLI flag).
+  5. **Persistent Diagnostics Retention**: Implemented `RunDiagnosticManager` in `provenance_helpers.go` exporting `diagnostic_manifest.json`, `commands.log` (via `FormatCommandsLog`), and partial reports to `docs/evidence/phase4/diagnostics/` labeled `FAILED` or `INVALID`. Wired into `workload_reports_test.go` across all boundary checks and scenarios. Tested via `TestDiagnosticRetention_FailedAndInvalidRuns` using child helper processes.
+  6. **Loss & Delivery Claims Clarification**: Updated `docs/architecture/DELIVERY_GUARANTEES.md` with complete equation $\text{Ingested} = \text{Committed} + \text{FailedBeforeCommit} + \text{RecoveredDLQ} + \text{SpilledDisk} + \text{Dropped}$, collector admission boundaries, power-loss limitation notes, and wall-clock vs injected-clock distinctions. Updated `docs/evidence/phase4/low_spec_acceptance_criteria.md` re-labeling criteria as Proposed Acceptance Criteria with documented industrial engineering rationale and resolved conflicting limits.
+  7. **Full Verification**: All checks in `scripts/verify-phase4.ps1 -Race -NativeDetection` pass with 100% success under local UCRT64 CGO toolchain.
+
 ## Phase Status
 - **Phase 0 (Bootstrap)**: COMPLETE
 - **Phase 1 (Vertical Slice)**: COMPLETE
