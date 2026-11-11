@@ -97,8 +97,17 @@ func TestUSBPipeline_Integration(t *testing.T) {
 		t.Fatalf("collector start failed: %v", err)
 	}
 
-	// Wait for event to propagate
-	time.Sleep(500 * time.Millisecond)
+	// Wait for event to propagate with timeout
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		bLen := len(receivedBody)
+		mu.Unlock()
+		if bLen > 0 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
 	usbCol.Stop()
 	close(centralEvents)

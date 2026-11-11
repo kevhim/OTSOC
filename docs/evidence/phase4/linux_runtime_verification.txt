@@ -1,0 +1,50 @@
+# Linux Runtime Verification & Audit Log (Fresh Run)
+
+Run ID:          linux_20261110_103917_57a49bd0
+Timestamp UTC:   2026-11-10T10:39:27Z
+Source Revision: 57a49bd004c4818b6da982606ba7e202cb7d1112
+Source Dirty:    false (clean checkout pre- and post-execution)
+OS / Kernel:     Linux LAPTOP-I95U6305 6.6.87.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun 5 18:30:46 UTC 2025 x86_64 GNU/Linux
+Linux Distro:    Ubuntu 26.04 LTS
+Go Toolchain:    go version go1.26.0 linux/amd64
+CGO Enabled:     1
+C Compiler:      gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+Native YARA-X:   Not installed in local WSL environment (pkg-config yara_x_capi missing; compiled in CI via cargo cinstall)
+
+Full Run Artifacts Directory: docs/evidence/phase4/runs/linux_20261110_103917_57a49bd0/
+- commands.log:           Exact executed commands, timestamps, and exit codes
+- endpoint_metadata.txt:  Authoritative VCS provenance from `go version -m` on compiled Linux endpoint binary
+- linux_smoke_report.json: Machine-readable 2-second bounded runtime monitoring report
+- transcript.log:         Complete raw stdout/stderr output across all test suites
+Historical Partial Log:   docs/evidence/phase4/historical/linux_runtime_verification_4a68a80_cached.txt (preserved)
+
+==========================================================
+                   VERIFICATION RESULTS                   
+==========================================================
+Core Storage Suite                                 | PASS     | Clean execution (exit 0)
+Core EventQueue Suite                              | PASS     | Clean execution (exit 0)
+Core Governor Suite                                | PASS     | Clean execution (exit 0)
+Core ResourceReport Suite                          | PASS     | Clean execution (exit 0)
+Core Forwarder Suite                               | PASS     | Clean execution (exit 0)
+Core Ingestion Suite                               | PASS     | Clean execution (exit 0)
+Delivery Boundaries & Crash Regressions            | PASS     | Clean execution (exit 0)
+Diagnostic Retention & Error Regressions           | PASS     | Clean execution (exit 0)
+Go Test -Race (Governor, EventQueue, Storage)      | PASS     | Clean execution (exit 0)
+Native YARA-X C API (libyara_x_capi)               | BLOCKED  | libyara_x_capi not installed in local environment (verified in Linux CI via cargo cinstall)
+Native YARA-X Component Workload & Policy          | BLOCKED  | Omitted: requires libyara_x_capi CGO dependency
+Native Linux Endpoint Build                        | PASS     | Clean execution (exit 0)
+Binary Provenance Metadata (go version -m)         | PASS     | Clean execution (exit 0)
+Bounded Runtime Smoke Run (2s duration)            | PASS     | Clean execution (exit 0)
+Smoke Report Verification                          | PASS     | Valid measurement report generated
+==========================================================
+Post-Execution Revision: 57a49bd004c4818b6da982606ba7e202cb7d1112
+Post-Execution Dirty:    false
+Finished At UTC:         2026-11-10T10:40:15Z
+
+QUALIFICATION STATUS NOTICE:
+1. WSL2 Linux test execution verifies core agent subsystem correctness, memory-race safety,
+   crash-boundary containment, and clean bounded runtime measurement on the Linux OS.
+2. WSL2 Linux does NOT substitute for physical low-spec hardware qualification.
+3. Phase 4 remains OPEN. Threshold calibration, governor enforcement, endpoint rule loading,
+   and low-spec hardware qualification remain subsequent gates.
+==========================================================

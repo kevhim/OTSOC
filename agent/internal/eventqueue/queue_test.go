@@ -1,0 +1,913 @@
+package eventqueue
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"redcyberfox/pkg/events"
+)
+
+func TestEventQueue_FIFOAndAge(t *testing.T) {
+	q := New(10)
+	defer q.Close()
+
+	// Initial empty queue: age should be invalid
+	age := q.OldestEventAge()
+	if age.Valid {
+		t.Fatalf("expected OldestEventAge to be invalid on empty queue, got %v", age)
+	}
+	if q.Depth().Value != 0 {
+		t.Fatalf("expected depth 0, got %d", q.Depth().Value)
+	}
+	if q.Capacity().Value != 10 {
+		t.Fatalf("expected capacity 10, got %d", q.Capacity().Value)
+	}
+
+	ev1 := &events.CanonicalEvent{EventID: "ev-1"}
+	ev2 := &events.CanonicalEvent{EventID: "ev-2"}
+
+	q.In() <- ev1
+	time.Sleep(30 * time.Millisecond) // Allow age to progress
+	q.In() <- ev2
+
+	// Check depth and age
+	time.Sleep(20 * time.Millisecond)
+	if q.Depth().Value != 2 {
+		t.Fatalf("expected depth 2, got %d", q.Depth().Value)
+	}
+
+	age = q.OldestEventAge()
+	if !age.Valid || age.Value < 0.02 {
+		t.Fatalf("expected age >= 0.02s, got %v", age)
+	}
+
+	// Dequeue first
+	out1 := <-q.Out()
+	if out1.EventID != "ev-1" {
+		t.Fatalf("expected FIFO ev-1, got %s", out1.EventID)
+	}
+
+	// Dequeue second
+	out2 := <-q.Out()
+	if out2.EventID != "ev-2" {
+		t.Fatalf("expected FIFO ev-2, got %s", out2.EventID)
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	if q.Depth().Value != 0 {
+		t.Fatalf("expected depth 0 after dequeue, got %d", q.Depth().Value)
+	}
+	if q.OldestEventAge().Valid {
+		t.Fatalf("expected age invalid after draining")
+	}
+}
+
+func TestEventQueue_BackpressureAndBlockedEnqueueAttempts(t *testing.T) {
+	capacity := 4
+	q := New(capacity)
+	defer q.Close()
+
+	ctx := context.Background()
+
+	// Fill queue to capacity (4 items) via instrumented Enqueue API
+	for i := 1; i <= capacity; i++ {
+		if err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: fmt.Sprintf("ev-%d", i)}); err != nil {
+			t.Fatalf("unexpected err filling queue: %v", err)
+		}
+	}
+
+	if q.Depth().Value != uint64(capacity) {
+		t.Fatalf("expected depth %d, got %d", capacity, q.Depth().Value)
+	}
+	if q.SaturationPercent().Value != 100.0 {
+		t.Fatalf("expected saturation 100%%, got %v", q.SaturationPercent().Value)
+	}
+	if q.PressureEpisodesTotal() != 1 {
+		t.Fatalf("expected 1 pressure episode, got %d", q.PressureEpisodesTotal())
+	}
+	if q.BlockedEnqueueAttemptsTotal() != 0 {
+		t.Fatalf("expected 0 blocked enqueue attempts while filling to capacity, got %d", q.BlockedEnqueueAttemptsTotal())
+	}
+
+	// Attempt to send 5th event: must block in Enqueue
+	ev5Sent := make(chan struct{})
+	go func() {
+		if err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "ev-5"}); err != nil {
+			t.Errorf("unexpected err ev-5: %v", err)
+		}
+		close(ev5Sent)
+	}()
+
+	select {
+	case <-ev5Sent:
+		t.Fatalf("expected send of ev-5 to block on full queue, but it completed immediately")
+	case <-time.After(40 * time.Millisecond):
+		// Expected to block while queue is full
+	}
+
+	// Read 1 item from Out to unblock ev-5
+	head := <-q.Out()
+	if head.EventID != "ev-1" {
+		t.Fatalf("expected ev-1, got %s", head.EventID)
+	}
+
+	select {
+	case <-ev5Sent:
+		// Succeeded unblocking
+	case <-time.After(200 * time.Millisecond):
+		t.Fatalf("timed out waiting for ev-5 send to complete after dequeue")
+	}
+
+	// Blocked enqueue attempts should now be exactly 1
+	if q.BlockedEnqueueAttemptsTotal() != 1 {
+		t.Fatalf("expected 1 blocked enqueue attempt after ev-5 was unblocked, got %d", q.BlockedEnqueueAttemptsTotal())
+	}
+	// Pressure episodes should be 2 (first 1..4, second after ev-5 refilled the queue)
+	if q.PressureEpisodesTotal() != 2 {
+		t.Fatalf("expected 2 pressure episodes, got %d", q.PressureEpisodesTotal())
+	}
+
+	if q.Depth().Value != uint64(capacity) {
+		t.Fatalf("expected depth back at capacity %d, got %d", capacity, q.Depth().Value)
+	}
+
+	// Time spent full should be > 0
+	if q.TimeSpentFullSeconds() <= 0 {
+		t.Fatalf("expected TimeSpentFullSeconds > 0, got %v", q.TimeSpentFullSeconds())
+	}
+
+	// Drain everything
+	var drained []string
+	for i := 0; i < capacity; i++ {
+		out := <-q.Out()
+		drained = append(drained, out.EventID)
+	}
+
+	if len(drained) != 4 { // ev-2, ev-3, ev-4, ev-5
+		t.Fatalf("expected 4 remaining items drained, got %d", len(drained))
+	}
+	if drained[0] != "ev-2" || drained[3] != "ev-5" {
+		t.Fatalf("unexpected drained items: %v", drained)
+	}
+}
+
+func TestEventQueue_GracefulDrainOnClose(t *testing.T) {
+	q := New(50)
+
+	// Send 25 events
+	for i := 1; i <= 25; i++ {
+		q.In() <- &events.CanonicalEvent{EventID: fmt.Sprintf("drain-%d", i)}
+	}
+
+	// Close queue
+	q.Close()
+
+	// Receiver drains all 25 events and then receives channel close
+	var received []string
+	for ev := range q.Out() {
+		received = append(received, ev.EventID)
+	}
+	q.WaitDrain()
+
+	if len(received) != 25 {
+		t.Fatalf("expected 25 drained events, got %d", len(received))
+	}
+	if received[0] != "drain-1" || received[24] != "drain-25" {
+		t.Fatalf("FIFO ordering corrupted during drain")
+	}
+}
+
+func TestEventQueue_ConcurrentSenders(t *testing.T) {
+	capacity := 20
+	q := New(capacity)
+	senderCount := 10
+	eventsPerSender := 50
+	totalExpected := senderCount * eventsPerSender
+
+	var wg sync.WaitGroup
+	for s := 0; s < senderCount; s++ {
+		wg.Add(1)
+		go func(senderID int) {
+			defer wg.Done()
+			for i := 0; i < eventsPerSender; i++ {
+				q.In() <- &events.CanonicalEvent{
+					EventID: fmt.Sprintf("sender-%d-ev-%d", senderID, i),
+				}
+			}
+		}(s)
+	}
+
+	var receiveCount int
+	receiveDone := make(chan struct{})
+	go func() {
+		for range q.Out() {
+			receiveCount++
+		}
+		close(receiveDone)
+	}()
+
+	wg.Wait()
+	q.Close()
+	<-receiveDone
+	q.WaitDrain()
+
+	if receiveCount != totalExpected {
+		t.Fatalf("expected %d events, got %d", totalExpected, receiveCount)
+	}
+	// Under high contention on capacity 20 with 500 events, blocked attempts should be observed
+	if q.BlockedEnqueueAttemptsTotal() == 0 {
+		t.Fatalf("expected blocked enqueue attempts > 0 under contention")
+	}
+}
+
+func TestEventQueue_InstrumentedEnqueue_MultipleBlockedProducers(t *testing.T) {
+	capacity := 2
+	maxWaiters := 5
+	q := New(capacity, maxWaiters)
+	defer q.Close()
+
+	ctx := context.Background()
+
+	// Fill queue to capacity (2 items)
+	if err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "ev-1"}); err != nil {
+		t.Fatalf("unexpected err ev-1: %v", err)
+	}
+	if err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "ev-2"}); err != nil {
+		t.Fatalf("unexpected err ev-2: %v", err)
+	}
+
+	if q.Depth().Value != 2 {
+		t.Fatalf("expected depth 2, got %d", q.Depth().Value)
+	}
+	if q.BlockedEnqueueAttemptsTotal() != 0 {
+		t.Fatalf("expected 0 blocked attempts before saturation, got %d", q.BlockedEnqueueAttemptsTotal())
+	}
+	if q.PressureEpisodesTotal() != 1 {
+		t.Fatalf("expected 1 pressure episode, got %d", q.PressureEpisodesTotal())
+	}
+
+	// Launch 3 concurrent producers attempting to Enqueue on full queue
+	const blockedProducers = 3
+	var startedWg sync.WaitGroup
+	var completedWg sync.WaitGroup
+	errCh := make(chan error, blockedProducers)
+
+	startedWg.Add(blockedProducers)
+	completedWg.Add(blockedProducers)
+
+	for i := 1; i <= blockedProducers; i++ {
+		go func(id int) {
+			ev := &events.CanonicalEvent{EventID: fmt.Sprintf("blocked-ev-%d", id)}
+			startedWg.Done()
+			err := q.Enqueue(ctx, ev)
+			errCh <- err
+			completedWg.Done()
+		}(i)
+	}
+
+	startedWg.Wait()
+
+	// Wait deterministically for all 3 producers to be recorded as blocked
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for q.BlockedEnqueueAttemptsTotal() < blockedProducers && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if q.BlockedEnqueueAttemptsTotal() != blockedProducers {
+		t.Fatalf("expected %d blocked enqueue attempts, got %d", blockedProducers, q.BlockedEnqueueAttemptsTotal())
+	}
+
+	// Verify all 3 producers are still blocked (no errors on errCh)
+	select {
+	case err := <-errCh:
+		t.Fatalf("producer completed prematurely with error: %v", err)
+	default:
+	}
+
+	// Dequeue 2 items from Out to allow waiting producers to be admitted
+	out1 := <-q.Out()
+	if out1.EventID != "ev-1" {
+		t.Fatalf("expected ev-1, got %s", out1.EventID)
+	}
+	out2 := <-q.Out()
+	if out2.EventID != "ev-2" {
+		t.Fatalf("expected ev-2, got %s", out2.EventID)
+	}
+
+	// Dequeue remaining items as producers are admitted
+	var admittedEvents []string
+	drainDone := make(chan struct{})
+	go func() {
+		for i := 0; i < blockedProducers; i++ {
+			admitted := <-q.Out()
+			admittedEvents = append(admittedEvents, admitted.EventID)
+		}
+		close(drainDone)
+	}()
+
+	completedWg.Wait()
+	<-drainDone
+
+	for i := 0; i < blockedProducers; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("producer failed with error: %v", err)
+		}
+	}
+
+	if len(admittedEvents) != blockedProducers {
+		t.Fatalf("expected %d admitted events, got %d", blockedProducers, len(admittedEvents))
+	}
+}
+
+func TestEventQueue_InstrumentedEnqueue_ContextCancellation(t *testing.T) {
+	capacity := 1
+	q := New(capacity)
+	defer q.Close()
+
+	if err := q.Enqueue(context.Background(), &events.CanonicalEvent{EventID: "initial-ev"}); err != nil {
+		t.Fatalf("failed initial enqueue: %v", err)
+	}
+
+	// Create cancellable context
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+
+	go func() {
+		err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "cancelled-ev"})
+		errCh <- err
+	}()
+
+	// Wait deterministically until enqueue blocks
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for q.BlockedEnqueueAttemptsTotal() < 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if q.BlockedEnqueueAttemptsTotal() != 1 {
+		t.Fatalf("expected 1 blocked enqueue attempt, got %d", q.BlockedEnqueueAttemptsTotal())
+	}
+
+	// Cancel context while producer is blocked
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for cancelled producer to return")
+	}
+
+	// Verify queue is healthy and can continue operating
+	out := <-q.Out()
+	if out.EventID != "initial-ev" {
+		t.Fatalf("expected initial-ev, got: %s", out.EventID)
+	}
+
+	// Can enqueue new event with fresh context
+	if err := q.Enqueue(context.Background(), &events.CanonicalEvent{EventID: "recovery-ev"}); err != nil {
+		t.Fatalf("failed recovery enqueue: %v", err)
+	}
+
+	out2 := <-q.Out()
+	if out2.EventID != "recovery-ev" {
+		t.Fatalf("expected recovery-ev, got: %s", out2.EventID)
+	}
+}
+
+func TestEventQueue_TryEnqueue(t *testing.T) {
+	q := New(1)
+	defer q.Close()
+
+	ok, err := q.TryEnqueue(&events.CanonicalEvent{EventID: "try-1"})
+	if !ok || err != nil {
+		t.Fatalf("expected TryEnqueue ok, got ok=%v, err=%v", ok, err)
+	}
+
+	// TryEnqueue on full queue should return false, nil without blocking
+	ok, err = q.TryEnqueue(&events.CanonicalEvent{EventID: "try-2"})
+	if ok || err != nil {
+		t.Fatalf("expected TryEnqueue false on full queue, got ok=%v, err=%v", ok, err)
+	}
+
+	<-q.Out()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		ok, err = q.TryEnqueue(&events.CanonicalEvent{EventID: "try-3"})
+		if ok && err == nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !ok || err != nil {
+		t.Fatalf("expected TryEnqueue ok after freeing slot, got ok=%v, err=%v", ok, err)
+	}
+}
+
+func TestEventQueue_SustainedSaturationAndMemoryBounds(t *testing.T) {
+	capacity := 2
+	maxWaiters := 2
+	q := New(capacity, maxWaiters)
+	defer q.Close()
+
+	ctx := context.Background()
+
+	// 1. Fill ring buffer to capacity (2 items)
+	if err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "ring-1"}); err != nil {
+		t.Fatalf("unexpected err ring-1: %v", err)
+	}
+	if err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "ring-2"}); err != nil {
+		t.Fatalf("unexpected err ring-2: %v", err)
+	}
+
+	if q.Depth().Value != 2 {
+		t.Fatalf("expected depth 2, got %d", q.Depth().Value)
+	}
+	if q.WaitersCount() != 0 {
+		t.Fatalf("expected 0 waiters, got %d", q.WaitersCount())
+	}
+
+	// 2. Launch 2 producers sequentially to deterministically fill the bounded waiter admission queue
+	var completedWg sync.WaitGroup
+	errCh := make(chan error, 2)
+	completedWg.Add(2)
+
+	go func() {
+		err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "waiter-1"})
+		errCh <- err
+		completedWg.Done()
+	}()
+	for q.WaitersCount() < 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	go func() {
+		err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "waiter-2"})
+		errCh <- err
+		completedWg.Done()
+	}()
+	for q.WaitersCount() < 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if q.WaitersCount() != 2 {
+		t.Fatalf("expected 2 waiters, got %d", q.WaitersCount())
+	}
+
+	// 3. Attempt 5th enqueue: ring buffer is full (2) and waiter queue is full (2).
+	// Must immediately reject with ErrQueueAtCapacity to enforce memory bounds (no unrestricted growth).
+	err5 := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "overflow-ev"})
+	if !errors.Is(err5, ErrQueueAtCapacity) {
+		t.Fatalf("expected ErrQueueAtCapacity on overflow submission, got: %v", err5)
+	}
+
+	// 4. Dequeue 1 item from ring buffer -> unblocks 1 waiter into the freed ring slot
+	head := <-q.Out()
+	if head.EventID != "ring-1" {
+		t.Fatalf("expected ring-1, got %s", head.EventID)
+	}
+
+	// Waiter count should drop from 2 to 1 as 1 waiter was admitted to the ring
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for q.WaitersCount() > 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if q.WaitersCount() != 1 {
+		t.Fatalf("expected 1 remaining waiter, got %d", q.WaitersCount())
+	}
+
+	// 5. Now another submission can be admitted into the freed waiter slot
+	var admittedWg sync.WaitGroup
+	admittedWg.Add(1)
+	go func() {
+		defer admittedWg.Done()
+		if err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "waiter-3"}); err != nil {
+			t.Errorf("expected waiter-3 to be admitted to freed wait slot, got: %v", err)
+		}
+	}()
+
+	// Dequeue all remaining items and verify all outcomes
+	var drained []string
+	drained = append(drained, head.EventID)
+	for i := 0; i < 4; i++ { // ring-2, waiter-1, waiter-2, waiter-3
+		drained = append(drained, (<-q.Out()).EventID)
+	}
+
+	completedWg.Wait()
+	admittedWg.Wait()
+
+	if len(drained) != 5 {
+		t.Fatalf("expected 5 drained events, got %d: %v", len(drained), drained)
+	}
+	if drained[1] != "ring-2" || drained[2] != "waiter-1" || drained[3] != "waiter-2" || drained[4] != "waiter-3" {
+		t.Fatalf("unexpected drained event ordering: %v", drained)
+	}
+}
+
+func TestEventQueue_CloseWhileSubmissionsPending(t *testing.T) {
+	capacity := 2
+	maxWaiters := 2
+	q := New(capacity, maxWaiters)
+
+	ctx := context.Background()
+
+	// Fill ring
+	_ = q.Enqueue(ctx, &events.CanonicalEvent{EventID: "close-ring-1"})
+	_ = q.Enqueue(ctx, &events.CanonicalEvent{EventID: "close-ring-2"})
+
+	// Fill waiters
+	var startedWg sync.WaitGroup
+	var completedWg sync.WaitGroup
+	errCh := make(chan error, 2)
+
+	startedWg.Add(2)
+	completedWg.Add(2)
+
+	for i := 1; i <= 2; i++ {
+		go func(id int) {
+			startedWg.Done()
+			err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: fmt.Sprintf("pending-%d", id)})
+			errCh <- err
+			completedWg.Done()
+		}(i)
+	}
+
+	startedWg.Wait()
+
+	// Wait until both are waiting
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for q.WaitersCount() < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Close queue while submissions are pending
+	q.Close()
+	completedWg.Wait()
+
+	// Both pending submissions must receive ErrQueueClosed (observable failure, no silent discard)
+	for i := 0; i < 2; i++ {
+		err := <-errCh
+		if !errors.Is(err, ErrQueueClosed) {
+			t.Fatalf("expected ErrQueueClosed for pending submission, got: %v", err)
+		}
+	}
+
+	// Committed items in the ring buffer must drain cleanly without drop
+	var drained []string
+	for ev := range q.Out() {
+		drained = append(drained, ev.EventID)
+	}
+	q.WaitDrain()
+
+	if len(drained) != 2 {
+		t.Fatalf("expected 2 committed items drained, got %d: %v", len(drained), drained)
+	}
+	if drained[0] != "close-ring-1" || drained[1] != "close-ring-2" {
+		t.Fatalf("unexpected drained order: %v", drained)
+	}
+}
+
+func TestEventQueue_MixedAPISaturation_NoDropNoTerminate(t *testing.T) {
+	capacity := 2
+	maxWaiters := 2
+	q := New(capacity, maxWaiters)
+	defer q.Close()
+
+	ctx := context.Background()
+
+	// 1. Fill ring buffer via direct Enqueue (2 items)
+	if err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "ring-1"}); err != nil {
+		t.Fatalf("unexpected err ring-1: %v", err)
+	}
+	if err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "ring-2"}); err != nil {
+		t.Fatalf("unexpected err ring-2: %v", err)
+	}
+
+	// 2. Fill waiter allowance via direct Enqueue (2 items)
+	var directWg sync.WaitGroup
+	directErrCh := make(chan error, 2)
+	directWg.Add(2)
+
+	go func() {
+		defer directWg.Done()
+		err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "direct-waiter-1"})
+		directErrCh <- err
+	}()
+	for q.WaitersCount() < 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	go func() {
+		defer directWg.Done()
+		err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "direct-waiter-2"})
+		directErrCh <- err
+	}()
+	for q.WaitersCount() < 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if q.WaitersCount() != 2 {
+		t.Fatalf("expected 2 direct waiters, got %d", q.WaitersCount())
+	}
+
+	// 3. Submit through channel adapter In(): ring is full (2) AND waiter allowance is full (2).
+	// The adapter must not silently discard the received event or terminate the queue on ErrQueueAtCapacity.
+	adapterSent := make(chan struct{})
+	go func() {
+		q.In() <- &events.CanonicalEvent{EventID: "in-adapter-1"}
+		close(adapterSent)
+	}()
+
+	select {
+	case <-adapterSent:
+		// Succeeded in handing off to inPump
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out sending to In()")
+	}
+
+	// Wait briefly for adapter to reach admission wait
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify queue has NOT terminated
+	ok, tryErr := q.TryEnqueue(&events.CanonicalEvent{EventID: "probe"})
+	if ok || errors.Is(tryErr, ErrQueueClosed) {
+		t.Fatalf("queue unexpectedly terminated or accepted probe: ok=%v, err=%v", ok, tryErr)
+	}
+
+	// Blocked attempts: 2 direct waiters + 1 adapter wait = 3
+	if q.AdapterBlockedEnqueueAttemptsTotal() != 3 {
+		t.Fatalf("expected 3 blocked enqueue attempts, got %d", q.AdapterBlockedEnqueueAttemptsTotal())
+	}
+
+	// 4. Consumer starts progressing: dequeue events and verify exact FIFO order
+	var drained []string
+	drainDone := make(chan struct{})
+	go func() {
+		for i := 0; i < 5; i++ {
+			ev := <-q.Out()
+			drained = append(drained, ev.EventID)
+		}
+		close(drainDone)
+	}()
+
+	select {
+	case <-drainDone:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out draining 5 events, drained %d: %v", len(drained), drained)
+	}
+
+	directWg.Wait()
+	for i := 0; i < 2; i++ {
+		if err := <-directErrCh; err != nil {
+			t.Fatalf("direct waiter returned error: %v", err)
+		}
+	}
+
+	expectedOrder := []string{"ring-1", "ring-2", "direct-waiter-1", "direct-waiter-2", "in-adapter-1"}
+	if len(drained) != len(expectedOrder) {
+		t.Fatalf("expected %d events, got %d: %v", len(expectedOrder), len(drained), drained)
+	}
+	for i, expected := range expectedOrder {
+		if drained[i] != expected {
+			t.Fatalf("position %d: expected %s, got %s (full order: %v)", i, expected, drained[i], drained)
+		}
+	}
+}
+
+func TestEventQueue_CloseWhileAdapterBlocked(t *testing.T) {
+	capacity := 2
+	maxWaiters := 2
+	q := New(capacity, maxWaiters)
+
+	ctx := context.Background()
+
+	// Fill ring
+	_ = q.Enqueue(ctx, &events.CanonicalEvent{EventID: "ring-1"})
+	_ = q.Enqueue(ctx, &events.CanonicalEvent{EventID: "ring-2"})
+
+	// Fill waiters
+	var directWg sync.WaitGroup
+	directErrCh := make(chan error, 2)
+	directWg.Add(2)
+
+	go func() {
+		defer directWg.Done()
+		err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "waiter-1"})
+		directErrCh <- err
+	}()
+	for q.WaitersCount() < 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	go func() {
+		defer directWg.Done()
+		err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "waiter-2"})
+		directErrCh <- err
+	}()
+	for q.WaitersCount() < 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Submit via In() while queue is at full saturation
+	adapterSent := make(chan struct{})
+	go func() {
+		q.In() <- &events.CanonicalEvent{EventID: "adapter-blocked"}
+		close(adapterSent)
+	}()
+
+	select {
+	case <-adapterSent:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out sending to In()")
+	}
+
+	// Wait briefly for inPump to be blocked
+	time.Sleep(50 * time.Millisecond)
+
+	// Close while adapter is blocked and NO consumer is progressing
+	closeDone := make(chan struct{})
+	go func() {
+		q.Close()
+		close(closeDone)
+	}()
+
+	select {
+	case <-closeDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("q.Close() deadlocked while adapter was blocked")
+	}
+
+	// Both direct waiters must unblock with ErrQueueClosed
+	directWg.Wait()
+	for i := 0; i < 2; i++ {
+		err := <-directErrCh
+		if !errors.Is(err, ErrQueueClosed) {
+			t.Fatalf("expected ErrQueueClosed for waiter, got: %v", err)
+		}
+	}
+
+	// Consumer drains Out(): already accepted ring items AND adapter-held item must be preserved and drained
+	var drained []string
+	for ev := range q.Out() {
+		drained = append(drained, ev.EventID)
+	}
+	q.WaitDrain()
+
+	if len(drained) != 3 {
+		t.Fatalf("expected 3 accepted events drained (2 ring + 1 adapter-held), got %d: %v", len(drained), drained)
+	}
+	if drained[0] != "ring-1" || drained[1] != "ring-2" || drained[2] != "adapter-blocked" {
+		t.Fatalf("unexpected drained order: %v", drained)
+	}
+}
+
+func TestEventQueue_ClosePreservesAdapterHeldEvent_DeterministicRegression(t *testing.T) {
+	capacity := 2
+	maxWaiters := 2
+	q := New(capacity, maxWaiters)
+
+	ctx := context.Background()
+
+	// 1. Fill ring (2 items)
+	if err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "ring-1"}); err != nil {
+		t.Fatalf("failed to enqueue ring-1: %v", err)
+	}
+	if err := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "ring-2"}); err != nil {
+		t.Fatalf("failed to enqueue ring-2: %v", err)
+	}
+
+	// 2. Fill direct-enqueue waiter allowance (2 waiters)
+	var directWg sync.WaitGroup
+	directErrCh := make(chan error, 2)
+	directWg.Add(2)
+
+	waiter1Started := make(chan struct{})
+	go func() {
+		defer directWg.Done()
+		close(waiter1Started)
+		directErrCh <- q.Enqueue(ctx, &events.CanonicalEvent{EventID: "waiter-1"})
+	}()
+	<-waiter1Started
+	for q.WaitersCount() < 1 {
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	waiter2Started := make(chan struct{})
+	go func() {
+		defer directWg.Done()
+		close(waiter2Started)
+		directErrCh <- q.Enqueue(cancelCtx, &events.CanonicalEvent{EventID: "waiter-2"})
+	}()
+	<-waiter2Started
+	for q.WaitersCount() < 2 {
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	// 3. Register synchronization barrier for adapter blocking
+	adapterBlocked := make(chan struct{})
+	q.SetAdapterBlockedHook(func(ev *events.CanonicalEvent) {
+		if ev.EventID == "adapter-held-1" {
+			close(adapterBlocked)
+		}
+	})
+
+	// 4. Complete an In() send with a known event ID
+	inSendCompleted := make(chan struct{})
+	go func() {
+		q.In() <- &events.CanonicalEvent{EventID: "adapter-held-1"}
+		close(inSendCompleted)
+	}()
+
+	select {
+	case <-inSendCompleted:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out completing send to In()")
+	}
+
+	// Wait for synchronization barrier: adapter holds the event and is blocked
+	select {
+	case <-adapterBlocked:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for adapter blocked barrier")
+	}
+
+	// 5. Establish that the adapter holds the event before ring admission
+	held := q.AdapterHeldEvent()
+	if held == nil || held.EventID != "adapter-held-1" {
+		t.Fatalf("expected adapter to hold adapter-held-1, got %v", held)
+	}
+	if !q.AdapterWaiting() {
+		t.Fatal("expected AdapterWaiting() == true")
+	}
+
+	// 6. Call Close while the consumer is paused
+	closeReturned := make(chan struct{})
+	go func() {
+		q.Close()
+		close(closeReturned)
+	}()
+
+	select {
+	case <-closeReturned:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("q.Close() blocked or deadlocked while consumer was paused")
+	}
+
+	// 7. Cover repeated Close: calling Close() again must be safe and idempotent
+	q.Close()
+	q.Close()
+
+	// 8. Cover concurrent producers after close: Enqueue and TryEnqueue must reject with ErrQueueClosed
+	ok, tryErr := q.TryEnqueue(&events.CanonicalEvent{EventID: "post-close-try"})
+	if ok || !errors.Is(tryErr, ErrQueueClosed) {
+		t.Fatalf("expected TryEnqueue after close to return (false, ErrQueueClosed), got (%v, %v)", ok, tryErr)
+	}
+	if enqErr := q.Enqueue(ctx, &events.CanonicalEvent{EventID: "post-close-enq"}); !errors.Is(enqErr, ErrQueueClosed) {
+		t.Fatalf("expected Enqueue after close to return ErrQueueClosed, got %v", enqErr)
+	}
+
+	// Direct waiters must unblock with ErrQueueClosed
+	directWg.Wait()
+	for i := 0; i < 2; i++ {
+		err := <-directErrCh
+		if !errors.Is(err, ErrQueueClosed) {
+			t.Fatalf("expected direct waiter to return ErrQueueClosed, got %v", err)
+		}
+	}
+
+	// 9. Resume consumption and assert the exact adapter-held event drains in FIFO order
+	var drained []string
+	drainDone := make(chan struct{})
+	go func() {
+		for ev := range q.Out() {
+			drained = append(drained, ev.EventID)
+		}
+		close(drainDone)
+	}()
+
+	select {
+	case <-drainDone:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for drain, drained so far: %v", drained)
+	}
+	q.WaitDrain()
+
+	expectedOrder := []string{"ring-1", "ring-2", "adapter-held-1"}
+	if len(drained) != len(expectedOrder) {
+		t.Fatalf("expected %d events drained, got %d: %v", len(expectedOrder), len(drained), drained)
+	}
+	for i, exp := range expectedOrder {
+		if drained[i] != exp {
+			t.Fatalf("position %d: expected %s, got %s (full order: %v)", i, exp, drained[i], drained)
+		}
+	}
+}

@@ -1,0 +1,25 @@
+=== RUN: run_20261110_054251_8240a569 ===
+Timestamp: 2026-11-10T05:43:29Z
+Revision:  8240a5692a335dd1c9d20e2a2755e95554a0b7e9 (dirty=false)
+Toolchain: go1.27.0
+Binary SHA256: d949af478cd55535bcaf69344d670edbcc31b32ab5070bf4ac87e67f37016257
+
+=== EXECUTED COMMANDS ===
+[01] git rev-parse HEAD
+     Dir: D:\Desktop\OT-SOC\redcyberfox-ot-soc | Timeout: 5s | Duration: 45ms | Status: SUCCESS
+[02] git status --porcelain
+     Dir: D:\Desktop\OT-SOC\redcyberfox-ot-soc | Timeout: 5s | Duration: 53ms | Status: SUCCESS
+[03] go build -v -o C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReports2137712797\001\endpoint.exe ./agent/cmd/endpoint
+     Dir: D:\Desktop\OT-SOC\redcyberfox-ot-soc | Timeout: 1m30s | Duration: 2600ms | Status: SUCCESS
+[04] go version -m C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReports2137712797\001\endpoint.exe
+     Dir: D:\Desktop\OT-SOC\redcyberfox-ot-soc | Timeout: 10s | Duration: 89ms | Status: SUCCESS
+[05] C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReports2137712797\001\endpoint.exe -config=C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_Idle80972788\001\agent.json -identity=C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_Idle80972788\001\identity.json -measure-report=C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_Idle80972788\001\report_idle.json -measure-profile=windows-smoke-idle -measure-duration=3s -measure-interval=1s
+     Dir: C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_Idle80972788\001 | Timeout: 13s | Duration: 3273ms | Status: SUCCESS
+[06] C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReports2137712797\001\endpoint.exe -config=C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_Sustained2739171344\001\agent.json -identity=C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_Sustained2739171344\001\identity.json -measure-report=C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_Sustained2739171344\001\report_sustained.json -measure-profile=windows-smoke-sustained -measure-duration=4s -measure-interval=1s
+     Dir: C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_Sustained2739171344\001 | Timeout: 14s | Duration: 4149ms | Status: SUCCESS
+[07] C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReports2137712797\001\endpoint.exe -config=C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_Burst4272954409\001\agent.json -identity=C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_Burst4272954409\001\identity.json -measure-report=C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_Burst4272954409\001\report_burst.json -measure-profile=windows-smoke-burst -measure-duration=4s -measure-interval=1s
+     Dir: C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_Burst4272954409\001 | Timeout: 14s | Duration: 4138ms | Status: SUCCESS
+[08] C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReports2137712797\001\endpoint.exe -config=C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe1491913161\001\agent.json -identity=C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe1491913161\001\identity.json -measure-report=C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe1491913161\001\report_offline.json -measure-profile=windows-smoke-offline -measure-duration=3s -measure-interval=1s
+     Dir: C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe1491913161\001 | Timeout: 13s | Duration: 3605ms | Status: SUCCESS
+[09] C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReports2137712797\001\endpoint.exe -config=C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe1491913161\001\agent.json -identity=C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe1491913161\001\identity.json -measure-report=C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe1491913161\001\report_reconnect.json -measure-profile=windows-smoke-reconnect -measure-duration=22s -measure-interval=2s
+     Dir: C:\Users\YASHSH~1\AppData\Local\Temp\TestWorkload_WindowsMeasurementReportsScenario_OfflineAndRealRe1491913161\001 | Timeout: 37s | Duration: 22269ms | Status: SUCCESS

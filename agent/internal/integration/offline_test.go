@@ -122,10 +122,10 @@ func TestOfflineSync_Integration(t *testing.T) {
 		t.Fatalf("Expected 1 pending event on reopen, got %d", count)
 	}
 
-	// reset next_attempt_at so it processes immediately
-	if _, err := store2.GetDB().Exec("UPDATE events SET next_attempt_at = NULL"); err != nil {
-		t.Fatalf("Exec failed: %v", err)
-	}
+	// Advance storage clock past retry deadline to verify real retry eligibility without clearing metadata
+	store2.SetClock(func() time.Time {
+		return time.Now().UTC().Add(10 * time.Minute)
+	})
 
 	// 5. forwarder restarts
 	fwd2 := forwarder.NewForwarder(srvUp.URL, "tenant-1", store2)
@@ -228,10 +228,10 @@ func TestLostResponse_Integration(t *testing.T) {
 	}, 2*time.Second)
 
 	// Since we got 502, it should be marked as failed and retry backoff set
-	// Reset backoff to trigger retry immediately
-	if _, err := store.GetDB().Exec("UPDATE events SET next_attempt_at = NULL"); err != nil {
-		t.Fatalf("Exec failed: %v", err)
-	}
+	// Advance storage clock past retry deadline to verify real retry eligibility without clearing metadata
+	store.SetClock(func() time.Time {
+		return time.Now().UTC().Add(10 * time.Minute)
+	})
 
 	// Trigger second request
 	fwd.Wakeup()

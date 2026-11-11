@@ -1,0 +1,30 @@
+# RedCyberFox Linux Verification Commands Log
+# Run ID: linux_20261110_103917_57a49bd0
+# Started: 2026-11-10T10:39:27Z
+
+[2026-11-10T10:39:27Z] START: Core Storage Suite | CMD: CGO_ENABLED=0 go test -v -count=1 -timeout 60s ./agent/internal/storage/...
+[2026-11-10T10:39:31Z] FINISH: Core Storage Suite | EXIT_CODE: 0
+[2026-11-10T10:39:31Z] START: Core EventQueue Suite | CMD: CGO_ENABLED=0 go test -v -count=1 -timeout 60s ./agent/internal/eventqueue/...
+[2026-11-10T10:39:33Z] FINISH: Core EventQueue Suite | EXIT_CODE: 0
+[2026-11-10T10:39:33Z] START: Core Governor Suite | CMD: CGO_ENABLED=0 go test -v -count=1 -timeout 60s ./agent/internal/governor/...
+[2026-11-10T10:39:35Z] FINISH: Core Governor Suite | EXIT_CODE: 0
+[2026-11-10T10:39:36Z] START: Core ResourceReport Suite | CMD: CGO_ENABLED=0 go test -v -count=1 -timeout 60s ./agent/internal/resourcereport/...
+[2026-11-10T10:39:39Z] FINISH: Core ResourceReport Suite | EXIT_CODE: 0
+[2026-11-10T10:39:39Z] START: Core Forwarder Suite | CMD: CGO_ENABLED=0 go test -v -count=1 -timeout 60s ./agent/internal/forwarder/...
+[2026-11-10T10:39:40Z] FINISH: Core Forwarder Suite | EXIT_CODE: 0
+[2026-11-10T10:39:40Z] START: Core Ingestion Suite | CMD: CGO_ENABLED=0 go test -v -count=1 -timeout 60s ./agent/internal/ingestion/...
+[2026-11-10T10:39:42Z] FINISH: Core Ingestion Suite | EXIT_CODE: 0
+[2026-11-10T10:39:43Z] START: Delivery Boundaries & Crash Regressions | CMD: CGO_ENABLED=0 go test -v -count=1 -timeout 60s ./agent/internal/integration -run '^TestCrashBoundary'
+[2026-11-10T10:39:46Z] FINISH: Delivery Boundaries & Crash Regressions | EXIT_CODE: 0
+[2026-11-10T10:39:46Z] START: Diagnostic Retention & Error Regressions | CMD: CGO_ENABLED=0 go test -v -count=1 -timeout 60s ./agent/internal/integration -run '^TestDiagnostic'
+[2026-11-10T10:39:49Z] FINISH: Diagnostic Retention & Error Regressions | EXIT_CODE: 0
+[2026-11-10T10:39:49Z] START: Go Test -Race (Governor, EventQueue, Storage) | CMD: CGO_ENABLED=1 go test -race -v -count=1 -timeout 120s ./agent/internal/governor/... ./agent/internal/eventqueue/... ./agent/internal/storage/...
+[2026-11-10T10:39:55Z] FINISH: Go Test -Race (Governor, EventQueue, Storage) | EXIT_CODE: 0
+[2026-11-10T10:39:55Z] BLOCKED: Native YARA-X C API (libyara_x_capi) | libyara_x_capi not installed in local environment (verified in Linux CI via cargo cinstall)
+[2026-11-10T10:39:55Z] BLOCKED: Native YARA-X Component Workload & Policy | Omitted: requires libyara_x_capi CGO dependency
+[2026-11-10T10:39:55Z] START: Native Linux Endpoint Build | CMD: CGO_ENABLED=0 go build -v -o '/mnt/d/Desktop/OT-SOC/external_linux_runs/linux_20261110_103917_57a49bd0/endpoint_linux' ./agent/cmd/endpoint
+[2026-11-10T10:40:07Z] FINISH: Native Linux Endpoint Build | EXIT_CODE: 0
+[2026-11-10T10:40:07Z] START: Binary Provenance Metadata (go version -m) | CMD: go version -m '/mnt/d/Desktop/OT-SOC/external_linux_runs/linux_20261110_103917_57a49bd0/endpoint_linux' > '/mnt/d/Desktop/OT-SOC/external_linux_runs/linux_20261110_103917_57a49bd0/endpoint_metadata.txt'
+[2026-11-10T10:40:07Z] FINISH: Binary Provenance Metadata (go version -m) | EXIT_CODE: 0
+[2026-11-10T10:40:07Z] START: Bounded Runtime Smoke Run (2s duration) | CMD: timeout 15s '/mnt/d/Desktop/OT-SOC/external_linux_runs/linux_20261110_103917_57a49bd0/endpoint_linux' -config='/tmp/tmp.xXxMhkgKig/agent.json' -identity='/tmp/tmp.xXxMhkgKig/identity.json' -measure-report='/mnt/d/Desktop/OT-SOC/external_linux_runs/linux_20261110_103917_57a49bd0/linux_smoke_report.json' -measure-profile='linux-runtime-smoke' -measure-duration=2s -measure-interval=1s
+[2026-11-10T10:40:10Z] FINISH: Bounded Runtime Smoke Run (2s duration) | EXIT_CODE: 0

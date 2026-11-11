@@ -57,6 +57,10 @@ func (m *Manager) emitHeartbeat(ctx context.Context) {
 	}
 }
 
+func (m *Manager) DeviceID() string {
+	return m.deviceID
+}
+
 func (m *Manager) Stop() error {
 	return nil
 }
